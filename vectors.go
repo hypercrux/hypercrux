@@ -6,6 +6,7 @@ package hypercrux
 import (
 	"container/heap"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -22,6 +23,10 @@ type Vector []float32
 
 // MaxDims is the largest vector HyperCrux accepts.
 const MaxDims = 65536
+
+// Value stores the vector as a blob when it is passed to SQL, so a Vector
+// can be given straight to Query or Exec, as in distance(vec, ?).
+func (v Vector) Value() (driver.Value, error) { return v.Bytes(), nil }
 
 // Bytes returns the vector as it is stored.
 func (v Vector) Bytes() []byte {
@@ -120,9 +125,12 @@ func checkVector(v Vector) error {
 	return nil
 }
 
+func finite(f float64) bool { return !math.IsNaN(f) && !math.IsInf(f, 0) }
+
 // cosine returns the cosine distance between two stored vectors: 0 for the
 // same direction, 1 for unrelated, 2 for opposite. A vector of zeros counts
-// as unrelated to everything.
+// as unrelated to everything, and a vector holding NaN or infinity is an
+// error.
 func cosine(a, b []byte) (float64, error) {
 	if len(a) != len(b) {
 		return 0, fmt.Errorf("hypercrux: distance between vectors of %d and %d values", len(a)/4, len(b)/4)
@@ -137,6 +145,9 @@ func cosine(a, b []byte) (float64, error) {
 		dot += x * y
 		na += x * x
 		nb += y * y
+	}
+	if !finite(na) || !finite(nb) {
+		return 0, fmt.Errorf("hypercrux: a vector holds a value that isn't a finite number")
 	}
 	if na == 0 || nb == 0 {
 		return 1, nil
@@ -214,9 +225,12 @@ func nearest(r querier, table string, q Vector, k int, where string, args []any)
 		if err := rows.Scan(&key, &vec); err != nil {
 			return nil, err
 		}
-		d, err := m.distance(vec)
+		d, ok, err := m.distance(vec)
 		if err != nil {
 			return nil, fmt.Errorf("hypercrux: the vector of %s: %w", key, err)
+		}
+		if !ok {
+			continue // NaN or infinity, which only plain SQL can store; Check reports it
 		}
 		if len(top) == k && !before(d, key, top[0]) {
 			continue
@@ -280,9 +294,10 @@ func newMatcher(q Vector) *matcher {
 	return m
 }
 
-func (m *matcher) distance(b []byte) (float64, error) {
+// distance returns false for a stored vector that holds NaN or infinity.
+func (m *matcher) distance(b []byte) (float64, bool, error) {
 	if len(b) != 4*len(m.q) {
-		return 0, fmt.Errorf("it has %d bytes, not %d", len(b), 4*len(m.q))
+		return 0, false, fmt.Errorf("it has %d bytes, not %d", len(b), 4*len(m.q))
 	}
 	var dot, nb float64
 	q := m.q
@@ -291,8 +306,11 @@ func (m *matcher) distance(b []byte) (float64, error) {
 		dot += x * q[i]
 		nb += x * x
 	}
+	if !finite(nb) {
+		return 0, false, nil // any NaN or infinite value makes the sum of squares one
+	}
 	if nb == 0 || m.norm == 0 {
-		return 1, nil
+		return 1, true, nil
 	}
 	d := 1 - dot/(math.Sqrt(nb)*math.Sqrt(m.norm))
 	switch {
@@ -301,5 +319,5 @@ func (m *matcher) distance(b []byte) (float64, error) {
 	case d > 2:
 		d = 2
 	}
-	return d, nil
+	return d, true, nil
 }

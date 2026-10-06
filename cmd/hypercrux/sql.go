@@ -5,6 +5,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"regexp"
@@ -16,16 +17,84 @@ import (
 	"github.com/hypercrux/hypercrux"
 )
 
-// returnsRows guesses whether a statement gives rows back.
-var returnsRows = regexp.MustCompile(`(?is)^\s*(select|with|values|pragma|explain)\b|\breturning\b`)
+// isTrigger matches a CREATE TRIGGER statement, whose body has semicolons
+// of its own.
+var isTrigger = regexp.MustCompile(`(?is)^(\s|--[^\n]*(\n|$)|/\*.*?\*/)*create\s+(temp\s+|temporary\s+)?trigger\b`)
 
-// sqlArg turns a command-line argument into an SQL value: whole numbers and
-// decimals become numbers, everything else stays text.
+// oneStatement checks that s holds exactly one SQL statement, so nothing
+// runs that the reader of the command line didn't see, and returns it
+// without the semicolon and anything after it.
+func oneStatement(s string) (string, error) {
+	if isTrigger.MatchString(s) {
+		return s, nil
+	}
+	content, ended, end := false, false, len(s)
+	for i := 0; i < len(s); {
+		c := s[i]
+		switch {
+		case c == '-' && i+1 < len(s) && s[i+1] == '-':
+			if j := strings.IndexByte(s[i:], '\n'); j >= 0 {
+				i += j + 1
+			} else {
+				i = len(s)
+			}
+			continue
+		case c == '/' && i+1 < len(s) && s[i+1] == '*':
+			if j := strings.Index(s[i+2:], "*/"); j >= 0 {
+				i += j + 4
+			} else {
+				i = len(s)
+			}
+			continue
+		case c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f':
+			i++
+			continue
+		}
+		if ended {
+			return "", usageErr("sql runs one statement at a time")
+		}
+		switch c {
+		case '\'', '"', '`':
+			j := i + 1
+			for j < len(s) {
+				if s[j] == c {
+					if j+1 < len(s) && s[j+1] == c {
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			i = j + 1
+		case '[':
+			if j := strings.IndexByte(s[i:], ']'); j >= 0 {
+				i += j + 1
+			} else {
+				i = len(s)
+			}
+		case ';':
+			ended, end = true, i
+			i++
+			continue
+		default:
+			i++
+		}
+		content = true
+	}
+	if !content {
+		return "", usageErr("sql needs a statement")
+	}
+	return s[:end], nil
+}
+
+// sqlArg turns a command-line argument into an SQL value. A number stays a
+// number only when it reads back the same way, so 0501234567 stays text.
 func sqlArg(s string) any {
-	if i, err := strconv.ParseInt(s, 10, 64); err == nil {
+	if i, err := strconv.ParseInt(s, 10, 64); err == nil && strconv.FormatInt(i, 10) == s {
 		return i
 	}
-	if f, err := strconv.ParseFloat(s, 64); err == nil && !strings.ContainsAny(s, "nNiI") {
+	if f, err := strconv.ParseFloat(s, 64); err == nil && strconv.FormatFloat(f, 'f', -1, 64) == s {
 		return f
 	}
 	return s
@@ -35,21 +104,26 @@ func runSQL(db *hypercrux.DB, o *options, w io.Writer) error {
 	if len(o.pos) < 2 {
 		return usageErr("expected FILE STATEMENT [ARG...]")
 	}
-	stmt := o.pos[1]
+	stmt, err := oneStatement(o.pos[1])
+	if err != nil {
+		return err
+	}
 	args := make([]any, 0, len(o.pos)-2)
 	for _, a := range o.pos[2:] {
 		args = append(args, sqlArg(a))
 	}
-	if !returnsRows.MatchString(stmt) {
-		res, err := db.Exec(stmt, args...)
-		if err != nil {
-			return err
-		}
-		n, _ := res.RowsAffected()
-		fmt.Fprintf(w, "%d rows changed\n", n)
-		return nil
+	// One connection, so the change count afterwards is this statement's.
+	ctx := context.Background()
+	conn, err := db.SQL().Conn(ctx)
+	if err != nil {
+		return err
 	}
-	rows, err := db.Query(stmt, args...)
+	defer conn.Close()
+	var before int64
+	if err := conn.QueryRowContext(ctx, `SELECT total_changes()`).Scan(&before); err != nil {
+		return err
+	}
+	rows, err := conn.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return err
 	}
@@ -57,6 +131,23 @@ func runSQL(db *hypercrux.DB, o *options, w io.Writer) error {
 	cols, err := rows.Columns()
 	if err != nil {
 		return err
+	}
+	if len(cols) == 0 {
+		for rows.Next() {
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		rows.Close()
+		var after, n int64
+		if err := conn.QueryRowContext(ctx, `SELECT total_changes(), changes()`).Scan(&after, &n); err != nil {
+			return err
+		}
+		if after == before {
+			n = 0 // a statement such as CREATE that changes no rows
+		}
+		fmt.Fprintf(w, "%d rows changed\n", n)
+		return nil
 	}
 	vals := make([]any, len(cols))
 	ptrs := make([]any, len(cols))

@@ -70,22 +70,25 @@ END`,
 // recordTriggers returns the triggers that tie a record table to hc_keys:
 // keys must start with the table's name and a colon, a new row registers its
 // key, a deleted row takes its key (and so its links) away, and keys never
-// change.
+// change. The trigger names have dots in them, which table names can't, so
+// no table's triggers can share a name with another's.
 func recordTriggers(t string) []string {
-	r := strings.NewReplacer("{T}", t, "{N}", fmt.Sprint(len(t)+1))
+	r := strings.NewReplacer("{T}", t, "{N}", fmt.Sprint(len(t)+1), "{MAX}", fmt.Sprint(MaxKeyLen))
 	return []string{
-		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc_{T}_insert" AFTER INSERT ON "{T}"
+		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc.{T}.insert" AFTER INSERT ON "{T}"
 BEGIN
-	SELECT RAISE(ABORT, 'hypercrux: keys in table {T} are text that starts with {T}:')
-	WHERE typeof(NEW.key) <> 'text' OR length(NEW.key) <= {N} OR substr(NEW.key, 1, {N}) <> '{T}:';
+	SELECT RAISE(ABORT, 'hypercrux: keys in table {T} are text that starts with {T}:, up to {MAX} bytes')
+	WHERE typeof(NEW.key) <> 'text' OR length(NEW.key) <= {N}
+		OR substr(NEW.key, 1, {N}) <> '{T}:' COLLATE BINARY
+		OR length(CAST(NEW.key AS BLOB)) > {MAX};
 	INSERT OR IGNORE INTO hc_keys (key, tbl) VALUES (NEW.key, '{T}');
 END`),
-		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc_{T}_delete" AFTER DELETE ON "{T}"
+		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc.{T}.delete" AFTER DELETE ON "{T}"
 BEGIN
 	DELETE FROM hc_keys WHERE key = OLD.key;
 END`),
-		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc_{T}_key" BEFORE UPDATE OF key ON "{T}"
-WHEN NEW.key IS NOT OLD.key
+		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc.{T}.key" BEFORE UPDATE OF key ON "{T}"
+WHEN NEW.key IS NOT OLD.key COLLATE BINARY
 BEGIN
 	SELECT RAISE(ABORT, 'hypercrux: a key never changes; delete the record and put it again');
 END`),
@@ -93,29 +96,30 @@ END`),
 }
 
 // vecCheck sets the table's vector size from its first vector, then refuses
-// any vector that isn't a blob of float32 values of that size, or is all
-// zero bytes.
+// any vector that isn't a blob of float32 values of that size, is larger
+// than MaxDims, or is all zero bytes.
 const vecCheck = `
 	UPDATE hc_tables SET dims = length(NEW.vec) / 4
 	WHERE name = '{T}' AND dims IS NULL AND typeof(NEW.vec) = 'blob'
-		AND length(NEW.vec) > 0 AND length(NEW.vec) % 4 = 0;
+		AND length(NEW.vec) > 0 AND length(NEW.vec) % 4 = 0 AND length(NEW.vec) <= {MAXB};
 	SELECT RAISE(ABORT, 'hypercrux: vec must be a blob of float32 values, the same size in the whole table, and not all zero')
 	WHERE typeof(NEW.vec) <> 'blob'
 		OR length(NEW.vec) = 0
 		OR length(NEW.vec) % 4 <> 0
+		OR length(NEW.vec) > {MAXB}
 		OR coalesce(length(NEW.vec) <> 4 * (SELECT dims FROM hc_tables WHERE name = '{T}'), 1)
 		OR NEW.vec = zeroblob(length(NEW.vec));`
 
 // vecTriggers returns the triggers that check the vec column. They exist
 // only once the table has a vec column.
 func vecTriggers(t string) []string {
-	r := strings.NewReplacer("{T}", t)
+	r := strings.NewReplacer("{T}", t, "{MAXB}", fmt.Sprint(4*MaxDims))
 	check := r.Replace(vecCheck)
 	return []string{
-		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc_{T}_vec_insert" AFTER INSERT ON "{T}"
+		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc.{T}.vec_insert" AFTER INSERT ON "{T}"
 WHEN NEW.vec IS NOT NULL
 BEGIN`) + check + "\nEND",
-		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc_{T}_vec_update" AFTER UPDATE OF vec ON "{T}"
+		r.Replace(`CREATE TRIGGER IF NOT EXISTS "hc.{T}.vec_update" AFTER UPDATE OF vec ON "{T}"
 WHEN NEW.vec IS NOT NULL
 BEGIN`) + check + "\nEND",
 	}
@@ -123,9 +127,9 @@ BEGIN`) + check + "\nEND",
 
 // triggerNames lists the triggers a record table should have.
 func triggerNames(t string, hasVec bool) []string {
-	names := []string{"hc_" + t + "_insert", "hc_" + t + "_delete", "hc_" + t + "_key"}
+	names := []string{"hc." + t + ".insert", "hc." + t + ".delete", "hc." + t + ".key"}
 	if hasVec {
-		names = append(names, "hc_"+t+"_vec_insert", "hc_"+t+"_vec_update")
+		names = append(names, "hc."+t+".vec_insert", "hc."+t+".vec_update")
 	}
 	return names
 }
@@ -137,6 +141,7 @@ type tableInfo struct {
 	adopted  bool              // listed in hc_tables
 	cols     map[string]string // lower-case name to the name as declared
 	keyOK    bool              // has key TEXT PRIMARY KEY, alone
+	strict   bool              // a STRICT table, whose new columns need a type
 	triggers map[string]bool
 }
 
@@ -240,6 +245,9 @@ func readTableInfo(q querier, t string) (*tableInfo, error) {
 		return nil, err
 	}
 	ti.adopted = n > 0
+	if err := q.QueryRow(`SELECT strict FROM pragma_table_list WHERE schema = 'main' AND name = ?`, t).Scan(&ti.strict); err != nil {
+		return nil, err
+	}
 	trows, err := q.Query(`SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ?`, t)
 	if err != nil {
 		return nil, err
@@ -268,7 +276,7 @@ func (t *Tx) ensure(tbl string, fields []string) (map[string]string, error) {
 			return nil, err
 		}
 	}
-	if !ti.exists || !ti.adopted {
+	if !ti.exists || !ti.adopted || !hasAll(ti.triggers, triggerNames(tbl, ti.hasVec())) {
 		if err := t.adopt(tbl); err != nil {
 			return nil, err
 		}
@@ -285,16 +293,19 @@ func (t *Tx) ensure(tbl string, fields []string) (map[string]string, error) {
 			continue
 		}
 		decl := quote(f)
-		if lower == "vec" {
+		switch {
+		case lower == "vec":
 			decl += " BLOB"
 			vecAdded = true
+		case ti.strict:
+			decl += " ANY"
 		}
 		if err := t.ddlExec(`ALTER TABLE ` + quote(tbl) + ` ADD COLUMN ` + decl); err != nil {
 			return nil, err
 		}
 		names[f] = f
 	}
-	if (vecAdded || ti.hasVec()) && !hasAll(ti.triggers, triggerNames(tbl, true)) {
+	if vecAdded {
 		if err := t.execAll(vecTriggers(tbl)); err != nil {
 			return nil, err
 		}
@@ -325,7 +336,13 @@ func (t *Tx) execAll(stmts []string) error {
 // plain SQL. The table needs a column key that is its TEXT PRIMARY KEY, and
 // every key must start with the table's name and a colon. Adopt registers
 // the existing rows, checks any vectors in a vec column, and installs the
-// triggers. Adopting a record table again does nothing.
+// triggers.
+//
+// Adopt also brings a record table back in step after its schema was
+// changed with plain SQL, for example rebuilt by copying it to a new table:
+// it reinstalls missing triggers, forgets keys whose rows are gone (and
+// their links), and sets the vector size from the vectors in the table.
+// Adopting a table that is in step does nothing.
 func (db *DB) Adopt(table string) error {
 	return db.Update(func(tx *Tx) error { return tx.Adopt(table) })
 }
@@ -344,7 +361,7 @@ func (t *Tx) adopt(tbl string) error {
 		return err
 	}
 	if !ti.exists {
-		return fmt.Errorf("%w: no table %s", ErrNotFound, tbl)
+		return fmt.Errorf("%w: no table %s (if it was dropped with plain SQL, Drop clears what's left of it)", ErrNotFound, tbl)
 	}
 	if !ti.keyOK {
 		return fmt.Errorf("%w: table %s needs a column key that is its TEXT PRIMARY KEY", ErrInvalid, tbl)
@@ -355,24 +372,38 @@ func (t *Tx) adopt(tbl string) error {
 	prefix := tbl + ":"
 	var bad int
 	if err := t.tx.QueryRow(`SELECT count(*) FROM `+quote(tbl)+
-		` WHERE typeof(key) <> 'text' OR length(key) <= ? OR substr(key, 1, ?) <> ?`,
-		len(prefix), len(prefix), prefix).Scan(&bad); err != nil {
+		` WHERE typeof(key) <> 'text' OR length(key) <= ? OR substr(key, 1, ?) <> ? COLLATE BINARY
+		OR length(CAST(key AS BLOB)) > ?`,
+		len(prefix), len(prefix), prefix, MaxKeyLen).Scan(&bad); err != nil {
 		return err
 	}
 	if bad > 0 {
-		return fmt.Errorf("%w: %d keys in table %s don't start with %q", ErrInvalid, bad, tbl, prefix)
+		return fmt.Errorf("%w: %d keys in table %s don't start with %q or are longer than %d bytes", ErrInvalid, bad, tbl, prefix, MaxKeyLen)
 	}
 	t.ddl = true // hc_tables decides which tables count as records
 	if _, err := t.tx.Exec(`INSERT OR IGNORE INTO hc_tables (name, dims) VALUES (?, NULL)`, tbl); err != nil {
 		return err
 	}
+	// Keys whose rows went while the triggers were missing go too, and
+	// their links with them.
+	if _, err := t.tx.Exec(`DELETE FROM hc_keys WHERE tbl = ? AND key NOT IN (SELECT key FROM `+quote(tbl)+`)`, tbl); err != nil {
+		return err
+	}
 	if _, err := t.tx.Exec(`INSERT OR IGNORE INTO hc_keys (key, tbl) SELECT key, ? FROM `+quote(tbl), tbl); err != nil {
 		return err
 	}
+	dims := 0
 	if ti.hasVec() {
-		if err := t.adoptVectors(tbl, ti.cols["vec"]); err != nil {
+		if dims, err = t.adoptVectors(tbl, ti.cols["vec"]); err != nil {
 			return err
 		}
+	}
+	var d any
+	if dims > 0 {
+		d = dims
+	}
+	if _, err := t.tx.Exec(`UPDATE hc_tables SET dims = ? WHERE name = ?`, d, tbl); err != nil {
+		return err
 	}
 	if err := t.execAll(recordTriggers(tbl)); err != nil {
 		return err
@@ -383,11 +414,55 @@ func (t *Tx) adopt(tbl string) error {
 	return nil
 }
 
-// adoptVectors checks the vectors already in a table and records their size.
-func (t *Tx) adoptVectors(tbl, col string) error {
-	rows, err := t.tx.Query(`SELECT key, ` + quote(col) + ` FROM ` + quote(tbl) + ` WHERE ` + quote(col) + ` IS NOT NULL`)
+// Drop deletes a record table: its records, their links, and the table. It
+// also clears up after a record table that was dropped with plain SQL,
+// whose keys and links would otherwise stay behind. Tables HyperCrux hasn't
+// adopted are left alone.
+func (db *DB) Drop(table string) error {
+	return db.Update(func(tx *Tx) error { return tx.Drop(table) })
+}
+
+// Drop is DB.Drop inside a transaction.
+func (t *Tx) Drop(table string) error {
+	if err := checkTable(table); err != nil {
+		return err
+	}
+	ti, err := readTableInfo(t.tx, table)
 	if err != nil {
 		return err
+	}
+	var listed int
+	if err := t.tx.QueryRow(`SELECT count(*) FROM hc_tables WHERE name = ?`, table).Scan(&listed); err != nil {
+		return err
+	}
+	switch {
+	case listed == 0 && ti.exists:
+		return fmt.Errorf("%w: %s isn't a record table; drop it with plain SQL", ErrInvalid, table)
+	case listed == 0:
+		return fmt.Errorf("%w: no record table %s", ErrNotFound, table)
+	}
+	t.ddl = true
+	if ti.exists {
+		if _, err := t.tx.Exec(`DELETE FROM ` + quote(table)); err != nil {
+			return err
+		}
+		if _, err := t.tx.Exec(`DROP TABLE ` + quote(table)); err != nil {
+			return err
+		}
+	}
+	if _, err := t.tx.Exec(`DELETE FROM hc_keys WHERE tbl = ?`, table); err != nil {
+		return err
+	}
+	_, err = t.tx.Exec(`DELETE FROM hc_tables WHERE name = ?`, table)
+	return err
+}
+
+// adoptVectors checks the vectors already in a table and returns their
+// size, or 0 when the table holds none.
+func (t *Tx) adoptVectors(tbl, col string) (int, error) {
+	rows, err := t.tx.Query(`SELECT key, ` + quote(col) + ` FROM ` + quote(tbl) + ` WHERE ` + quote(col) + ` IS NOT NULL`)
+	if err != nil {
+		return 0, err
 	}
 	defer rows.Close()
 	dims := 0
@@ -395,30 +470,24 @@ func (t *Tx) adoptVectors(tbl, col string) error {
 		var key string
 		var raw any
 		if err := rows.Scan(&key, &raw); err != nil {
-			return err
+			return 0, err
 		}
 		b, ok := raw.([]byte)
 		if !ok {
-			return fmt.Errorf("%w: %s has a vec that isn't a blob", ErrInvalid, key)
+			return 0, fmt.Errorf("%w: %s has a vec that isn't a blob", ErrInvalid, key)
 		}
 		v, err := DecodeVector(b)
 		if err != nil {
-			return fmt.Errorf("%w: %s: %v", ErrInvalid, key, err)
+			return 0, fmt.Errorf("%w: %s: %v", ErrInvalid, key, err)
 		}
 		if err := checkVector(v); err != nil {
-			return fmt.Errorf("%s: %w", key, err)
+			return 0, fmt.Errorf("%s: %w", key, err)
 		}
 		if dims == 0 {
 			dims = len(v)
 		} else if len(v) != dims {
-			return fmt.Errorf("%w: %s has %d values where the table's vectors have %d", ErrInvalid, key, len(v), dims)
+			return 0, fmt.Errorf("%w: %s has %d values where the table's vectors have %d", ErrInvalid, key, len(v), dims)
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if dims > 0 {
-		_, err = t.tx.Exec(`UPDATE hc_tables SET dims = ? WHERE name = ? AND dims IS NULL`, dims, tbl)
-	}
-	return err
+	return dims, rows.Err()
 }

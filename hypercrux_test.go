@@ -172,7 +172,7 @@ func TestKeyAndFieldRules(t *testing.T) {
 		}
 	}
 	for _, f := range []Fields{{"key": 1}, {"rowid": 1}, {"has space": 1}, {"1st": 1}, {"a": 1, "A": 2},
-		{"a": math.NaN()}, {"a": math.Inf(1)}, {"a": uint64(math.MaxUint64)}, {"a": struct{}{}},
+		{"a": math.NaN()}, {"a": math.Inf(1)}, {"a": uint64(math.MaxUint64)}, {"a": make(chan int)}, {"a": func() {}},
 		{"a": "\xff"}, {"emb": Vector{1}}, {"vec": "not a vector"}, {"vec": Vector{}}, {"vec": Vector{0, 0}},
 		{"vec": Vector{1, float32(math.NaN())}}} {
 		if err := db.Put("docs:1", f); !errors.Is(err, ErrInvalid) {
@@ -588,9 +588,9 @@ func TestOneStatementCrossesAllFour(t *testing.T) {
 		SELECT d.key, d.title
 		FROM json_each(walk('customer:42', 2)) w
 		JOIN docs d ON d.key = w.value
-		WHERE d.status = 'open'
+		WHERE d.status = 'open' AND d.vec IS NOT NULL
 		ORDER BY distance(d.vec, ?)
-		LIMIT 10`, Vector{1, 0, 0}.Bytes())))
+		LIMIT 10`, Vector{1, 0, 0})))
 	if got := rows.keys(t); got != "docs:1 docs:3" {
 		t.Fatalf("got %q", got)
 	}
@@ -640,8 +640,8 @@ func TestPlainSQLFollowsTheRules(t *testing.T) {
 		`INSERT INTO docs (key, vec) VALUES ('docs:3', x'0000803f00')`, // not whole float32s
 	}
 	for _, s := range fails {
-		if _, err := db.Exec(s); err == nil {
-			t.Errorf("worked, but shouldn't have: %s", s)
+		if _, err := db.Exec(s); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: got %v, want one of HyperCrux's rules to refuse it", s, err)
 		}
 	}
 	// What is allowed works, and keeps everything in step.
@@ -762,9 +762,9 @@ func TestCheckFindsProblems(t *testing.T) {
 	checkOK(t, db)
 	// Break things the way only someone working around the rules could.
 	for _, s := range []string{
-		`DROP TRIGGER hc_docs_delete`,
+		`DROP TRIGGER "hc.docs.delete"`,
 		`DELETE FROM docs WHERE key = 'docs:2'`, // no trigger now: key and link left behind
-		`DROP TRIGGER hc_docs_vec_update`,
+		`DROP TRIGGER "hc.docs.vec_update"`,
 		`UPDATE docs SET vec = x'0000c07f0000803f' WHERE key = 'docs:1'`, // NaN
 		`DROP TRIGGER hc_links_insert`,
 		`INSERT INTO hc_links VALUES ('docs:1', 'ghost', 'docs:404')`,
@@ -773,7 +773,7 @@ func TestCheckFindsProblems(t *testing.T) {
 	}
 	rep := must[Report](t)(db.Check())
 	all := strings.Join(rep.Problems, "\n")
-	for _, want := range []string{"missing its trigger hc_docs_delete", "missing its trigger hc_docs_vec_update",
+	for _, want := range []string{"missing its trigger hc.docs.delete", "missing its trigger hc.docs.vec_update",
 		"keys in hc_keys with no row in docs: docs:2", "links to keys that don't exist: docs:404",
 		"the vector of docs:1 has a value that isn't a finite number", "missing the trigger hc_links_insert"} {
 		if !strings.Contains(all, want) {

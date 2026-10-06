@@ -31,20 +31,24 @@ Usage:
   hypercrux delete FILE KEY                   delete a record and its links
   hypercrux scan FILE PREFIX                  list records by key prefix
                                               --after KEY  --limit N  --vec
-  hypercrux sql FILE STATEMENT [ARG...]       run one SQL statement  --json
+  hypercrux sql [--json] FILE STATEMENT [ARG...]
+                                              run one SQL statement with ? arguments
   hypercrux link FILE FROM TYPE TO            link two records
   hypercrux unlink FILE FROM TYPE TO          remove a link (TYPE * for every type)
   hypercrux neighbours FILE KEY               links of a record  --in --both --type T --json
   hypercrux walk FILE KEY DEPTH               records up to DEPTH links away
                                               --in --both --type T --json
   hypercrux nearest FILE TABLE VECTOR|KEY     closest vectors  -k N --where SQL --json
-  hypercrux adopt FILE TABLE                  make a plain SQL table a record table
+  hypercrux adopt FILE TABLE                  make a plain SQL table a record table,
+                                              or bring one back in step after a schema change
+  hypercrux drop FILE TABLE                   delete a record table, its records and their links
   hypercrux check FILE                        confirm keys, rows, links and vectors agree
   hypercrux version                           print the version
 
 A key is table:id, such as docs:7. A VECTOR is a JSON array, such as
-'[0.12, 0.8, 0.05]'. Options can go before or after the other arguments.
-Only init and put create a file.`
+'[0.12, 0.8, 0.05]'. Options can go before or after the other arguments,
+except with sql, whose options go before FILE: everything after FILE is the
+statement and its arguments. Only init and put create a file.`
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -68,12 +72,18 @@ type options struct {
 // valued lists the options that take a value.
 var valued = map[string]bool{"after": true, "limit": true, "type": true, "k": true, "where": true}
 
-func parseArgs(args []string) (*options, error) {
+// parseArgs reads options and positional arguments. Once rawAfter
+// positional arguments have been read (when rawAfter > 0), everything else
+// is positional, even if it starts with a dash.
+func parseArgs(args []string, rawAfter int) (*options, error) {
 	o := &options{k: 10}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
-		if a == "--" {
-			o.pos = append(o.pos, args[i+1:]...)
+		if a == "--" || (rawAfter > 0 && len(o.pos) >= rawAfter) {
+			if a == "--" {
+				i++
+			}
+			o.pos = append(o.pos, args[i:]...)
 			break
 		}
 		if !strings.HasPrefix(a, "-") || a == "-" {
@@ -133,7 +143,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 2
 	}
 	cmd := args[0]
-	o, err := parseArgs(args[1:])
+	rawAfter := 0
+	if cmd == "sql" {
+		rawAfter = 1 // after FILE come the statement and its arguments, as they are
+	}
+	o, err := parseArgs(args[1:], rawAfter)
 	if err == nil {
 		err = dispatch(cmd, o, stdin, stdout)
 	}
@@ -202,7 +216,7 @@ func dispatch(cmd string, o *options, stdin io.Reader, stdout io.Writer) error {
 	commands := map[string]func(*hypercrux.DB, *options, io.Writer) error{
 		"get": get, "delete": del, "scan": scan, "sql": runSQL, "link": link, "unlink": unlink,
 		"neighbours": neighbours, "neighbors": neighbours, "walk": walk, "nearest": nearest,
-		"adopt": adopt, "check": check,
+		"adopt": adopt, "drop": drop, "check": check,
 	}
 	f, ok := commands[cmd]
 	if !ok {
@@ -258,6 +272,9 @@ func put(o *options, stdin io.Reader, stdout io.Writer) error {
 	if err := dec.Decode(&f); err != nil {
 		return fmt.Errorf("the fields must be a JSON object: %v", err)
 	}
+	if _, err := dec.Token(); err != io.EOF {
+		return fmt.Errorf("the fields must be one JSON object, with nothing after it")
+	}
 	if k, ok := f["key"]; ok {
 		if k != key {
 			return fmt.Errorf("the JSON has key %v, and the command says %s", k, key)
@@ -267,14 +284,22 @@ func put(o *options, stdin io.Reader, stdout io.Writer) error {
 	if _, err := hypercrux.TableOf(key); err != nil {
 		return err
 	}
+	_, statErr := os.Stat(path)
+	created := os.IsNotExist(statErr)
 	db, err := hypercrux.Open(path)
 	if err != nil {
 		return err
 	}
-	defer db.Close()
 	if err := db.Put(key, hypercrux.Fields(f)); err != nil {
+		db.Close()
+		if created { // don't leave an empty file behind
+			for _, p := range []string{path, path + "-wal", path + "-shm"} {
+				os.Remove(p)
+			}
+		}
 		return err
 	}
+	db.Close()
 	fmt.Fprintln(stdout, key)
 	return nil
 }
@@ -489,6 +514,17 @@ func adopt(db *hypercrux.DB, o *options, w io.Writer) error {
 	var n int
 	db.SQL().QueryRow(`SELECT count(*) FROM hc_keys WHERE tbl = ?`, o.pos[1]).Scan(&n)
 	fmt.Fprintf(w, "%s is a record table with %d records\n", o.pos[1], n)
+	return nil
+}
+
+func drop(db *hypercrux.DB, o *options, w io.Writer) error {
+	if err := need(o, 2, "FILE TABLE"); err != nil {
+		return err
+	}
+	if err := db.Drop(o.pos[1]); err != nil {
+		return err
+	}
+	fmt.Fprintf(w, "dropped %s, with its records and their links\n", o.pos[1])
 	return nil
 }
 

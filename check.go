@@ -174,7 +174,7 @@ func (db *DB) Check() (Report, error) {
 			return rep, err
 		}
 		if !ti.exists {
-			problem("hc_tables lists %s, but there's no such table", t.name)
+			problem("hc_tables lists %s, but there's no such table; Drop clears what's left of it", t.name)
 			continue
 		}
 		if !ti.keyOK {

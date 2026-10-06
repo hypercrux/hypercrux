@@ -5,6 +5,7 @@ package main
 
 import (
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,13 +86,31 @@ func TestEveryCommand(t *testing.T) {
 
 	out = expect(t, 0, "docs:3  Q3 budget", "sql", f,
 		`SELECT d.key, d.title, d.vec FROM json_each(walk('customer:42', 2)) w JOIN docs d ON d.key = w.value
-		 WHERE d.status = ? ORDER BY distance(d.vec, ?) LIMIT 10`, "open", "[1,0,0]")
+		 WHERE d.status = ? AND d.vec IS NOT NULL ORDER BY distance(d.vec, ?) LIMIT 10`, "open", "[1,0,0]")
 	if !strings.Contains(out, "vector(3)") || !strings.HasPrefix(out, "key     title      vec\ndocs:1") {
 		t.Fatalf("sql:\n%s", out)
 	}
-	expect(t, 0, `{"key":"docs:2","vec":[0.1,0.9,0.1]}`, "sql", f, "SELECT key, vec FROM docs WHERE key = ?", "docs:2", "--json")
+	expect(t, 0, `{"key":"docs:2","vec":[0.1,0.9,0.1]}`, "sql", "--json", f, "SELECT key, vec FROM docs WHERE key = ?", "docs:2")
 	expect(t, 0, "1 rows changed", "sql", f, "UPDATE docs SET status = 'archived' WHERE key = 'docs:2'")
+	expect(t, 0, "0 rows changed", "sql", f, "UPDATE docs SET status = 'x' WHERE key = 'docs:404'")
 	expect(t, 0, "-1", "sql", f, "SELECT ?", "-1")
+	// After the statement, everything is an argument, dashes and all.
+	expect(t, 0, "-draft-", "sql", f, "SELECT ?", "-draft-")
+	expect(t, 0, "--json", "sql", f, "SELECT ?", "--json")
+	// Numbers that wouldn't read back the same stay text.
+	expect(t, 0, "docs:3", "put", f, "docs:3", `{"phone": null}`)
+	expect(t, 0, "1 rows changed", "sql", f, "UPDATE docs SET phone = ? WHERE key = 'docs:3'", "0501234567")
+	expect(t, 0, "docs:3", "sql", f, "SELECT key FROM docs WHERE phone = ?", "0501234567")
+	// Comments are fine, more than one statement isn't.
+	expect(t, 0, "docs:3", "sql", f, "-- the budget\nSELECT key FROM docs WHERE phone = '0501234567'")
+	expect(t, 0, "docs:3", "sql", f, "/* the budget */ SELECT key FROM docs WHERE phone = '0501234567'; -- done")
+	expect(t, 2, "one statement at a time", "sql", f, "SELECT 1; DROP TABLE docs")
+	expect(t, 2, "one statement at a time", "sql", f, "SELECT 'a;b'; SELECT 2")
+	expect(t, 0, "a;b", "sql", f, "SELECT 'a;b' AS x")
+	expect(t, 2, "needs a statement", "sql", f, " -- nothing")
+	expect(t, 0, "0 rows changed", "sql", f, "CREATE TRIGGER t1 AFTER INSERT ON docs BEGIN SELECT 1; SELECT 2; END")
+	expect(t, 0, "0 rows changed", "sql", f, "DROP TRIGGER t1")
+	expect(t, 0, "docs:1", "get", f, "docs:1") // the table survived
 	expect(t, 1, "keys in table docs are text that starts with docs:", "sql", f, "INSERT INTO docs (key) VALUES ('x:1')")
 
 	expect(t, 0, "unlinked customer:42 -*-> docs:2", "unlink", f, "customer:42", "*", "docs:2")
@@ -105,11 +124,20 @@ func TestEveryCommand(t *testing.T) {
 	expect(t, 0, "1 rows changed", "sql", f, "INSERT INTO notes VALUES ('notes:1', 'hello')")
 	expect(t, 0, "notes is a record table with 1 records", "adopt", f, "notes")
 	expect(t, 0, "notes:1 -about-> docs:3", "link", f, "notes:1", "about", "docs:3")
+	expect(t, 0, "dropped notes", "drop", f, "notes")
+	expect(t, 0, "", "neighbours", f, "docs:3")
+	expect(t, 1, "no record table notes", "drop", f, "notes")
 
 	// Mistakes.
 	expect(t, 1, "no such file", "get", filepath.Join(t.TempDir(), "typo.db"), "docs:1")
 	expect(t, 1, "has no table", "put", f, "nocolon", `{}`)
 	expect(t, 1, "must be a JSON object", "put", f, "docs:9", `[1, 2]`)
+	expect(t, 1, "nothing after it", "put", f, "docs:9", `{"a": 1} {"b": 2}`)
+	fresh := filepath.Join(t.TempDir(), "fresh.db")
+	expect(t, 1, "only zeros", "put", fresh, "docs:1", `{"vec": [0, 0]}`)
+	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+		t.Fatalf("a failed put left %s behind: %v", fresh, err)
+	}
 	expect(t, 1, "JSON has key", "put", f, "docs:9", `{"key": "docs:8"}`)
 	expect(t, 1, "holds vectors of 3 values", "put", f, "docs:9", `{"vec": [1, 2]}`)
 	expect(t, 1, "not found: docs:404", "link", f, "docs:3", "x", "docs:404")
@@ -144,10 +172,10 @@ func TestCheckReportsProblems(t *testing.T) {
 	expect(t, 0, "docs:1", "put", f, "docs:1", `{"a": 1}`)
 	expect(t, 0, "docs:2", "put", f, "docs:2", `{"a": 2}`)
 	expect(t, 0, "docs:1 -x-> docs:2", "link", f, "docs:1", "x", "docs:2")
-	expect(t, 0, "0 rows changed", "sql", f, "DROP TRIGGER hc_docs_delete")
+	expect(t, 0, "0 rows changed", "sql", f, `DROP TRIGGER "hc.docs.delete"`)
 	expect(t, 0, "1 rows changed", "sql", f, "DELETE FROM docs WHERE key = 'docs:2'")
 	out := expect(t, 1, "problems in", "check", f)
-	if !strings.Contains(out, "missing its trigger hc_docs_delete") || !strings.Contains(out, "no row in docs: docs:2") {
+	if !strings.Contains(out, "missing its trigger hc.docs.delete") || !strings.Contains(out, "no row in docs: docs:2") {
 		t.Fatalf("check output:\n%s", out)
 	}
 }

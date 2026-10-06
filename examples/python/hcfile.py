@@ -30,14 +30,21 @@ _NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 def connect(path):
     """Opens the file in autocommit mode: each function below starts its own
-    transaction with BEGIN IMMEDIATE, which takes the write lock up front."""
+    transaction with BEGIN IMMEDIATE, which takes the write lock up front.
+    Recursive triggers are on, so a row that REPLACE removes fires its
+    delete trigger like any other deleted row."""
     db = sqlite3.connect(path, timeout=10, isolation_level=None)
     db.execute("PRAGMA busy_timeout = 10000")
+    db.execute("PRAGMA recursive_triggers = ON")
     return db
 
 
 def pack(vec):
-    """A vector as HyperCrux stores it: little-endian float32 values."""
+    """A vector as HyperCrux stores it: little-endian float32 values. The
+    triggers can't see NaN or infinity inside a blob, so they're refused
+    here."""
+    if not all(math.isfinite(x) for x in vec):
+        raise ValueError("a vector holds only finite numbers")
     return struct.pack("<%df" % len(vec), *vec)
 
 

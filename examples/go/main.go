@@ -95,9 +95,9 @@ func main() {
 		SELECT d.key, d.title
 		FROM json_each(walk('customer:42', 2)) w
 		JOIN docs d ON d.key = w.value
-		WHERE d.status = 'open'
+		WHERE d.status = 'open' AND d.vec IS NOT NULL
 		ORDER BY distance(d.vec, ?)
-		LIMIT 10`, question.Bytes())
+		LIMIT 10`, question)
 	if err != nil {
 		log.Fatal(err)
 	}

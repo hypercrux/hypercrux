@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -17,8 +18,8 @@ import (
 
 // Fields are a record's values by column name. Put takes these Go types:
 // string, bool, every integer type, float32 and float64, []byte, time.Time
-// (stored as RFC 3339 text in UTC), nil (stored as NULL), and maps or slices,
-// which are stored as JSON text. The field named "vec" is the record's
+// (stored as RFC 3339 text in UTC), nil (stored as NULL), named types based
+// on these, and maps, slices and structs, which are stored as JSON text. The field named "vec" is the record's
 // vector and takes a Vector or a []float32 or []float64.
 //
 // Get gives values back as string, int64, float64, []byte, and Vector for
@@ -145,13 +146,40 @@ func encodeField(name string, v any) (any, error) {
 	case Vector, []float32, []float64:
 		return nil, fmt.Errorf("%w: field %s holds a vector; a record's vector goes in the field vec", ErrInvalid, name)
 	case map[string]any, []any:
-		b, err := json.Marshal(x)
-		if err != nil {
-			return nil, fmt.Errorf("%w: field %s: %v", ErrInvalid, name, err)
+		return jsonField(name, x)
+	}
+	// Named types, such as type Status string, and other maps, slices and
+	// structs.
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.String:
+		return encodeField(name, rv.String())
+	case reflect.Bool:
+		return encodeField(name, rv.Bool())
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return rv.Int(), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return uintField(name, rv.Uint())
+	case reflect.Float32, reflect.Float64:
+		return floatField(name, rv.Float())
+	case reflect.Map, reflect.Slice, reflect.Array, reflect.Struct:
+		return jsonField(name, v)
+	case reflect.Pointer:
+		if rv.IsNil() {
+			return nil, nil
 		}
-		return string(b), nil
+		return encodeField(name, rv.Elem().Interface())
 	}
 	return nil, fmt.Errorf("%w: field %s has a %T, which HyperCrux doesn't store", ErrInvalid, name, v)
+}
+
+// jsonField stores a map, slice or struct as JSON text.
+func jsonField(name string, v any) (any, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("%w: field %s: %v", ErrInvalid, name, err)
+	}
+	return string(b), nil
 }
 
 func uintField(name string, x uint64) (any, error) {
@@ -180,7 +208,7 @@ func get(q querier, key string) (Fields, error) {
 		return nil, err
 	}
 	rows, err := q.Query(`SELECT * FROM `+quote(tbl)+` WHERE key = ? AND EXISTS (SELECT 1 FROM hc_tables WHERE name = ?)`, key, tbl)
-	if isNoSuchTable(err) {
+	if isMissing(err) {
 		return nil, fmt.Errorf("%w: %s", ErrNotFound, key)
 	}
 	if err != nil {
@@ -327,6 +355,9 @@ func (t *Tx) Put(key string, f Fields) error {
 // ruleError turns an error raised by one of HyperCrux's triggers into an
 // ErrInvalid, and leaves other errors alone.
 func ruleError(err error) error {
+	if err == nil {
+		return nil
+	}
 	if msg := err.Error(); strings.HasPrefix(msg, "hypercrux: ") {
 		return fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(msg, "hypercrux: "))
 	}
@@ -346,7 +377,7 @@ func (t *Tx) Delete(key string) error {
 		return err
 	}
 	res, err := t.run().Exec(`DELETE FROM `+quote(tbl)+` WHERE key = ? AND EXISTS (SELECT 1 FROM hc_tables WHERE name = ?)`, key, tbl)
-	if isNoSuchTable(err) {
+	if isMissing(err) {
 		return fmt.Errorf("%w: %s", ErrNotFound, key)
 	}
 	if err != nil {
@@ -399,7 +430,7 @@ func scan(q querier, prefix, after string, limit int) ([]Record, error) {
 		args = append(args, limit)
 	}
 	rows, err := q.Query(query, args...)
-	if isNoSuchTable(err) {
+	if isMissing(err) {
 		return nil, nil
 	}
 	if err != nil {

@@ -238,6 +238,9 @@ func TestKilledWritersNeverLeaveAMess(t *testing.T) {
 		last = c
 	}
 	c, items, links := verifyWriterFile(t, path)
+	if c == 0 || empty > rounds/2 {
+		t.Fatalf("the writer committed %d transactions, and %d of %d rounds committed nothing: the test didn't exercise anything", c, empty, rounds)
+	}
 	t.Logf("%d SIGKILLs at random moments in %s: %d transactions committed, each a record with fields and a vector, two links, a counter and every 7th a delete; "+
 		"after every kill the file matched the last committed transaction exactly (%d records, %d links at the end), Check passed, and the vector and link handles agreed; "+
 		"%d rounds were killed before the writer committed anything",
@@ -302,7 +305,9 @@ func TestProcessesShareAFile(t *testing.T) {
 	}
 	// The parent reads while they write.
 	done := make(chan struct{})
+	readErr := make(chan error, 1)
 	go func() {
+		defer close(readErr)
 		for {
 			select {
 			case <-done:
@@ -310,18 +315,25 @@ func TestProcessesShareAFile(t *testing.T) {
 			default:
 			}
 			if _, err := db.Neighbours("hub:0", In, "hub"); err != nil {
-				t.Error(err)
+				readErr <- err
 				return
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
+	var waitErr error
 	for _, cmd := range cmds {
-		if err := cmd.Wait(); err != nil {
-			t.Fatalf("a writer failed: %v", err)
+		if err := cmd.Wait(); err != nil && waitErr == nil {
+			waitErr = err
 		}
 	}
 	close(done)
+	if err := <-readErr; err != nil {
+		t.Fatalf("reading while they wrote: %v", err)
+	}
+	if waitErr != nil {
+		t.Fatalf("a writer failed: %v", waitErr)
+	}
 	elapsed := time.Since(start)
 	rep := checkOK(t, db)
 	if want := procs*n + 1; rep.Records != want {

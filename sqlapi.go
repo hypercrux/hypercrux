@@ -9,13 +9,20 @@ import "database/sql"
 // UPDATE or a CREATE INDEX. Changes to record tables and links go through
 // the same triggers as Put, Delete and Link, so they keep the file
 // consistent too.
+//
+// A statement that breaks one of HyperCrux's rules fails with an error that
+// wraps ErrInvalid. After changing a record table's schema with plain SQL
+// (dropping, renaming or rebuilding it), see Adopt and Drop.
 func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
-	return db.sql.Exec(query, args...)
+	res, err := db.sql.Exec(query, args...)
+	return res, ruleError(err)
 }
 
 // Exec is DB.Exec inside the transaction.
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
-	return t.tx.Exec(query, args...)
+	t.ddl = true // it may change the schema; the cache is refreshed after
+	res, err := t.tx.Exec(query, args...)
+	return res, ruleError(err)
 }
 
 // Query runs an SQL query. Besides SQLite's own functions it can use

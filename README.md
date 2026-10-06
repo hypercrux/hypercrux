@@ -131,6 +131,9 @@ hits, err := db.Nearest("docs", question, 10, "status = ?", "open") // by simila
 rows, err := db.Query("SELECT key, title FROM docs WHERE status = ?", "open") // by SQL
 ```
 
+Inside `Update`, use `tx` and not `db`: the methods of `db` run outside the
+transaction and don't see its changes.
+
 Building needs cgo and a C compiler, because SQLite is compiled in through
 [go-sqlite3](https://github.com/mattn/go-sqlite3). The full API is on
 [pkg.go.dev](https://pkg.go.dev/github.com/hypercrux/hypercrux), and
@@ -146,14 +149,17 @@ Building needs cgo and a C compiler, because SQLite is compiled in through
 | Similarity | `Nearest` | The k closest vectors by cosine distance, with an optional SQL filter |
 
 `Update` runs a function as one transaction, and a `Tx` has all the same
-methods. `Adopt` turns a table you made with plain SQL into a record table.
-`Check` reads the whole file and confirms the four handles agree.
+methods. `Adopt` turns a table you made with plain SQL into a record table,
+or brings one back in step after its schema changed. `Drop` deletes a record
+table with its records and their links. `Check` reads the whole file and
+confirms the four handles agree.
 
 - **Keys** are `table:id`. The table name is lower-case letters, digits and
   underscores. Anything can follow the colon, up to 1,024 bytes in all.
 - **Fields** are columns. `Put` sets the fields it's given and leaves the
   rest alone, and a nil value clears one. Strings, numbers, booleans, bytes
-  and times go in as themselves; maps and slices are stored as JSON text.
+  and times go in as themselves; maps, slices and structs are stored as JSON
+  text.
 - **Links** have a type, such as `owns` or `cites`, and both records must
   exist. Adding a link twice keeps one.
 - **Vectors** go in the field `vec`. The first vector in a table sets its
@@ -172,13 +178,15 @@ single query can follow links, filter on fields and rank by similarity:
 SELECT d.key, d.title
 FROM json_each(walk('customer:42', 2)) w
 JOIN docs d ON d.key = w.value
-WHERE d.status = 'open'
+WHERE d.status = 'open' AND d.vec IS NOT NULL
 ORDER BY distance(d.vec, ?)
 LIMIT 10
 ```
 
 That's the open documents within two links of a customer, closest to the
-question first. `walk` takes a link type and a direction too:
+question first. In Go, pass the question as a `Vector`. `d.vec IS NOT NULL`
+leaves out documents without a vector, whose distance is NULL, which SQLite
+would sort first. `walk` takes a link type and a direction too:
 `walk('docs:1', 1, 'cites', 'in')` gives the documents that cite `docs:1`.
 
 ## Use it from any language
@@ -190,8 +198,12 @@ and writes JSON, so any language that can run a program can use it.
 vectors in step are SQLite triggers stored in the file. A program that
 inserts a row with plain SQL gets its key registered; one that deletes a row
 takes its links with it; one that links to a key that doesn't exist, or
-stores a vector of the wrong size, gets an error and changes nothing.
-[FORMAT.md](FORMAT.md) describes the tables and triggers, and
+stores a vector of the wrong size, gets an error and changes nothing. Such a
+program should turn on `PRAGMA recursive_triggers`, so rows that a REPLACE
+removes fire their triggers too, and changes to a record table's schema,
+such as dropping or rebuilding it, need `hypercrux drop` or
+`hypercrux adopt` afterwards. [FORMAT.md](FORMAT.md) describes the tables,
+the triggers and these rules, and
 [examples/python/hcfile.py](examples/python/hcfile.py) puts, links, deletes
 and searches with Python's standard library alone:
 
@@ -210,40 +222,52 @@ python3 examples/python/hcfile.py nearest notes.db docs '[1, 0, 0]' 3
 | `hypercrux get FILE KEY` | Prints a record as JSON, vector included |
 | `hypercrux delete FILE KEY` | Deletes a record and its links |
 | `hypercrux scan FILE PREFIX` | Lists records whose keys start with PREFIX, one JSON object a line. `--after KEY`, `--limit N`, `--vec` |
-| `hypercrux sql FILE STATEMENT [ARG...]` | Runs one SQL statement, with `?` arguments. `--json` |
+| `hypercrux sql [--json] FILE STATEMENT [ARG...]` | Runs one SQL statement, with `?` arguments taken as they are |
 | `hypercrux link FILE FROM TYPE TO` | Links two records |
 | `hypercrux unlink FILE FROM TYPE TO` | Removes a link. `*` as TYPE removes every type |
 | `hypercrux neighbours FILE KEY` | Lists a record's links. `--in`, `--both`, `--type T`, `--json` |
 | `hypercrux walk FILE KEY DEPTH` | Lists the records up to DEPTH links away. `--in`, `--both`, `--type T`, `--json` |
 | `hypercrux nearest FILE TABLE VECTOR\|KEY` | Lists the closest vectors to a JSON array or to a record's own vector. `-k N`, `--where SQL`, `--json` |
-| `hypercrux adopt FILE TABLE` | Makes a table created with plain SQL a record table |
+| `hypercrux adopt FILE TABLE` | Makes a table created with plain SQL a record table, or brings one back in step after a schema change |
+| `hypercrux drop FILE TABLE` | Deletes a record table with its records and their links, or clears what's left of one dropped with plain SQL |
 | `hypercrux check FILE` | Confirms keys, rows, links and vectors agree, and SQLite's integrity check passes |
 | `hypercrux version` | Prints the version |
 
-Options can go before or after the other arguments. Only `init` and `put`
-create a file. Every other command needs an existing HyperCrux file, so a
+Options can go before or after the other arguments, except with `sql`,
+whose options go before FILE: everything after FILE is the statement and its
+arguments. Only `init` and `put` create a file. Every other command needs an existing HyperCrux file, so a
 typo in a file name is caught and other SQLite files are left alone.
 
 ## What HyperCrux promises, and what it doesn't
 
-- **The four handles agree.** Every change is an SQLite transaction, and the
-  triggers in the file run inside it, whatever program made the change. A
-  record, its key, its links and its vector appear and disappear together.
+- **The four handles agree.** Every insert, update and delete is an SQLite
+  transaction, and the triggers in the file run inside it, whatever program
+  made the change. A record, its key, its links and its vector appear and
+  disappear together. Schema changes made with plain SQL, such as dropping
+  or rebuilding a record table, are the one exception: follow them with
+  `Adopt` or `Drop`, and `Check` reports anything left out of step.
 - **Durable.** HyperCrux runs SQLite with `synchronous = FULL`, so a write
   that returned is still there after a crash or a power cut, as long as the
   disk really writes what it's told to flush.
 - **Exact search, up to a size.** Search compares every vector that passes
-  the filter, so it finds the true nearest ones. On a two-core cloud machine, a search for the closest 10 took about 5 milliseconds among 1,000 vectors of 384 values, 48 milliseconds among 10,000 and 0.46 seconds among 100,000. That
+  the filter, so it finds the true nearest ones. On a two-core cloud machine, a search
+  for the closest 10 took about 4 milliseconds among 1,000 vectors of 384
+  values, 42 milliseconds among 10,000 and 0.41 seconds among 100,000. That
   makes HyperCrux a good fit up to around a hundred thousand vectors per
   table. Millions of vectors want an approximate index, which HyperCrux
   doesn't have.
 - **Short walks.** Walks go up to 32 links deep and visit every record they
-  reach. On a graph of 100,000 records with five links each, a walk took 64 microseconds one link out and 0.57 milliseconds three links out, where it reached 155 records on average. Deep searches across large, dense graphs belong in a
+  reach. On a graph of 100,000 records with five
+  links each, a walk took 43 microseconds one link out and 0.51 milliseconds
+  three links out, where it reached 155 records on average. Deep searches across large, dense graphs belong in a
   graph database.
 - **One machine per file.** Many processes on one machine can share the
   file. SQLite's locking doesn't work over network file systems, so keep the
   file on a local disk.
-- **Small.** Each put or link on its own is a transaction flushed to disk, which took about 0.4 milliseconds on a two-core cloud machine. Putting 1,000 records with 384-value vectors in one transaction took about 68 microseconds a record, close to 15,000 a second. The disk sets the pace of single writes more
+- **Small.** Each put or link on its own is a transaction flushed to disk,
+  which took about 0.35 milliseconds on a two-core cloud machine. Putting
+  1,000 records with 384-value vectors in one transaction took about 51
+  microseconds a record, close to 20,000 a second. The disk sets the pace of single writes more
   than anything else.
 
 ## How it was tested
@@ -256,7 +280,7 @@ harder cases. The results are recorded in [test/results](test/results):
   record with fields and a vector, linked it to the record before and to an
   anchor, deleted an old record every seventh time and moved a counter. After
   every kill, the file matched the last committed transaction exactly. That
-  was 23,789 transactions in all, ending with 20,393 records and 37,390 links:
+  was 30,306 transactions in all, ending with 25,979 records and 47,631 links:
   no torn record, no link to a missing record, Check and SQLite's integrity
   check passing every time, and searches and walks finding what they should.
 - **Processes sharing a file.** Four processes wrote 300 transactions each to
@@ -272,24 +296,31 @@ harder cases. The results are recorded in [test/results](test/results):
   over 20 queries, with and without a filter. Python, reading the raw vectors
   and comparing them itself, found the same closest records, with distances
   equal to within a billionth.
-- **Plain SQL can't break the rules.** Thirteen statements that would leave
+- **Plain SQL that breaks a rule is refused.** Thirteen statements that would leave
   the file inconsistent, from changing a key to storing a vector of zeros,
   were all refused.
-- **The race detector** found nothing across the whole suite.
+- **Problems found in review.** An independent review before the first
+  release found ways to get the handles out of step: tables named like
+  HyperCrux's own bookkeeping, REPLACE on a second unique column, schema
+  changes from another program or rolled back, vectors holding NaN written
+  with plain SQL, and transactions on a single connection. Each is fixed and
+  has a test of its own.
+- **The race detector** found nothing, running the suite in short mode (20
+  kills instead of 200).
 
 The speed of each operation, the middle of three runs on a two-core cloud
 machine:
 
 | Operation | Time |
 |---|---|
-| Put one record, committed and flushed to disk | 0.40 ms |
-| Put records with 384-value vectors, 1,000 per transaction | 68 µs a record |
-| Get a record by key | 21 µs |
-| Link two records, committed and flushed | 0.38 ms |
-| Walk 1, 2 and 3 links out, among 100,000 records with 5 links each | 64 µs, 0.16 ms, 0.57 ms |
-| Nearest 10 among 1,000, 10,000 and 100,000 vectors of 384 values | 5 ms, 48 ms, 0.46 s |
-| Nearest 10 among 100,000, filtered to a tenth by an unindexed field | 0.14 s |
-| Nearest 10 among 10,000 vectors of 1,536 values | 0.13 s |
+| Put one record, committed and flushed to disk | 0.35 ms |
+| Put records with 384-value vectors, 1,000 per transaction | 51 µs a record |
+| Get a record by key | 18 µs |
+| Link two records, committed and flushed | 0.33 ms |
+| Walk 1, 2 and 3 links out, among 100,000 records with 5 links each | 43 µs, 0.12 ms, 0.51 ms |
+| Nearest 10 among 1,000, 10,000 and 100,000 vectors of 384 values | 4.4 ms, 42 ms, 0.41 s |
+| Nearest 10 among 100,000, filtered to a tenth by an unindexed field | 0.13 s |
+| Nearest 10 among 10,000 vectors of 1,536 values | 0.12 s |
 
 A filter on an unindexed field still reads every row to test it. An index on
 the field, made with plain SQL, lets SQLite skip the rows that don't match.

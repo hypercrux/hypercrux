@@ -51,66 +51,17 @@ type DB struct {
 	mu     sync.Mutex
 	schema int64                 // schema_version the cache was read at
 	tables map[string]*tableInfo // record tables by name
-
-	stmtMu sync.Mutex
-	stmts  map[string]*sql.Stmt // prepared statements by SQL text
-}
-
-// maxStmts caps the statement cache. Past it, statements are prepared each
-// time they run.
-const maxStmts = 512
-
-// cached returns a prepared statement for q, preparing it the first time,
-// or nil when it can't be prepared yet (a table that doesn't exist) or the
-// cache is full. SQLite re-prepares a statement by itself when the schema
-// changes.
-func (db *DB) cached(q string) *sql.Stmt {
-	db.stmtMu.Lock()
-	s, ok := db.stmts[q]
-	full := len(db.stmts) >= maxStmts
-	db.stmtMu.Unlock()
-	if ok {
-		return s
-	}
-	if full {
-		return nil
-	}
-	s, err := db.sql.Prepare(q)
-	if err != nil {
-		return nil
-	}
-	db.stmtMu.Lock()
-	defer db.stmtMu.Unlock()
-	if have, ok := db.stmts[q]; ok {
-		s.Close()
-		return have
-	}
-	if db.stmts == nil {
-		db.stmts = map[string]*sql.Stmt{}
-	}
-	db.stmts[q] = s
-	return s
 }
 
 // runner runs statements on the database, or in a transaction when tx is
-// set, through the statement cache.
+// set. Each connection keeps its own cache of prepared statements, which
+// go-sqlite3 manages and refreshes when the schema changes.
 type runner struct {
 	db *DB
 	tx *sql.Tx
 }
 
-func (r runner) stmt(q string) *sql.Stmt {
-	s := r.db.cached(q)
-	if s != nil && r.tx != nil {
-		return r.tx.Stmt(s)
-	}
-	return s
-}
-
 func (r runner) Exec(q string, args ...any) (sql.Result, error) {
-	if s := r.stmt(q); s != nil {
-		return s.Exec(args...)
-	}
 	if r.tx != nil {
 		return r.tx.Exec(q, args...)
 	}
@@ -118,9 +69,6 @@ func (r runner) Exec(q string, args ...any) (sql.Result, error) {
 }
 
 func (r runner) Query(q string, args ...any) (*sql.Rows, error) {
-	if s := r.stmt(q); s != nil {
-		return s.Query(args...)
-	}
 	if r.tx != nil {
 		return r.tx.Query(q, args...)
 	}
@@ -128,9 +76,6 @@ func (r runner) Query(q string, args ...any) (*sql.Rows, error) {
 }
 
 func (r runner) QueryRow(q string, args ...any) *sql.Row {
-	if s := r.stmt(q); s != nil {
-		return s.QueryRow(args...)
-	}
 	if r.tx != nil {
 		return r.tx.QueryRow(q, args...)
 	}
@@ -148,11 +93,18 @@ func Open(path string) (*DB, error) {
 	if path == "" || strings.ContainsAny(path, "?#") {
 		return nil, fmt.Errorf("%w: file name %q", ErrInvalid, path)
 	}
+	if path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return nil, fmt.Errorf("%w: %s: HyperCrux needs a file name; for a throwaway database, use a file in a temporary folder", ErrInvalid, path)
+	}
 	// Every connection waits up to 10 seconds for a lock, starts write
 	// transactions with BEGIN IMMEDIATE, and uses WAL so readers carry on
 	// while a writer commits. synchronous stays at SQLite's default, FULL,
-	// so a committed write survives a crash or a power cut.
-	dsn := path + "?_busy_timeout=10000&_txlock=immediate&_journal_mode=WAL&_synchronous=FULL"
+	// so a committed write survives a crash or a power cut. Recursive
+	// triggers are on so that a row removed by REPLACE fires its delete
+	// trigger like any other deleted row. Each connection keeps up to 128
+	// prepared statements.
+	dsn := path + "?_busy_timeout=10000&_txlock=immediate&_journal_mode=WAL&_synchronous=FULL" +
+		"&_recursive_triggers=1&_stmt_cache_size=128"
 	s, err := sql.Open(DriverName, dsn)
 	if err != nil {
 		return nil, err
@@ -168,15 +120,7 @@ func Open(path string) (*DB, error) {
 }
 
 // Close closes the file.
-func (db *DB) Close() error {
-	db.stmtMu.Lock()
-	for _, s := range db.stmts {
-		s.Close()
-	}
-	db.stmts = nil
-	db.stmtMu.Unlock()
-	return db.sql.Close()
-}
+func (db *DB) Close() error { return db.sql.Close() }
 
 // Path returns the file name the database was opened with.
 func (db *DB) Path() string { return db.path }
@@ -192,12 +136,16 @@ func (db *DB) SQL() *sql.DB { return db.sql }
 type Tx struct {
 	db  *DB
 	tx  *sql.Tx
-	ddl bool // the transaction changed the schema
+	ddl bool // the transaction may have changed the schema
 }
 
 // Update runs fn in one write transaction. If fn returns an error or
 // panics, nothing it did is kept. Otherwise the transaction commits, and
 // every key, field, link and vector it changed changes together.
+//
+// Inside fn, use tx and not db. The methods of db run outside the
+// transaction: they don't see its changes, and a write through db waits
+// for the transaction to finish and fails after 10 seconds.
 func (db *DB) Update(fn func(tx *Tx) error) error {
 	stx, err := db.sql.Begin()
 	if err != nil {
@@ -208,8 +156,8 @@ func (db *DB) Update(fn func(tx *Tx) error) error {
 	defer func() {
 		if !committed {
 			stx.Rollback()
-		}
-		if t.ddl {
+			db.forget() // whatever the transaction saw of the schema is gone
+		} else if t.ddl {
 			db.forget()
 		}
 	}()
@@ -284,6 +232,12 @@ func checkFormat(v string) error {
 
 func isNoSuchTable(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no such table")
+}
+
+// isMissing reports an error from querying a table that isn't there, or
+// that has no key column, which for a key lookup means "not found".
+func isMissing(err error) bool {
+	return isNoSuchTable(err) || (err != nil && strings.Contains(err.Error(), "no such column"))
 }
 
 // quote returns name as an SQL identifier. HyperCrux checks its own names

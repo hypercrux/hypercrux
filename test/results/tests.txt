@@ -1,38 +1,38 @@
 # Every test, verbose
-# recorded 2026-10-06 18:02 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
+# recorded 2026-10-06 23:39 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
 # Linux 6.18.44-fc-v70, Intel(R) Xeon(R) Processor @ 2.80GHz, 2 CPUs
 # command: go test -count=1 -v ./...
 
 === RUN   TestOpenSetsUpTheFile
---- PASS: TestOpenSetsUpTheFile (0.01s)
+--- PASS: TestOpenSetsUpTheFile (0.02s)
 === RUN   TestOpenRefusesANewerFormat
 --- PASS: TestOpenRefusesANewerFormat (0.01s)
 === RUN   TestOpenAddsTablesToAnExistingDatabase
---- PASS: TestOpenAddsTablesToAnExistingDatabase (0.02s)
+--- PASS: TestOpenAddsTablesToAnExistingDatabase (0.03s)
 === RUN   TestPutAndGetRoundTrip
---- PASS: TestPutAndGetRoundTrip (0.02s)
+--- PASS: TestPutAndGetRoundTrip (0.03s)
 === RUN   TestPutKeepsFieldsItIsNotGiven
 --- PASS: TestPutKeepsFieldsItIsNotGiven (0.02s)
 === RUN   TestKeyAndFieldRules
---- PASS: TestKeyAndFieldRules (0.02s)
+--- PASS: TestKeyAndFieldRules (0.01s)
 === RUN   TestGetAndDeleteMissing
 --- PASS: TestGetAndDeleteMissing (0.01s)
 === RUN   TestScan
---- PASS: TestScan (0.02s)
+--- PASS: TestScan (0.01s)
 === RUN   TestPrefixEnd
 --- PASS: TestPrefixEnd (0.00s)
 === RUN   TestLinksFollowTheirRecords
---- PASS: TestLinksFollowTheirRecords (0.03s)
+--- PASS: TestLinksFollowTheirRecords (0.02s)
 === RUN   TestWalk
---- PASS: TestWalk (0.04s)
+--- PASS: TestWalk (0.01s)
 === RUN   TestWalkInSQL
---- PASS: TestWalkInSQL (0.03s)
+--- PASS: TestWalkInSQL (0.01s)
 === RUN   TestVectors
---- PASS: TestVectors (0.03s)
+--- PASS: TestVectors (0.01s)
 === RUN   TestCosine
 --- PASS: TestCosine (0.00s)
 === RUN   TestNearestIsExact
---- PASS: TestNearestIsExact (0.81s)
+--- PASS: TestNearestIsExact (0.33s)
 === RUN   TestOneStatementCrossesAllFour
 --- PASS: TestOneStatementCrossesAllFour (0.02s)
 === RUN   TestPlainSQLFollowsTheRules
@@ -40,31 +40,59 @@
 === RUN   TestUpdateIsAllOrNothing
 --- PASS: TestUpdateIsAllOrNothing (0.02s)
 === RUN   TestAdopt
---- PASS: TestAdopt (0.02s)
+--- PASS: TestAdopt (0.01s)
 === RUN   TestCheckFindsProblems
---- PASS: TestCheckFindsProblems (0.02s)
+--- PASS: TestCheckFindsProblems (0.01s)
 === RUN   TestGoroutinesShareADB
---- PASS: TestGoroutinesShareADB (0.46s)
+--- PASS: TestGoroutinesShareADB (0.41s)
 === RUN   TestKilledWritersNeverLeaveAMess
-    process_test.go:241: 200 SIGKILLs at random moments in 1m2.966s: 23789 transactions committed, each a record with fields and a vector, two links, a counter and every 7th a delete; after every kill the file matched the last committed transaction exactly (20393 records, 37390 links at the end), Check passed, and the vector and link handles agreed; 0 rounds were killed before the writer committed anything
---- PASS: TestKilledWritersNeverLeaveAMess (62.99s)
+    process_test.go:244: 200 SIGKILLs at random moments in 1m7.821s: 30306 transactions committed, each a record with fields and a vector, two links, a counter and every 7th a delete; after every kill the file matched the last committed transaction exactly (25979 records, 47631 links at the end), Check passed, and the vector and link handles agreed; 0 rounds were killed before the writer committed anything
+--- PASS: TestKilledWritersNeverLeaveAMess (67.85s)
 === RUN   TestProcessesShareAFile
-    process_test.go:339: 4 processes wrote 300 transactions each to one file in 1.42s while reading it; every record and link arrived and Check passed
---- PASS: TestProcessesShareAFile (1.46s)
+    process_test.go:351: 4 processes wrote 300 transactions each to one file in 1.371s while reading it; every record and link arrived and Check passed
+--- PASS: TestProcessesShareAFile (1.40s)
 === RUN   TestPythonFollowsTheRules
---- PASS: TestPythonFollowsTheRules (0.35s)
+--- PASS: TestPythonFollowsTheRules (0.29s)
 === RUN   TestPythonAgreesOnNearest
---- PASS: TestPythonAgreesOnNearest (0.45s)
+--- PASS: TestPythonAgreesOnNearest (0.26s)
 === RUN   TestPythonAndGoWriteAtOnce
---- PASS: TestPythonAndGoWriteAtOnce (1.09s)
+--- PASS: TestPythonAndGoWriteAtOnce (0.93s)
+=== RUN   TestTableNamesLikeHyperCruxsOwn
+--- PASS: TestTableNamesLikeHyperCruxsOwn (0.03s)
+=== RUN   TestReplaceOnAnotherUniqueColumn
+--- PASS: TestReplaceOnAnotherUniqueColumn (0.02s)
+=== RUN   TestSchemaChangesShowAtOnce
+--- PASS: TestSchemaChangesShowAtOnce (0.01s)
+=== RUN   TestOneConnection
+--- PASS: TestOneConnection (0.01s)
+=== RUN   TestRolledBackSchemaChange
+--- PASS: TestRolledBackSchemaChange (0.01s)
+=== RUN   TestNonFiniteVectorsStayOutOfSearch
+--- PASS: TestNonFiniteVectorsStayOutOfSearch (0.01s)
+=== RUN   TestDropAndAdoptAfterSchemaChanges
+--- PASS: TestDropAndAdoptAfterSchemaChanges (0.03s)
+=== RUN   TestVectorAsQueryArgument
+--- PASS: TestVectorAsQueryArgument (0.01s)
+=== RUN   TestStrictTables
+--- PASS: TestStrictTables (0.01s)
+=== RUN   TestMoreFieldTypes
+--- PASS: TestMoreFieldTypes (0.01s)
+=== RUN   TestRulesForLongKeysAndLinkTypes
+--- PASS: TestRulesForLongKeysAndLinkTypes (0.01s)
+=== RUN   TestKeysCompareExactly
+--- PASS: TestKeysCompareExactly (0.01s)
+=== RUN   TestOpenNeedsAFile
+--- PASS: TestOpenNeedsAFile (0.00s)
+=== RUN   TestMissingKeyColumnIsNotFound
+--- PASS: TestMissingKeyColumnIsNotFound (0.01s)
 PASS
-ok  	github.com/hypercrux/hypercrux	67.983s
+ok  	github.com/hypercrux/hypercrux	71.947s
 === RUN   TestEveryCommand
---- PASS: TestEveryCommand (0.15s)
+--- PASS: TestEveryCommand (0.24s)
 === RUN   TestOtherSQLiteFilesAreLeftAlone
 --- PASS: TestOtherSQLiteFilesAreLeftAlone (0.02s)
 === RUN   TestCheckReportsProblems
---- PASS: TestCheckReportsProblems (0.04s)
+--- PASS: TestCheckReportsProblems (0.02s)
 PASS
-ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	0.219s
+ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	0.289s
 ?   	github.com/hypercrux/hypercrux/examples/go	[no test files]

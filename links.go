@@ -55,7 +55,7 @@ func ParseDirection(s string) (Direction, error) {
 const MaxDepth = 32
 
 func checkLinkType(typ string) error {
-	if typ == "" || len(typ) > 200 || !utf8.ValidString(typ) {
+	if typ == "" || utf8.RuneCountInString(typ) > 200 || !utf8.ValidString(typ) {
 		return fmt.Errorf("%w: link type %q: use 1 to 200 characters", ErrInvalid, typ)
 	}
 	return nil

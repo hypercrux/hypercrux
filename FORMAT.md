@@ -38,7 +38,8 @@ other programs should do the same.
   locking doesn't work over network file systems, so keep the file on a local
   disk.
 - **SQLite 3.24 or later** for writers, which need upserts
-  (`INSERT ... ON CONFLICT ... DO UPDATE`). Any SQLite 3 can read the file.
+  (`INSERT ... ON CONFLICT ... DO UPDATE`). Readers need 3.8.2 or later,
+  for the `WITHOUT ROWID` tables.
 
 ## Records
 
@@ -57,10 +58,11 @@ A record is a row in a **record table**.
   uses a new field name.
 - **The vector**, if a record has one, is in a column called `vec`: a blob of
   float32 values, little-endian, four bytes each. Every vector in a table has
-  the same number of values, set by the first vector stored, and a vector
-  can't be all zeros. NaN and infinite values aren't allowed either; the
-  triggers can't see those, so writers have to keep them out, and
-  `hypercrux check` reports any that get in.
+  the same number of values, set by the first vector stored, up to 65,536,
+  and a vector can't be all zeros. NaN and infinite values aren't allowed
+  either. The triggers can't see those inside a blob, so writers have to
+  keep them out; searches skip any that get in, `distance()` refuses them,
+  and `hypercrux check` reports them.
 - **Links** join two records, one way, with a type such as `owns` or `cites`.
 
 A table becomes a record table when HyperCrux creates it on a first put, or
@@ -109,25 +111,34 @@ Each record table `T` has:
 
 | Trigger | Rule |
 |---|---|
-| `hc_T_insert` | A new row's key is text that starts with `T:` and has something after the colon. The key goes into `hc_keys` |
-| `hc_T_delete` | A deleted row's key leaves `hc_keys`, which takes its links with it |
-| `hc_T_key` | A key never changes. Delete the record and insert it again |
-| `hc_T_vec_insert`, `hc_T_vec_update` | Only with a `vec` column. A vector is a non-empty blob of whole float32 values, not all zero, the size in `hc_tables.dims`. The first vector sets that size |
+| `hc.T.insert` | A new row's key is text that starts with `T:`, has something after the colon, and is at most 1,024 bytes. The key goes into `hc_keys` |
+| `hc.T.delete` | A deleted row's key leaves `hc_keys`, which takes its links with it |
+| `hc.T.key` | A key never changes, compared byte for byte. Delete the record and insert it again |
+| `hc.T.vec_insert`, `hc.T.vec_update` | Only with a `vec` column. A vector is a non-empty blob of whole float32 values, at most 65,536 of them, not all zero, the size in `hc_tables.dims`. The first vector sets that size |
+
+The names have dots in them, which table names can't, so no two tables'
+triggers can share a name, whatever the tables are called.
 
 The full SQL is in [schema.go](schema.go). A statement that breaks a rule
 fails with a message that starts with `hypercrux:`, and nothing it did is
 kept.
 
-One SQLite quirk to know: `INSERT OR REPLACE` replaces a row by deleting it
-first. With `PRAGMA recursive_triggers` on, that delete fires the record's
-delete trigger and its links go. Use an upsert instead to update a record
-and keep its links.
+One SQLite rule matters here. When `REPLACE` removes a row to make room,
+whether from `INSERT OR REPLACE`, `UPDATE OR REPLACE` or a column declared
+`UNIQUE ON CONFLICT REPLACE`, the row's delete trigger fires only if
+`PRAGMA recursive_triggers` is on. HyperCrux turns it on for every
+connection it opens, and other programs that write the file must turn it on
+too. Otherwise a replaced row's key and links are left behind. It also
+means `INSERT OR REPLACE` on a record's own key deletes the record and its
+links before inserting it again. Use an upsert to update a record and keep
+its links.
 
 ## Writing from another language
 
 Each of these is a transaction. Start it with `BEGIN IMMEDIATE`, which takes
-the write lock before reading, and set `PRAGMA busy_timeout` so a writer waits
-for another instead of failing straight away.
+the write lock before reading. On each connection, set
+`PRAGMA recursive_triggers = ON` (see above) and `PRAGMA busy_timeout`, so a
+writer waits for another instead of failing straight away.
 
 **Put a record** with an upsert, naming only the fields you're setting:
 
@@ -149,6 +160,27 @@ INSERT OR IGNORE INTO hc_links (src, type, dst) VALUES ('customer:42', 'owns', '
 
 **Unlink** with a `DELETE` from `hc_links`. **Delete a record** with a plain
 `DELETE` from its table, and its links go with it.
+
+## Changing a record table's schema
+
+Inserts, updates and deletes from any program keep keys, rows, links and
+vectors in step, because they run the triggers. Schema changes don't:
+
+- **Adding a column** is fine. After adding a `vec` column, run
+  `hypercrux adopt FILE TABLE` so the vector triggers go in.
+- **Dropping a record table** with `DROP TABLE` leaves its keys, its links
+  and its row in `hc_tables` behind. Use `hypercrux drop FILE TABLE`
+  instead, which deletes the records first, or run it after the fact to
+  clear what's left.
+- **Rebuilding a table**, the usual way to change a column's type
+  (create a new table, copy the rows, drop the old one, rename the new
+  one), loses the triggers. Run `hypercrux adopt FILE TABLE` afterwards: it
+  reinstalls them, forgets keys whose rows went, and sets the vector size
+  from the vectors in the table.
+- **Renaming a record table** isn't supported, because its keys carry the
+  old name.
+
+`hypercrux check FILE` reports anything out of step.
 
 ## Reading from another language
 
@@ -179,7 +211,7 @@ same things as above.
 
 | Function | Returns |
 |---|---|
-| `distance(a, b)` | The cosine distance between two vectors, from 0 to 2. Each can be a stored blob or a JSON array such as `'[0.1, 0.8]'`. NULL if either is NULL |
+| `distance(a, b)` | The cosine distance between two vectors, from 0 to 2. Each can be a stored blob or a JSON array such as `'[0.1, 0.8]'`. NULL if either is NULL, and an error if either holds NaN or infinity |
 | `vector(json)` | A JSON array of numbers as a stored vector blob |
 | `walk(key, depth [, type [, direction]])` | The keys within `depth` links of `key`, nearest first, as a JSON array. `type` limits the links followed, NULL for any. `direction` is `out` (the default), `in` or `both` |
 
@@ -190,7 +222,10 @@ statement cross keys, fields, links and vectors:
 SELECT d.key, d.title
 FROM json_each(walk('customer:42', 2)) w
 JOIN docs d ON d.key = w.value
-WHERE d.status = 'open'
+WHERE d.status = 'open' AND d.vec IS NOT NULL
 ORDER BY distance(d.vec, '[1, 0, 0]')
 LIMIT 10;
 ```
+
+`d.vec IS NOT NULL` leaves out records without a vector. Their distance is
+NULL, and SQLite sorts NULL first.
