@@ -1,0 +1,8 @@
+# Every test with the race detector (short mode: 20 kills instead of 200)
+# recorded 2026-10-06 18:03 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
+# Linux 6.18.44-fc-v70, Intel(R) Xeon(R) Processor @ 2.80GHz, 2 CPUs
+# command: go test -race -count=1 -short ./...
+
+ok  	github.com/hypercrux/hypercrux	12.553s
+ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	1.334s
+?   	github.com/hypercrux/hypercrux/examples/go	[no test files]

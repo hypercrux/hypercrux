@@ -1,0 +1,50 @@
+# Benchmarks, three runs each. Put and Link are one committed transaction each, with synchronous = FULL. Nearest compares every vector (exact search) and returns the closest 10
+# recorded 2026-10-06 18:05 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
+# Linux 6.18.44-fc-v70, Intel(R) Xeon(R) Processor @ 2.80GHz, 2 CPUs
+# command: go test -run ^$ -bench . -benchtime 3s -count 3 .
+
+goos: linux
+goarch: amd64
+pkg: github.com/hypercrux/hypercrux
+cpu: Intel(R) Xeon(R) Processor @ 2.80GHz
+BenchmarkNearest_1k_384dims-2                   	     673	   5388149 ns/op
+BenchmarkNearest_1k_384dims-2                   	     664	   4651361 ns/op
+BenchmarkNearest_1k_384dims-2                   	     739	   4984117 ns/op
+BenchmarkNearest_10k_384dims-2                  	      76	  49939618 ns/op
+BenchmarkNearest_10k_384dims-2                  	      86	  45458476 ns/op
+BenchmarkNearest_10k_384dims-2                  	      79	  48154721 ns/op
+BenchmarkNearest_100k_384dims-2                 	       8	 391052364 ns/op
+BenchmarkNearest_100k_384dims-2                 	       7	 464479354 ns/op
+BenchmarkNearest_100k_384dims-2                 	       8	 486945983 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered-2   	      24	 139897840 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered-2   	      27	 138456320 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered-2   	      25	 137938156 ns/op
+BenchmarkNearest_10k_1536dims-2                 	      26	 127407819 ns/op
+BenchmarkNearest_10k_1536dims-2                 	      22	 138853831 ns/op
+BenchmarkNearest_10k_1536dims-2                 	      31	 126750823 ns/op
+BenchmarkWalk_100k_depth1-2                     	   58581	     63185 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1-2                     	   66576	     63818 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1-2                     	   59805	     64232 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth2-2                     	   23292	    159671 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2-2                     	   26024	    162174 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2-2                     	   24852	    140519 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth3-2                     	    7029	    566055 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3-2                     	    6206	    620525 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3-2                     	    6691	    561892 ns/op	       154.9 records/walk
+BenchmarkPut-2                                  	    9405	    397123 ns/op
+BenchmarkPut-2                                  	    9079	    378828 ns/op
+BenchmarkPut-2                                  	    8864	    447107 ns/op
+BenchmarkPut_384dims-2                          	    7863	    471511 ns/op
+BenchmarkPut_384dims-2                          	    8026	    450006 ns/op
+BenchmarkPut_384dims-2                          	    9526	    438266 ns/op
+BenchmarkPutBatch_384dims-2                     	   51966	     81084 ns/op
+BenchmarkPutBatch_384dims-2                     	   50450	     66798 ns/op
+BenchmarkPutBatch_384dims-2                     	   45639	     67793 ns/op
+BenchmarkGet-2                                  	  168716	     19664 ns/op
+BenchmarkGet-2                                  	  198421	     20554 ns/op
+BenchmarkGet-2                                  	  166780	     20965 ns/op
+BenchmarkLink-2                                 	   10443	    377519 ns/op
+BenchmarkLink-2                                 	    8044	    400244 ns/op
+BenchmarkLink-2                                 	    9858	    366017 ns/op
+PASS
+ok  	github.com/hypercrux/hypercrux	241.415s

@@ -1,0 +1,18 @@
+# Build output
+/hypercrux
+/hypercrux.exe
+/dist/
+
+# Files the examples and a quick try create
+*.db
+*.db-shm
+*.db-wal
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Python bytecode
+__pycache__/

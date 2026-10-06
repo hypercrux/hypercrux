@@ -1,0 +1,182 @@
+name: release
+
+# Builds the hypercrux binaries when a GitHub release is published, checks each
+# one, and attaches them to the release. It can also be run by hand for an
+# existing release tag.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build, such as v0.1.0"
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  linux:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq musl-tools
+      - name: Build a static binary
+        env:
+          CC: musl-gcc
+          CGO_ENABLED: "1"
+        run: >
+          go build -trimpath -tags 'sqlite_omit_load_extension netgo osusergo'
+          -ldflags '-s -w -linkmode external -extldflags "-static"' -o hypercrux ./cmd/hypercrux
+      - run: file hypercrux && sh scripts/smoke.sh ./hypercrux
+      - name: Package
+        run: |
+          mkdir pkg && cp hypercrux LICENSE NOTICE THIRD_PARTY_LICENSES.md README.md pkg/
+          tar -czf hypercrux_linux_${{ matrix.arch }}.tar.gz -C pkg .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hypercrux_linux_${{ matrix.arch }}
+          path: hypercrux_linux_${{ matrix.arch }}.tar.gz
+
+  macos:
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            clang: arm64
+          - arch: amd64
+            clang: x86_64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+          GOARCH: ${{ matrix.arch }}
+          CC: clang -arch ${{ matrix.clang }}
+        run: go build -trimpath -tags sqlite_omit_load_extension -ldflags '-s -w' -o hypercrux ./cmd/hypercrux
+      - run: file hypercrux
+      - if: matrix.arch == 'arm64'
+        run: sh scripts/smoke.sh ./hypercrux
+      - name: Package
+        run: |
+          mkdir pkg && cp hypercrux LICENSE NOTICE THIRD_PARTY_LICENSES.md README.md pkg/
+          tar -czf hypercrux_darwin_${{ matrix.arch }}.tar.gz -C pkg .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hypercrux_darwin_${{ matrix.arch }}
+          path: hypercrux_darwin_${{ matrix.arch }}.tar.gz
+
+  windows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq gcc-mingw-w64-x86-64 zip
+      - name: Build
+        env:
+          CC: x86_64-w64-mingw32-gcc
+          CGO_ENABLED: "1"
+          GOOS: windows
+          GOARCH: amd64
+        run: go build -trimpath -tags sqlite_omit_load_extension -ldflags '-s -w' -o hypercrux.exe ./cmd/hypercrux
+      - name: Package
+        run: |
+          file hypercrux.exe
+          mkdir pkg && cp hypercrux.exe LICENSE NOTICE THIRD_PARTY_LICENSES.md README.md pkg/
+          (cd pkg && zip -q ../hypercrux_windows_amd64.zip *)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hypercrux_windows_amd64
+          path: hypercrux_windows_amd64.zip
+
+  windows-check:
+    needs: windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: hypercrux_windows_amd64
+      - name: Run the Windows binary
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          Expand-Archive hypercrux_windows_amd64.zip -DestinationPath bin
+          $hc = Resolve-Path bin\hypercrux.exe
+          & $hc version
+          '{"name": "Dana"}' | & $hc put check.db customer:42
+          '{"title": "one", "vec": [1, 0]}' | & $hc put check.db docs:1
+          '{"title": "two", "vec": [0, 1]}' | & $hc put check.db docs:2
+          & $hc link check.db customer:42 owns docs:1
+          $near = & $hc nearest check.db docs '[1,0]' -k 1
+          if ("$near" -notmatch 'docs:1') { throw "nearest gave $near" }
+          $walk = & $hc walk check.db customer:42 1
+          if ("$walk" -notmatch 'docs:1') { throw "walk gave $walk" }
+          & $hc delete check.db docs:1
+          & $hc check check.db
+          Write-Output "windows check passed"
+
+  release:
+    needs: [linux, macos, windows, windows-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach the binaries to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            hypercrux_linux_amd64.tar.gz hypercrux_linux_arm64.tar.gz hypercrux_darwin_arm64.tar.gz hypercrux_darwin_amd64.tar.gz hypercrux_windows_amd64.zip SHA256SUMS
+      - name: Describe the binaries if the release has no notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          if [ -n "$body" ]; then exit 0; fi
+          cat > notes.md <<'EOF'
+          Ready-built hypercrux binaries. Each archive holds the `hypercrux` command with its license files.
+
+          | System | File |
+          |---|---|
+          | Linux, x86-64 (static) | hypercrux_linux_amd64.tar.gz |
+          | Linux, ARM64 (static) | hypercrux_linux_arm64.tar.gz |
+          | macOS, Apple silicon | hypercrux_darwin_arm64.tar.gz |
+          | macOS, Intel | hypercrux_darwin_amd64.tar.gz |
+          | Windows, x86-64 | hypercrux_windows_amd64.zip |
+
+          SHA256SUMS lists the checksums. The macOS binaries aren't signed by Apple, so macOS may ask you to allow them the first time, or you can run `xattr -d com.apple.quarantine hypercrux`.
+          EOF
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
