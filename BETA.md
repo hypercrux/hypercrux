@@ -440,7 +440,8 @@ them directly, and SQL is parsed onto them. The Beta's SQL:
   joined to a table on the key, or inside `IN (...)` or `NOT IN (...)`, with
   the 0.x forms `json_each(walk(...))` and `IN` or
   `NOT IN (SELECT value FROM json_each(walk(...)))` accepted unchanged, so
-  the crux query and 0.x's filters on walks run as they do today;
+  the crux query and 0.x's filters on walks run as they do today, and
+  `walk(...)` as a function giving JSON text, as in 0.x;
 - a subquery that reads one field of one record by its key, such as
   `(SELECT vec FROM photo WHERE key = ?)`, so a search can start from a
   stored vector;
@@ -449,7 +450,8 @@ them directly, and SQL is parsed onto them. The Beta's SQL:
   `vec IS NOT NULL` keeps its meaning; with that condition and a `LIMIT`,
   the planner uses a nearest search;
 - `IN` and `NOT IN` lists, `BETWEEN`, `LIKE`, `IS NULL` and the text and
-  number functions on a list fixed in task P5;
+  number functions listed in [beta/SQL.md](beta/SQL.md), which sets out the
+  whole subset;
 - `date` and `datetime` on `'now'`, plus or minus days, months and years,
   giving SQLite's results, month ends included;
 - `INSERT`, `UPDATE` and `DELETE` on one table, which go through the same
@@ -608,11 +610,12 @@ How the work is run:
 ### The owner's part
 
 - The go-ahead, given on 7 October 2026.
-- After each task, the word to carry on. The work runs one task at a time
-  and stops after each, so the owner sees every step and controls what it
-  costs. The note at each stop also says so if the file tasks are running
-  past one and a half times their hours, or if the first working version
-  misses a speed target by more than double.
+- After each round of tasks, the word to carry on. A round is two or three
+  tasks at once, each with an agent of its own, and the work stops after
+  each round, so the owner sees every step and controls what it costs. The
+  note at each stop also says so if the file tasks are running past one and
+  a half times their hours, or if the first working version misses a speed
+  target by more than double.
 
 Everything else is automatic, releases included. When the tests pass on main
 with a version that has no release yet, the release workflow builds and
@@ -645,10 +648,10 @@ weeks of calendar time with a working session most days. Work split between
 agents costs 10 to 20 per cent more effort in merging and integration, which
 the two- and three-agent figures include. That schedule does the first
 working version's tasks first, which doesn't delay the finish, and runs the
-five early tasks alongside the spec. The owner chose instead to approve each
-task before the next one starts, so the work runs one task at a time, in the
-order on the task board: the same 133 hours, with the calendar set by the
-approvals.
+five early tasks alongside the spec. The owner chose at first to approve
+each task before the next one started, and later the same day approved more
+agents, so the work runs in rounds of two or three tasks at once, in the
+order on the task board, with the calendar set by the approvals.
 
 HyperCrux is developed in working sessions by Claude, an AI coding agent
 made by Anthropic. The project's owner gives the go-ahead, and releases
@@ -757,8 +760,11 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 
 ## Decisions
 
-- The go-ahead came on 7 October 2026. The work runs one task at a time, and
-  after each task it stops until the owner says to carry on.
+- The go-ahead came on 7 October 2026. The work ran one task at a time at
+  first, stopping after each until the owner said to carry on. After P2 the
+  owner approved more agents, and since then it runs in rounds of two or
+  three tasks at once, each in a git worktree of its own, and stops after
+  each round.
 - The Beta lives in a `beta/` folder in this repository, beside 0.x, which
   stays as it is. A branch wouldn't do, because the tests run 0.x and the
   Beta side by side in one binary.
@@ -774,3 +780,9 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 - The file format is version 1, set out byte by byte in
   [beta/FORMAT.md](beta/FORMAT.md) in task P2, and checked against this plan
   by a review agent.
+- The Beta's Go package is `beta/hypercrux`, package `hypercrux`, beside
+  0.x's until the release, so a program moves across by changing its import
+  path (P3).
+- The SQL subset is set out in [beta/SQL.md](beta/SQL.md) (P5). It keeps
+  0.x's function form of `walk()`, and the walk as a table has the columns
+  `key` and `depth`.

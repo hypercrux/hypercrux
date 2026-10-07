@@ -1,9 +1,13 @@
 # Task board
 
-The Beta is built one task at a time, in the order below. After each task
-the work stops. The code, its closing test and a note for the next session
-go into the repository, and the owner says whether to carry on. That gives
-the owner a say over each step and over what the work costs.
+The Beta is built in rounds, in the order below. A round is two or three
+tasks at once, each done by an agent of its own in its own git worktree,
+and a coordinating session reviews and merges them. After each round the
+work stops. The code, each task's closing test and record, and briefs for
+the next round go into the repository, and the owner says whether to carry
+on. That gives the owner a say over each step and over what the work costs.
+The first seven tasks ran one at a time, before the owner approved more
+agents.
 
 The tasks and their closing tests are the table in [BETA.md](../../BETA.md),
 under "The work, task by task". Each task gets a file here: a brief before it
@@ -11,13 +15,19 @@ starts, and a record of what was done when it's finished.
 
 ## How to pick up the work
 
-1. Read the next task's file here, and its row in BETA.md's task table.
-2. Read the files of the tasks it needs, for the decisions they made.
-3. Do the task until its closing test passes. Run `go vet ./...` and
-   `go test ./beta/...`, plus `go test -short ./...` for 0.x.
-4. Write the task's record, write a brief for the task after it, and update
-   the table below. Commit and push, then stop and ask the owner before the
-   next task.
+1. The next round is the tasks marked "next" below: two or three whose
+   needs are done, taken in the table's order.
+2. Each task's agent reads the task's file here, its row in BETA.md's task
+   table, and the files of the tasks it needs, for the decisions they made.
+   It works in a worktree of its own, on a branch, until the closing test
+   passes, with `go vet ./...`, the tests of what it touched, and
+   `go test -short ./...`. It writes the task's record over the brief and
+   commits on its branch. Shared files are the coordinator's: this board,
+   BETA.md, CI, `scripts/` and other tasks' files.
+3. The coordinator reviews each branch and merges it into main, runs
+   `sh scripts/check-beta.sh`, `go vet ./...` and `go test -short ./...`,
+   updates the shared files, and writes briefs for the next round. Then it
+   pushes, checks CI, and stops to ask the owner.
 
 ## Order and status
 
@@ -35,11 +45,11 @@ work in, and all 133 hours are done after R4.
 | 5 | A5 The search loop | 2 | done, [A5.md](A5.md) |
 | 6 | P1 The `beta/` folder, build and CI, the task board | 2 | done, [P1.md](P1.md) |
 | 7 | P2 File format | 3 | done, [P2.md](P2.md) |
-| 8 | P3 Internal interfaces | 2 | next, [P3.md](P3.md) |
-| 9 | P4 Package skeleton | 2 | |
-| 10 | P5 SQL subset spec | 2 | |
-| 11 | S1 Records, fields and rules | 3 | |
-| 12 | F1 Codec | 2 | |
+| 8 | P3 Internal interfaces | 2 | done, [P3.md](P3.md) |
+| 9 | P4 Package skeleton | 2 | next, [P4.md](P4.md) |
+| 10 | P5 SQL subset spec | 2 | done, [P5.md](P5.md), with P3 |
+| 11 | S1 Records, fields and rules | 3 | next, [S1.md](S1.md) |
+| 12 | F1 Codec | 2 | next, [F1.md](F1.md) |
 | 13 | F2 Log and write lock | 3 | |
 | 14 | S2 Transactions | 3 | |
 | 15 | S3 Change lists | 2 | |
@@ -78,7 +88,7 @@ work in, and all 133 hours are done after R4.
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
 
-Hours done so far: 21 of 133. The five early tasks, P1 and P2 are done.
+Hours done so far: 25 of 133. The five early tasks, P1, P2, P3 and P5 are done. The next round is P4, S1 and F1.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.
