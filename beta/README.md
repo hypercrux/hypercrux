@@ -24,6 +24,12 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   where it replays as a test. For now it runs 0.x against itself, and
   against copies of 0.x with one thing each done wrong, which it has to
   catch.
+- `sqlcorpus/`: SQL with 0.x's answers, in `sqlcorpus/testdata` as JSON
+  lines: statements inside and outside the Beta's subset, 3,000 generated
+  expressions and 600 date cases. They run on a small fixed database that
+  any engine can build. The answers are recorded through 0.x with
+  `HYPERCRUX_CORPUS_RECORD=1 go test -run TestRecord ./beta/sqlcorpus`,
+  and replayed by the package's tests.
 
 ## Running the tests
 

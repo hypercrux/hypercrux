@@ -36,9 +36,10 @@ type result struct {
 	Note string
 }
 
-// kind names an error by what a caller can test: one of the two sentinel
-// errors, the rollback, or anything else.
-func kind(e c.Engine, err error) string {
+// Kind names an error by what a caller can test: "ok" for no error, "not
+// found" and "invalid" for the engine's two sentinel errors, "rolled back"
+// for the harness's own rollback, and "error" for anything else.
+func Kind(e c.Engine, err error) string {
 	switch {
 	case err == nil:
 		return "ok"
@@ -53,7 +54,7 @@ func kind(e c.Engine, err error) string {
 }
 
 func outcome(e c.Engine, err error, text string) result {
-	r := result{Text: kind(e, err)}
+	r := result{Text: Kind(e, err)}
 	if err != nil {
 		r.Note = err.Error()
 	} else if text != "" {
