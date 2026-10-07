@@ -1,0 +1,43 @@
+# A batch with several changes, as an ordinary first commit writes them.
+# It's the first batch of file-new.hex: the table docs created with no
+# fields, two puts that add title and vec, and a link.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 42                                       # batch: magic number "HCRB"
+01 00 00 00 00 00 00 00                           # generation: 1
+90 00 00 00 00 00 00 00                           # length: 144 bytes
+01 00 00 00 00 00 00 00                           # sequence number: 1
+54                                                # T: create a table
+04 00                                             # table name: 4 bytes
+64 6f 63 73                                       # docs
+00 00 00 00                                       # vector size: 0, none yet
+00 00                                             # fields: 0
+50                                                # P: put fields
+06 00                                             # key: 6 bytes
+64 6f 63 73 3a 31                                 # docs:1
+02 00                                             # fields: 2
+05 00                                             # field name: 5 bytes
+74 69 74 6c 65                                    # title
+74 05 00 00 00                                    # t: text, 5 bytes
+46 69 72 73 74                                    # First
+03 00                                             # field name: 3 bytes
+76 65 63                                          # vec
+76 02 00 00 00                                    # v: vector, 2 values
+9a 99 19 3f                                       # 0.6
+cd cc 4c 3f                                       # 0.8
+50                                                # P: put fields
+06 00                                             # key: 6 bytes
+64 6f 63 73 3a 32                                 # docs:2
+01 00                                             # fields: 1
+05 00                                             # field name: 5 bytes
+74 69 74 6c 65                                    # title
+74 06 00 00 00                                    # t: text, 6 bytes
+53 65 63 6f 6e 64                                 # Second
+4c                                                # L: add a link
+06 00                                             # from: 6 bytes
+64 6f 63 73 3a 32                                 # docs:2
+05 00                                             # type: 5 bytes
+63 69 74 65 73                                    # cites
+06 00                                             # to: 6 bytes
+64 6f 63 73 3a 31                                 # docs:1
+7e ba d0 1e                                       # checksum: 0x1ed0ba7e, the CRC32C of the 140 bytes before it

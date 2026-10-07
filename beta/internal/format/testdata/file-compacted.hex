@@ -1,0 +1,141 @@
+# The small database of file-new.hex, compacted, with one commit after it.
+# Generation 2. The header names the batch it continues from, the last
+# batch of file-new.hex, and where the compacted part ends. Each table
+# starts with a create change carrying its vector size and its whole
+# field list, so pics keeps its vector size and docs its field note.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 58 0d 0a 1a 0a                           # header: magic number, "HCRX" then CR, LF, Ctrl-Z, LF
+01 00 00 00                                       # format version: 1
+01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10   # database ID
+02 00 00 00 00 00 00 00                           # generation: 2
+01 00 00 00 00 00 00 00                           # continues from: generation 1
+03 00 00 00 00 00 00 00                           # continues from: sequence number 3
+41 64 3f 11                                       # continues from: checksum 0x113f6441
+cd 01 00 00 00 00 00 00                           # compacted part ends at offset 461
+7c cc 45 f4                                       # header checksum: 0xf445cc7c, the CRC32C of bytes 0 to 63
+
+# The compacted part, batch 1: each table with its records.
+48 43 52 42                                       # batch: magic number "HCRB"
+02 00 00 00 00 00 00 00                           # generation: 2
+06 01 00 00 00 00 00 00                           # length: 262 bytes
+01 00 00 00 00 00 00 00                           # sequence number: 1
+54                                                # T: create a table
+04 00                                             # table name: 4 bytes
+64 6f 63 73                                       # docs
+02 00 00 00                                       # vector size: 2
+04 00                                             # fields: 4
+05 00                                             # field name: 5 bytes
+74 69 74 6c 65                                    # title
+03 00                                             # field name: 3 bytes
+76 65 63                                          # vec
+04 00                                             # field name: 4 bytes
+6e 6f 74 65                                       # note
+05 00                                             # field name: 5 bytes
+73 63 6f 72 65                                    # score
+50                                                # P: put fields
+06 00                                             # key: 6 bytes
+64 6f 63 73 3a 31                                 # docs:1
+03 00                                             # fields: 3
+05 00                                             # field name: 5 bytes
+73 63 6f 72 65                                    # score
+72 00 00 00 00 00 00 e0 3f                        # r: real number 0.5
+05 00                                             # field name: 5 bytes
+74 69 74 6c 65                                    # title
+74 05 00 00 00                                    # t: text, 5 bytes
+46 69 72 73 74                                    # First
+03 00                                             # field name: 3 bytes
+76 65 63                                          # vec
+76 02 00 00 00                                    # v: vector, 2 values
+9a 99 19 3f                                       # 0.6
+cd cc 4c 3f                                       # 0.8
+54                                                # T: create a table
+04 00                                             # table name: 4 bytes
+70 69 63 73                                       # pics
+03 00 00 00                                       # vector size: 3
+01 00                                             # fields: 1
+03 00                                             # field name: 3 bytes
+76 65 63                                          # vec
+54                                                # T: create a table
+05 00                                             # table name: 5 bytes
+75 73 65 72 73                                    # users
+00 00 00 00                                       # vector size: 0, none yet
+01 00                                             # fields: 1
+04 00                                             # field name: 4 bytes
+6e 61 6d 65                                       # name
+50                                                # P: put fields
+09 00                                             # key: 9 bytes
+75 73 65 72 73 3a 61 6e 6e                        # users:ann
+01 00                                             # fields: 1
+04 00                                             # field name: 4 bytes
+6e 61 6d 65                                       # name
+74 03 00 00 00                                    # t: text, 3 bytes
+41 6e 6e                                          # Ann
+50                                                # P: put fields
+09 00                                             # key: 9 bytes
+75 73 65 72 73 3a 62 6f 62                        # users:bob
+00 00                                             # fields: 0
+54                                                # T: create a table
+06 00                                             # table name: 6 bytes
+75 73 65 72 73 32                                 # users2
+00 00 00 00                                       # vector size: 0, none yet
+01 00                                             # fields: 1
+04 00                                             # field name: 4 bytes
+6e 61 6d 65                                       # name
+50                                                # P: put fields
+0a 00                                             # key: 10 bytes
+75 73 65 72 73 32 3a 7a 65 64                     # users2:zed
+01 00                                             # fields: 1
+04 00                                             # field name: 4 bytes
+6e 61 6d 65                                       # name
+74 03 00 00 00                                    # t: text, 3 bytes
+5a 65 64                                          # Zed
+eb 64 61 ef                                       # checksum: 0xef6164eb, the CRC32C of the 258 bytes before it
+48 43 52 4d                                       # marker: magic number "HCRM"
+01 00 00 00 00 00 00 00                           # the batch's sequence number: 1
+eb 64 61 ef                                       # the batch's checksum: 0xef6164eb
+19 36 d8 77                                       # check value: 0x77d83619, the CRC32C of the database ID, generation 2 and the 16 bytes before it
+
+# The compacted part, batch 2: the links, in byte order of the key they're from.
+48 43 52 42                                       # batch: magic number "HCRB"
+02 00 00 00 00 00 00 00                           # generation: 2
+5b 00 00 00 00 00 00 00                           # length: 91 bytes
+02 00 00 00 00 00 00 00                           # sequence number: 2
+4c                                                # L: add a link
+0a 00                                             # from: 10 bytes
+75 73 65 72 73 32 3a 7a 65 64                     # users2:zed
+05 00                                             # type: 5 bytes
+63 69 74 65 73                                    # cites
+06 00                                             # to: 6 bytes
+64 6f 63 73 3a 31                                 # docs:1
+4c                                                # L: add a link
+09 00                                             # from: 9 bytes
+75 73 65 72 73 3a 61 6e 6e                        # users:ann
+09 00                                             # type: 9 bytes
+6c 69 6b 65 64 20 e2 99 a5                        # liked ♥
+06 00                                             # to: 6 bytes
+64 6f 63 73 3a 31                                 # docs:1
+4b a4 40 b6                                       # checksum: 0xb640a44b, the CRC32C of the 87 bytes before it
+48 43 52 4d                                       # marker: magic number "HCRM"
+02 00 00 00 00 00 00 00                           # the batch's sequence number: 2
+4b a4 40 b6                                       # the batch's checksum: 0xb640a44b
+0d 1a 33 a8                                       # check value: 0xa8331a0d, the CRC32C of the database ID, generation 2 and the 16 bytes before it
+
+# Offset 461: the compacted part ends, and the first commit after it starts.
+48 43 52 42                                       # batch: magic number "HCRB"
+02 00 00 00 00 00 00 00                           # generation: 2
+3c 00 00 00 00 00 00 00                           # length: 60 bytes
+03 00 00 00 00 00 00 00                           # sequence number: 3
+50                                                # P: put fields
+09 00                                             # key: 9 bytes
+75 73 65 72 73 3a 62 6f 62                        # users:bob
+01 00                                             # fields: 1
+04 00                                             # field name: 4 bytes
+6e 61 6d 65                                       # name
+74 03 00 00 00                                    # t: text, 3 bytes
+42 6f 62                                          # Bob
+72 f0 58 52                                       # checksum: 0x5258f072, the CRC32C of the 56 bytes before it
+48 43 52 4d                                       # marker: magic number "HCRM"
+03 00 00 00 00 00 00 00                           # the batch's sequence number: 3
+72 f0 58 52                                       # the batch's checksum: 0x5258f072
+a0 f6 60 23                                       # check value: 0x2360f6a0, the CRC32C of the database ID, generation 2 and the 16 bytes before it

@@ -1,0 +1,55 @@
+# A batch with one change: put fields, with every kind of value.
+# The fields come in byte order of their names, so Title, with its capital,
+# comes first.
+# It stands alone, to show the encoding, so its change needn't fit any state. Its
+# sequence number, 258, shows a u64's byte order.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 42                                       # batch: magic number "HCRB"
+01 00 00 00 00 00 00 00                           # generation: 1
+e6 00 00 00 00 00 00 00                           # length: 230 bytes
+02 01 00 00 00 00 00 00                           # sequence number: 258
+50                                                # P: put fields
+06 00                                             # key: 6 bytes
+64 6f 63 73 3a 37                                 # docs:7
+0b 00                                             # fields: 11
+05 00                                             # field name: 5 bytes
+54 69 74 6c 65                                    # Title
+74 0a 00 00 00                                    # t: text, 10 bytes
+6e 61 c3 af 76 65 20 e2 98 83                     # naïve ☃
+03 00                                             # field name: 3 bytes
+62 69 67                                          # big
+69 ff ff ff ff ff ff ff 7f                        # i: whole number 9223372036854775807, the largest
+04 00                                             # field name: 4 bytes
+62 6c 6f 62                                       # blob
+62 03 00 00 00                                    # b: bytes, 3 of them
+00 ff 10                                          # the bytes
+0b 00                                             # field name: 11 bytes
+65 6d 70 74 79 5f 62 79 74 65 73                  # empty_bytes
+62 00 00 00 00                                    # b: bytes, 0 of them, empty
+0a 00                                             # field name: 10 bytes
+65 6d 70 74 79 5f 74 65 78 74                     # empty_text
+74 00 00 00 00                                    # t: text, 0 bytes, empty
+08 00                                             # field name: 8 bytes
+6e 65 67 5f 7a 65 72 6f                           # neg_zero
+72 00 00 00 00 00 00 00 80                        # r: real number -0
+07 00                                             # field name: 7 bytes
+6e 6f 74 68 69 6e 67                              # nothing
+6e                                                # n: null
+05 00                                             # field name: 5 bytes
+72 61 74 69 6f                                    # ratio
+72 00 00 00 00 00 00 f8 3f                        # r: real number 1.5
+05 00                                             # field name: 5 bytes
+73 6d 61 6c 6c                                    # small
+69 00 00 00 00 00 00 00 80                        # i: whole number -9223372036854775808, the smallest
+04 00                                             # field name: 4 bytes
+74 69 6e 79                                       # tiny
+72 01 00 00 00 00 00 00 00                        # r: real number 5e-324, the smallest subnormal
+03 00                                             # field name: 3 bytes
+76 65 63                                          # vec
+76 04 00 00 00                                    # v: vector, 4 values
+00 00 80 3f                                       # 1
+00 00 00 bf                                       # -0.5
+01 00 00 00                                       # 1e-45, the smallest subnormal
+00 00 00 80                                       # -0
+a6 88 53 2b                                       # checksum: 0x2b5388a6, the CRC32C of the 226 bytes before it

@@ -1,0 +1,23 @@
+# A batch with one change: create a table, as compaction writes it, with a
+# vector size and a field list. An ordinary commit writes size 0 and no
+# fields, as in batch-several.hex.
+# It stands alone, to show the encoding, so its change needn't fit any state. Its
+# sequence number, 258, shows a u64's byte order.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 42                                       # batch: magic number "HCRB"
+01 00 00 00 00 00 00 00                           # generation: 1
+3f 00 00 00 00 00 00 00                           # length: 63 bytes
+02 01 00 00 00 00 00 00                           # sequence number: 258
+54                                                # T: create a table
+04 00                                             # table name: 4 bytes
+64 6f 63 73                                       # docs
+80 01 00 00                                       # vector size: 384
+03 00                                             # fields: 3
+05 00                                             # field name: 5 bytes
+74 69 74 6c 65                                    # title
+03 00                                             # field name: 3 bytes
+76 65 63                                          # vec
+04 00                                             # field name: 4 bytes
+74 61 67 73                                       # tags
+7f 5d 71 aa                                       # checksum: 0xaa715d7f, the CRC32C of the 59 bytes before it

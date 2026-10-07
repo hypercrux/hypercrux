@@ -1,0 +1,12 @@
+# A new database's header: generation 1, never compacted.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 58 0d 0a 1a 0a                           # header: magic number, "HCRX" then CR, LF, Ctrl-Z, LF
+01 00 00 00                                       # format version: 1
+01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10   # database ID
+01 00 00 00 00 00 00 00                           # generation: 1
+00 00 00 00 00 00 00 00                           # continues from: generation, 0 in generation 1
+00 00 00 00 00 00 00 00                           # continues from: sequence number, 0
+00 00 00 00                                       # continues from: checksum, 0
+00 00 00 00 00 00 00 00                           # compacted part ends: 0, nothing compacted
+8d 4b 39 d3                                       # header checksum: 0xd3394b8d, the CRC32C of bytes 0 to 63

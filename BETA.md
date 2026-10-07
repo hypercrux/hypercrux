@@ -290,11 +290,11 @@ Linux can mark its pages clean, and a sync on its own could then report
 success without the batch ever reaching the disk.
 
 Everything from the first failed batch on is cut off, and the cut is synced.
-If valid batches follow a failed one, that's damage in the middle of the
+If a commit was made past a failed batch, that's damage in the middle of the
 file: the database reports it and cuts nothing. A header of zeros could hide
-them, so opening, which reads the whole file anyway, looks past the end of
-the log for a marked batch, and so does the check before it cuts anything.
-Nothing is cut without the write lock.
+it, so opening, which reads the whole file anyway, looks past the end of the
+log for a marker, which outlasts damage to its own batch, and so does the
+check before it cuts anything. Nothing is cut without the write lock.
 
 Opening a database reads every marked batch, checking each checksum on the
 way, and only then tries the write lock, without waiting. If it gets the
@@ -477,7 +477,8 @@ functions.
 - The `hypercrux` command with the same verbs apart from `adopt`, plus
   `import`, `export` and `compact`. Other languages use it, as with 0.x, and
   each run opens the database afresh, reading the whole file.
-- `FORMAT.md` for the new format, as complete as 0.x's.
+- `FORMAT.md` for the new format, as complete as 0.x's. Until the release
+  it's [beta/FORMAT.md](beta/FORMAT.md).
 
 ### Rules for the file
 
@@ -494,7 +495,10 @@ functions.
   and move it into place with `mv`. Running processes notice the new file
   and reload. A commit that races the move is lost along with everything
   after the backup, and the file's owner and the directory sync are up to
-  whoever moves it. Don't copy anything over a live database.
+  whoever moves it. Don't copy anything over a live database. A copy that
+  catches the end of the log while it's cut and written again, after a
+  failed commit or a crash, can hold half of each version, which reads as
+  damage; copying again gives a good copy.
 
 ## Targets
 
@@ -767,3 +771,6 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   A2 set this up, and 0.2.0 was the first release it published.
 - 0.x gets no C search loop in the meantime. The Beta brings its own search,
   and a C loop wouldn't carry over to it.
+- The file format is version 1, set out byte by byte in
+  [beta/FORMAT.md](beta/FORMAT.md) in task P2, and checked against this plan
+  by a review agent.

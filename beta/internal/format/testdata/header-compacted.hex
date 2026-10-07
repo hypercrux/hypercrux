@@ -1,0 +1,14 @@
+# A compacted database's header: generation 2.
+# It's the header of file-compacted.hex. It continues from the last batch
+# of file-new.hex: generation 1, sequence number 3.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 58 0d 0a 1a 0a                           # header: magic number, "HCRX" then CR, LF, Ctrl-Z, LF
+01 00 00 00                                       # format version: 1
+01 23 45 67 89 ab cd ef fe dc ba 98 76 54 32 10   # database ID
+02 00 00 00 00 00 00 00                           # generation: 2
+01 00 00 00 00 00 00 00                           # continues from: generation 1
+03 00 00 00 00 00 00 00                           # continues from: sequence number 3
+41 64 3f 11                                       # continues from: checksum 0x113f6441
+cd 01 00 00 00 00 00 00                           # compacted part ends at offset 461
+7c cc 45 f4                                       # header checksum: 0xf445cc7c, the CRC32C of bytes 0 to 63

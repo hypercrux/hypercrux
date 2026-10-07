@@ -24,6 +24,12 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   where it replays as a test. For now it runs 0.x against itself, and
   against copies of 0.x with one thing each done wrong, which it has to
   catch.
+- `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
+  reading, checking and writing the log.
+- `internal/format/`: for now, the format's golden fixtures in
+  `internal/format/testdata`, annotated hex for each part of the format and
+  two small databases, and the test that checks them against FORMAT.md. The
+  codec joins them here.
 - `internal/vecmath/`: the search loop. Dot products, norms and distances
   in 8 running sums, giving the same bits on amd64 and arm64, which CI
   checks on both against a golden file.

@@ -1,0 +1,17 @@
+# A batch with one change: remove a link.
+# It stands alone, to show the encoding, so its change needn't fit any state. Its
+# sequence number, 258, shows a u64's byte order.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 42                                       # batch: magic number "HCRB"
+01 00 00 00 00 00 00 00                           # generation: 1
+38 00 00 00 00 00 00 00                           # length: 56 bytes
+02 01 00 00 00 00 00 00                           # sequence number: 258
+55                                                # U: remove a link
+06 00                                             # from: 6 bytes
+64 6f 63 73 3a 37                                 # docs:7
+05 00                                             # type: 5 bytes
+63 69 74 65 73                                    # cites
+06 00                                             # to: 6 bytes
+64 6f 63 73 3a 38                                 # docs:8
+84 51 f3 e4                                       # checksum: 0xe4f35184, the CRC32C of the 52 bytes before it

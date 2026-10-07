@@ -1,0 +1,7 @@
+# The marker for batch-several.hex.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 4d                                       # marker: magic number "HCRM"
+01 00 00 00 00 00 00 00                           # the batch's sequence number: 1
+7e ba d0 1e                                       # the batch's checksum: 0x1ed0ba7e
+8a 3a 6d dd                                       # check value: 0xdd6d3a8a, the CRC32C of the database ID, generation 1 and the 16 bytes before it

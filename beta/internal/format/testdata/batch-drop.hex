@@ -1,0 +1,13 @@
+# A batch with one change: drop a table.
+# It stands alone, to show the encoding, so its change needn't fit any state. Its
+# sequence number, 258, shows a u64's byte order.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 42                                       # batch: magic number "HCRB"
+01 00 00 00 00 00 00 00                           # generation: 1
+27 00 00 00 00 00 00 00                           # length: 39 bytes
+02 01 00 00 00 00 00 00                           # sequence number: 258
+58                                                # X: drop a table
+04 00                                             # table name: 4 bytes
+64 6f 63 73                                       # docs
+2d 61 85 5d                                       # checksum: 0x5d85612d, the CRC32C of the 35 bytes before it
