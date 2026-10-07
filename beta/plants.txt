@@ -7,3 +7,8 @@ store/nulls-kept ./beta/internal/store
 store/drop-keeps-records ./beta/internal/store
 store/spelt-as-given ./beta/internal/store
 store/size-unchecked ./beta/internal/store
+logfile/no-inode-check ./beta/internal/logfile
+logfile/one-try ./beta/internal/logfile
+logfile/any-marker ./beta/internal/logfile
+logfile/marker-before-sync ./beta/internal/logfile
+logfile/no-read-check ./beta/internal/logfile
