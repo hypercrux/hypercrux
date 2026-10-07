@@ -24,6 +24,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   where it replays as a test. For now it runs 0.x against itself, and
   against copies of 0.x with one thing each done wrong, which it has to
   catch.
+- `internal/vecmath/`: the search loop. Dot products, norms and distances
+  in 8 running sums, giving the same bits on amd64 and arm64, which CI
+  checks on both against a golden file.
 - `sqlcorpus/`: SQL with 0.x's answers, in `sqlcorpus/testdata` as JSON
   lines: statements inside and outside the Beta's subset, 3,000 generated
   expressions and 600 date cases. They run on a small fixed database that
