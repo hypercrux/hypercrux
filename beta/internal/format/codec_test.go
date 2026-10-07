@@ -387,6 +387,10 @@ func TestWhatMakesABatchCount(t *testing.T) {
 	mustNotCount(t, "a batch of generation 0 in a file of generation 1", resealed(4, u64(0)), 1, 1)
 	mustNotCount(t, "sequence number 2 where 1 comes next", resealed(20, u64(2)), 1, 1)
 	mustNotCount(t, "sequence number 0 where 1 comes next", resealed(20, u64(0)), 1, 1)
+	// Asked for 0, which a log never asks for: no batch is numbered 0, and
+	// AppendBatch refuses to write one. The fuzz found the decoder taking it.
+	mustNotCount(t, "sequence number 0, asked for", resealed(20, u64(0)), 1, 0)
+	mustNotCount(t, "generation 0, asked for", resealed(4, u64(0)), 0, 1)
 	// A length under 36 with a checksum that fits it: a head and a checksum
 	// with no room for a change.
 	for n := 32; n < MinBatchSize; n++ {

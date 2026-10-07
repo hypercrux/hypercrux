@@ -173,6 +173,11 @@ func appendValue(b []byte, v val.Value) []byte {
 // head first, then looks for the batch's marker before it reads the rest.
 // An error wraps ErrDoesNotCount.
 func BatchLength(b []byte, gen, seq uint64, room int64) (int64, error) {
+	if gen == 0 || seq == 0 {
+		// FORMAT.md numbers generations and batches from 1, and AppendBatch
+		// refuses 0, so no batch can be the one asked for.
+		return 0, fmt.Errorf("%w: generation %d and sequence number %d asked for, where both start at 1", ErrDoesNotCount, gen, seq)
+	}
 	if len(b) < BatchHeadSize || room < BatchHeadSize {
 		return 0, fmt.Errorf("%w: %d bytes, too few for a batch's head", ErrDoesNotCount, min(int64(len(b)), room))
 	}

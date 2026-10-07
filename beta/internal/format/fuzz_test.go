@@ -65,8 +65,11 @@ func checkBatch(t *testing.T, b []byte) {
 	bt, err := DecodeBatch(b, gen, seq)
 	ref, refErr := readBatch(b, gen) // which doesn't look at the sequence number
 
-	// Whether the batch counts, by FORMAT.md's five checks.
-	counts := len(b) >= batchHead && bytes.Equal(b[:4], batchMagic)
+	// Whether the batch counts, by FORMAT.md's five checks. The generation
+	// and the sequence number asked for are the batch's own, and FORMAT.md
+	// numbers both from 1, so a batch with either at 0 never counts.
+	zero := gen == 0 || seq == 0
+	counts := !zero && len(b) >= batchHead && bytes.Equal(b[:4], batchMagic)
 	if counts {
 		n := le64(b[12:])
 		counts = n >= minBatch && n <= uint64(len(b)) && le32(b[n-4:]) == sum(b[:n-4])
@@ -77,7 +80,7 @@ func checkBatch(t *testing.T, b []byte) {
 		if !errors.Is(err, ErrDoesNotCount) || errors.Is(err, errs.ErrDamaged) {
 			t.Fatalf("a batch that doesn't count gives %+v, %v", bt, err)
 		}
-		if refErr == nil {
+		if refErr == nil && !zero { // the reader doesn't look at the sequence number
 			t.Fatalf("fixtures_test.go's reader reads a batch that doesn't count")
 		}
 	case errors.Is(err, ErrDoesNotCount):

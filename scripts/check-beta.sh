@@ -4,8 +4,8 @@
 #
 # Checks the rules for beta/: every Go file builds only on Linux apart from
 # one untagged doc.go per package, so on macOS and Windows the packages are
-# empty and 0.x's builds there don't change; the code is gofmt'd; and the
-# task board agrees with BETA.md.
+# empty and 0.x's builds there don't change; the code is gofmt'd; the
+# engine builds without cgo; and the task board agrees with BETA.md.
 #
 #   sh scripts/check-beta.sh
 set -eu
@@ -38,6 +38,9 @@ if [ -n "$unformatted" ]; then
 	echo "not gofmt'd: $unformatted"
 	bad=1
 fi
+# The engine builds without cgo, which its static release builds need.
+CGO_ENABLED=0 GOARCH=amd64 go build ./beta/hypercrux/... ./beta/internal/...
+CGO_ENABLED=0 GOARCH=arm64 go build ./beta/hypercrux/... ./beta/internal/...
 GOOS=darwin go vet ./beta/...
 GOOS=windows go vet ./beta/...
 python3 scripts/check-board.py || bad=1

@@ -37,7 +37,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `internal/format/`: the change list, `Change`, which the format's batches
   carry, and the format's golden fixtures in `internal/format/testdata`,
   annotated hex for each part of the format and two small databases, with
-  the test that checks them against FORMAT.md. The codec joins them here.
+  the test that checks them against FORMAT.md, and the codec, which reads
+  and writes headers, batches and markers as pure functions.
 - `internal/fsys/`: the file calls, `File` and `FS`, which the crash tests'
   fault layers wrap. The real ones, through Go's `syscall` package, come
   with the log.
@@ -97,5 +98,18 @@ Two workflows run on every push to main and every pull request.
     as an artifact, to add to the package's `testdata/fuzz`.
   - `planted`: `scripts/planted.sh`, with every bug in `plants.txt`.
 
-Each job takes three minutes or less. [tasks/P1.md](tasks/P1.md) has the
-reasons, and the steps for a task that plants a bug.
+Each job takes a few minutes; the fuzz job grows by 30 seconds with each
+new target. [tasks/P1.md](tasks/P1.md) has the reasons, and the steps for a
+task that plants a bug.
+
+## Where the Beta differs from 0.x
+
+- **SQL:** [SQL.md](SQL.md) lists every difference, under "Where the Beta
+  differs from 0.x". In short, a statement outside the subset is an error,
+  and a few things 0.x lets through are refused.
+- **The Go API:** `Adopt`, `ApplicationID` and `DriverName` are gone, since
+  they mean nothing without SQLite, and `Compact` is new. The Beta's own
+  errors are exported beside 0.x's two.
+- **Rules:** a link type that starts with a zero byte, and a put that would
+  take a table past 1,999 fields, give `ErrInvalid`. 0.x refuses both too,
+  with a plain error.

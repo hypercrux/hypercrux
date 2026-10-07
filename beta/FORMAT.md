@@ -269,7 +269,8 @@ Keys and names follow 0.x's rules, which the Beta keeps:
 
 The format's own widths set the other limits. A table has at most 65,535
 fields, and a put sets at most 65,535. A text or bytes value holds at most
-4,294,967,295 bytes. HyperCrux's own limits may be lower.
+4,294,967,295 bytes. HyperCrux's own limits can be lower: a put can't take
+a table past 1,999 fields, which is 0.x's limit.
 
 ## Compaction
 
