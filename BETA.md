@@ -514,6 +514,10 @@ None has been measured.
 
 ## The work, task by task
 
+The Beta lives in a `beta/` folder in this repository, beside 0.x, which
+stays as it is. The folder builds only on Linux, so 0.x's macOS and Windows
+builds and its CI carry on unchanged.
+
 The work is 48 tasks of two to five hours, plus one that runs only if a
 target needs it. Each fits in one working session and closes with its own
 automatic test, which becomes a CI job on amd64 and arm64. Hours are hours
@@ -536,7 +540,7 @@ decided, so they can start before the go-ahead. The rest wait for it.
 | A3 | Differential harness: random sequences of operations run on two engines and compared, distances within the stated bound, failing sequences kept | A1 | 0.x against itself passes, and a deliberately broken 0.x fails | 3 |
 | A4 | SQL corpus: statements inside and outside the subset, a few thousand generated expressions and date cases, with answers recorded through 0.x | none | It replays clean on 0.x twice | 3 |
 | A5 | The search loop: 8 running sums in plain Go | none | amd64 and arm64 return the same bits on random and awkward vectors | 2 |
-| P1 | Where the Beta lives, the build, and CI on amd64 and arm64 with the race detector, fuzzing and planted-bug jobs; the task board | A3 | A trivial test passes in every job | 2 |
+| P1 | The `beta/` folder beside 0.x, its build, and CI on amd64 and arm64 with the race detector, fuzzing and planted-bug jobs; the task board | A3 | A trivial test passes in every job, and 0.x's own tests and builds pass unchanged | 2 |
 | P2 | File format, byte by byte, with golden fixtures for the header, each change, the batch, the marker and the compaction header | none | The fixtures check out with Go's CRC32C, and a review agent passes the spec against this plan | 3 |
 | P3 | Internal interfaces: the file calls, so a fault layer can sit under them; the change list; the snapshot compaction reads; the store's read API; the value type; the operator iterator; error values | P2 | It compiles against stubs | 2 |
 | P4 | Package skeleton: 0.x's exported API as stubs | P3 | A1's adapter compiles against it | 2 |
@@ -705,7 +709,7 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 | Search speed | A plain Go loop is slower than C with SIMD instructions, and the loop, more than memory, sets the pace of a search | The targets are set for the plain loop; Go assembly that keeps the 8 sums can come later |
 | SQL scope | People expect all of SQLite's SQL | A documented subset; anything outside it can go back to 0.x through `export` and `import` |
 | Parallel work | Interfaces that change under several agents, and bugs that only show when the parts meet | Interfaces fixed in P3, slice 1 running them end to end early, the differential harness on every merge, one agent owning the file tasks |
-| Upkeep | A storage engine needs care, and this project is meant to run with little | 0.x stays the stable line; the Beta lives apart until its release |
+| Upkeep | A storage engine needs care, and this project is meant to run with little | 0.x stays the stable line; the Beta stays in its own `beta/` folder until its release |
 
 ## Left out of the Beta
 
@@ -740,12 +744,12 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 ## Open decisions
 
 1. The go-ahead for the Beta.
-2. Where the Beta lives: a `beta/` folder in this repository, built only on
-   Linux so 0.x's macOS CI stays green, or a repository of its own. A branch
-   won't do, because the tests run 0.x and the Beta side by side in one
-   binary.
-3. Whether to start the five early tasks now, and whether to ship 0.x's
+2. Whether to start the five early tasks now, and whether to ship 0.x's
    export and import in a release of their own.
-4. Whether 0.x gets a smaller step meanwhile: a C search loop inside SQLite
+3. Whether 0.x gets a smaller step meanwhile: a C search loop inside SQLite
    that uses SIMD and, like 0.x today, adds in float64. It would stay in
    0.x, since the Beta has no C.
+
+Decided: the Beta lives in a `beta/` folder in this repository, beside 0.x.
+A branch wouldn't do, because the tests run 0.x and the Beta side by side in
+one binary.
