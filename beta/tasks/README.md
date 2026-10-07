@@ -33,8 +33,8 @@ work in, and all 133 hours are done after R4.
 | 3 | A3 Differential harness | 3 | done, [A3.md](A3.md) |
 | 4 | A4 SQL corpus | 3 | done, [A4.md](A4.md) |
 | 5 | A5 The search loop | 2 | done, [A5.md](A5.md) |
-| 6 | P1 The `beta/` folder, build and CI, the task board | 2 | next, [P1.md](P1.md) |
-| 7 | P2 File format | 3 | |
+| 6 | P1 The `beta/` folder, build and CI, the task board | 2 | done, [P1.md](P1.md) |
+| 7 | P2 File format | 3 | next, [P2.md](P2.md) |
 | 8 | P3 Internal interfaces | 2 | |
 | 9 | P4 Package skeleton | 2 | |
 | 10 | P5 SQL subset spec | 2 | |
@@ -78,7 +78,7 @@ work in, and all 133 hours are done after R4.
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
 
-Hours done so far: 16 of 133. The five early tasks are done.
+Hours done so far: 18 of 133. The five early tasks and P1 are done.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.

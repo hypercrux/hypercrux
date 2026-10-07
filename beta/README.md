@@ -27,6 +27,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `internal/vecmath/`: the search loop. Dot products, norms and distances
   in 8 running sums, giving the same bits on amd64 and arm64, which CI
   checks on both against a golden file.
+- `plants.txt`: the bugs planted in the Beta's code, each built in only
+  with the `hypercrux_planted` tag. Every one has to make its tests fail.
 - `sqlcorpus/`: SQL with 0.x's answers, in `sqlcorpus/testdata` as JSON
   lines: statements inside and outside the Beta's subset, 3,000 generated
   expressions and 600 date cases. They run on a small fixed database that
@@ -43,4 +45,25 @@ go test ./beta/...           # everything, with 200 killed writers
 go test -short ./beta/...    # 20 killed writers instead of 200, 300 sequences instead of 2,000
 HYPERCRUX_BIN=/path/to/hypercrux go test ./beta/conformance/cmdtest
 HYPERCRUX_DIFF_SEQUENCES=50000 go test -run TestZeroxAgainstItself ./beta/difftest   # a long run
+sh scripts/check-beta.sh     # the rules for this folder, and the board against BETA.md
+sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
+sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
 ```
+
+## CI
+
+Two workflows run on every push to main and every pull request.
+
+- `test` runs 0.x's tests and the Beta's on ubuntu and macOS, with the race
+  detector on Linux. On macOS the Beta's packages are empty. Releases of
+  0.x wait for this workflow.
+- `beta` runs the Beta's own jobs, which no release waits for until the
+  Beta's first, in task R4:
+  - `rules`: `scripts/check-beta.sh`.
+  - `arm64`: the Beta's tests on ARM Linux, with the race detector.
+  - `fuzz`: every fuzz target for 30 seconds. An input that fails is kept
+    as an artifact, to add to the package's `testdata/fuzz`.
+  - `planted`: `scripts/planted.sh`, with every bug in `plants.txt`.
+
+Each job takes three minutes or less. [tasks/P1.md](tasks/P1.md) has the
+reasons, and the steps for a task that plants a bug.
