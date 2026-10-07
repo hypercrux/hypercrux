@@ -1,7 +1,8 @@
 # HyperCrux Beta
 
-The Beta is a new engine for HyperCrux, written in Go, with all four handles
-built in. The plan is [BETA.md](../BETA.md). The work lives here, beside 0.x,
+The Beta is a new engine for HyperCrux, written in Go, with SQL, key-value,
+graph and vector built into the engine itself. The plan is
+[BETA.md](../BETA.md). The work lives here, beside 0.x,
 which stays as it is. Everything in this folder builds only on Linux. On
 macOS and Windows its packages are empty, so 0.x's builds and CI there carry
 on unchanged.

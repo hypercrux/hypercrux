@@ -1,17 +1,17 @@
 # HyperCrux
 
-**One record, four handles: key, SQL, links and similarity, in one SQLite file.**
+**A native hybrid SQL, key-value, graph and vector database in one SQLite file.**
 
-[HyperCrux](https://hypercrux.com) is a small database where every record can
-be reached four ways. Look it up by its key. Query it with SQL. Follow its
-links to other records. Or find the records whose vectors are closest to a
-question. All four work on the same records, in the same file and the same
-transactions, so they can't drift apart.
+[HyperCrux](https://hypercrux.com) is four databases that cross at one
+record. Query it with SQL, fetch it by key, walk its graph of links, search
+it by vector. Same data, same transaction, so the four can't disagree.
 
-There's no server to run. Embed HyperCrux in a Go program, or use the one
-small `hypercrux` binary from a script or any other language. The file is
-plain SQLite, and the rules that keep it consistent are stored inside it, so
-even a program that has never heard of HyperCrux reads and writes it safely.
+It's native rather than glued together. The file is plain SQLite, and the
+rules that tie keys, rows, links and vectors to each other are stored inside
+it, so there's no sync layer to break, and even a program that has never
+heard of HyperCrux reads and writes it safely. There's no server to run.
+Embed HyperCrux in a Go program, or use the one small `hypercrux` binary
+from a script or any other language.
 
 Version 0.2.0 · Apache License 2.0 · [hypercrux.com](https://hypercrux.com)
 
@@ -255,12 +255,13 @@ and other SQLite files are left alone.
 
 ## What HyperCrux promises, and what it doesn't
 
-- **The four handles agree.** Every insert, update and delete is an SQLite
-  transaction, and the triggers in the file run inside it, whatever program
-  made the change. A record, its key, its links and its vector appear and
-  disappear together. Schema changes made with plain SQL, such as dropping
-  or rebuilding a record table, are the one exception: follow them with
-  `Adopt` or `Drop`, and `Check` reports anything left out of step.
+- **SQL, key-value, graph and vector agree.** Every insert, update and
+  delete is an SQLite transaction, and the triggers in the file run inside
+  it, whatever program made the change. A record, its key, its links and its
+  vector appear and disappear together. Schema changes made with plain SQL,
+  such as dropping or rebuilding a record table, are the one exception:
+  follow them with `Adopt` or `Drop`, and `Check` reports anything left out
+  of step.
 - **Durable.** HyperCrux runs SQLite with `synchronous = FULL`, so a write
   that returned is still there after a crash or a power cut, as long as the
   disk really writes what it's told to flush.
@@ -367,12 +368,14 @@ runs the tests. The release binaries are built by
 
 A crux is the point where things cross. It's Latin for a cross, and in
 English it's the heart of a problem, the place everything meets. In
-HyperCrux, it's where the four handles meet: one record you can reach by key,
-by SQL, by link and by similarity.
+HyperCrux, SQL, key-value, graph and vector are four databases, and they're
+the four arms of one cross, meeting at one record in one file. Most apps run
+those four side by side and copy data between them. HyperCrux's meet at the
+crux, so there's one copy and nothing to drift.
 
-Hyper is there twice over. Links between records are what the web calls
-hyperlinks. And vectors live in hyperspace, the mathematician's word for
-space with more than three dimensions; an embedding with 384 values is a
+Hyper is there twice over. The links that make up the graph are what the web
+calls hyperlinks. And vectors live in hyperspace, the mathematician's word
+for space with more than three dimensions; an embedding with 384 values is a
 point in a 384-dimensional one.
 
 ## License

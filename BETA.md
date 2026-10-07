@@ -5,18 +5,18 @@
 [beta/tasks/README.md](beta/tasks/README.md) shows where it stands.
 HyperCrux 0.x stays what it is, a Go library and command on SQLite, and
 keeps getting fixes. This document describes a new engine for HyperCrux,
-written in Go, with all four handles built in, and what it would take to
-build. Every 0.1 measurement below comes from [test/results](test/results).
-The Beta figures are targets, to be measured the same way before anyone
-quotes them.
+written in Go, with SQL, key-value, graph and vector built into the engine
+itself, and what it would take to build. Every 0.1 measurement below comes
+from [test/results](test/results). The Beta figures are targets, to be
+measured the same way before anyone quotes them.
 
 ## What the Beta is for
 
-HyperCrux 0.1 proved the idea: one record, reachable by key, SQL, links and
-similarity, with all four kept in step by one transaction. It runs on SQLite
-and keeps its rules in the file as triggers, which is why any program that
-speaks SQLite and follows [FORMAT.md](FORMAT.md) can share a HyperCrux file
-safely.
+HyperCrux 0.1 proved the idea: a native hybrid of SQL, key-value, graph and
+vector, four databases crossing at one record and kept in step by one
+transaction. It runs on SQLite and keeps its rules in the file as triggers,
+which is why any program that speaks SQLite and follows
+[FORMAT.md](FORMAT.md) can share a HyperCrux file safely.
 
 The Beta keeps the idea and replaces the machinery with the smallest thing
 that does the job: one file on disk and, in each process that opens it, one

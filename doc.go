@@ -1,8 +1,9 @@
 // Copyright HyperCrux.com 2026
 // SPDX-License-Identifier: Apache-2.0
 
-// Package hypercrux is a small database where every record can be reached
-// four ways: by key, by SQL, by following links and by similarity.
+// Package hypercrux is a native hybrid SQL, key-value, graph and vector
+// database in one SQLite file. The four databases cross at one record, so
+// they can't disagree.
 //
 // A HyperCrux file is an ordinary SQLite database. Each record is a row in a
 // table and has a key such as "docs:7", where the part before the colon names
@@ -18,19 +19,19 @@
 //	}
 //	defer db.Close()
 //
-//	// By key.
+//	// Key-value.
 //	db.Put("docs:7", hypercrux.Fields{"title": "Q3 plan", "status": "open",
 //		"vec": hypercrux.Vector{0.12, 0.80, 0.05}})
 //	db.Put("customer:42", hypercrux.Fields{"name": "Dana"})
 //
-//	// By link.
+//	// Graph: link records and walk the links.
 //	db.Link("customer:42", "owns", "docs:7")
 //	steps, err := db.Walk("customer:42", hypercrux.Out, "", 2)
 //
-//	// By similarity.
+//	// Vector: the nearest open documents.
 //	hits, err := db.Nearest("docs", question, 10, "status = ?", "open")
 //
-//	// By SQL, crossing all of them in one statement.
+//	// SQL, crossing all four in one statement.
 //	rows, err := db.Query(`
 //		SELECT d.key, d.title
 //		FROM json_each(walk('customer:42', 2)) w

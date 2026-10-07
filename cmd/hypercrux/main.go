@@ -22,7 +22,7 @@ import (
 	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
-const usage = `hypercrux: one record, four handles: key, SQL, links, similarity.
+const usage = `hypercrux: a native hybrid SQL, key-value, graph and vector database.
 
 Usage:
   hypercrux init FILE                         create an empty HyperCrux file
