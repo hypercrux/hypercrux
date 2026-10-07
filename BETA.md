@@ -530,8 +530,9 @@ working version, and G4 adds SQL. One agent takes the file tasks F1, F2, F3,
 F5, F8 and F9 in order, since recovery, failed commits and compaction share
 their rules.
 
-The five tasks marked A don't depend on the Beta and help 0.x whatever is
-decided, so they can start before the go-ahead. The rest wait for it.
+The five tasks marked A don't depend on the Beta and help 0.x whatever
+happens to it. Like the rest, they wait for the go-ahead, and then they run
+first, alongside the spec.
 
 | ID | Task | Needs | Done when | Hours |
 |---|---|---|---|---|
@@ -599,9 +600,9 @@ How the work is run:
 
 ### The owner's part
 
-- The go-ahead, with the open decisions below settled at the same time.
-- Publishing releases: a 0.x release with export and import whenever A2 is
-  done, if wanted, and the Beta itself.
+- The go-ahead, the one decision still open.
+- Publishing releases: a 0.x release with export and import once A2 is done,
+  and the Beta itself.
 - One check-in, only if the file tasks run past one and a half times their
   hours, or the first working version misses a speed target by more than
   double. Otherwise progress is a note in the repository.
@@ -613,8 +614,8 @@ did for 0.1.
 
 ## Time estimate
 
-The work comes to 133 hours in all: 16 for the five early tasks and 117
-after the go-ahead.
+The work comes to 133 hours in all, 16 of them for the five early tasks, and
+all of it starts with the go-ahead.
 
 The longest chain of tasks that must run one after another goes from the
 file format and the interfaces through records, transactions, change lists,
@@ -625,17 +626,16 @@ that must run in order come to 16, and they can be done by hour 22.
 
 | | One agent | Two agents | Three agents |
 |---|---|---|---|
-| Working days after the go-ahead | about 15 | about 8 to 9 | about 6 |
+| Working days after the go-ahead | about 17 | about 9 to 10 | about 7 |
 | First working version, with its tests, in working days | about 5 | about 4 | about 3 |
 
 The plan assumes two agents, which keeps most of the gain for little
-coordination: about 8 to 9 working days after the go-ahead, roughly two
+coordination: about 9 to 10 working days after the go-ahead, roughly two
 weeks of calendar time with a working session most days. Work split between
 agents costs 10 to 20 per cent more effort in merging and integration, which
 the two- and three-agent figures include. The schedule does the first
-working version's tasks first, which doesn't delay the finish. The five
-early tasks take another day with two agents, before the go-ahead or
-alongside it.
+working version's tasks first, which doesn't delay the finish, and runs the
+five early tasks alongside the spec.
 
 HyperCrux is developed in working sessions by Claude, an AI coding agent
 made by Anthropic. The project's owner gives the go-ahead and publishes the
@@ -653,7 +653,7 @@ What would make it longer:
 - The file, the main risk. Recovery and compaction are where data loss would
   come from. If the crash tests keep finding problems there, the file tasks
   could double, their chain would become the longest at 47 hours, and two
-  agents would need about 10 to 11 working days. More agents can't absorb
+  agents would need about 11 to 12 working days. More agents can't absorb
   that.
 - More SQL. `GROUP BY` would add about a day, and each feature past the
   subset, such as other joins or `CASE`, adds time.
@@ -741,15 +741,19 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 - Servers, replication and anything across machines.
 - 32-bit systems.
 
-## Open decisions
+## Decisions
 
-1. The go-ahead for the Beta.
-2. Whether to start the five early tasks now, and whether to ship 0.x's
-   export and import in a release of their own.
-3. Whether 0.x gets a smaller step meanwhile: a C search loop inside SQLite
-   that uses SIMD and, like 0.x today, adds in float64. It would stay in
-   0.x, since the Beta has no C.
+Still open: the go-ahead for the Beta.
 
-Decided: the Beta lives in a `beta/` folder in this repository, beside 0.x.
-A branch wouldn't do, because the tests run 0.x and the Beta side by side in
-one binary.
+Decided:
+
+- The Beta lives in a `beta/` folder in this repository, beside 0.x, which
+  stays as it is. A branch wouldn't do, because the tests run 0.x and the
+  Beta side by side in one binary.
+- The five early tasks wait for the go-ahead too, and then run first,
+  alongside the spec.
+- 0.x's export and import ship in a 0.x release of their own once A2 is
+  done.
+- 0.x gets no C search loop in the meantime. The Beta's own search would
+  come about two weeks after the go-ahead, and a C loop wouldn't carry over
+  to it.
