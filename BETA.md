@@ -299,19 +299,56 @@ been measured.
 
 ## Phases and gates
 
-Each phase ends at a gate that decides whether the next one starts. Sizes
-are relative, from S for small to L for large.
+Each phase ends at a gate that decides whether the next one starts. Days
+are estimated working days of development, explained under Time estimate
+below.
 
-| Phase | Work | Gate | Size |
+| Phase | Work | Gate | Days |
 |---|---|---|---|
-| 0. Spec | File format 2, the C API header, the SQL route, the test plan | The spec is approved | S |
-| 1. Storage | AltSql's storage vendored and extended: readers across processes, checksums, one sync per commit, group commit, mapped reads | AltSql's crash matrix and fault tests pass, plus HyperCrux's kill test and many-process test, on Linux, macOS and Windows; a committed put is no slower than 0.1 | L |
-| 2. Keys and records | IDs, the key spaces, records with changing fields, scans | Model tests against 0.x as the oracle; the get target | M |
-| 3. Vectors | Segments, kernels for each instruction set, filter bitmaps, the bounded quick pass, threads | Every kernel returns the same keys in the same order as the C reference, ties broken by key; the search targets | M |
-| 4. Links | Link key spaces, walks, deletes that take links with them | 0.x's link tests pass; the walk targets | S |
-| 5. SQL | Route A or B, with `walk()`, `nearest()` and `distance()` native | 0.x's SQL tests for queries and row writes pass; the crux query gives 0.x's answers on random data | L |
-| 6. Bindings | The Go API, the command, the Python binding, import and export | Every 0.x test of the Go API and the command passes through the Go binding, and import and export tests take the place of the ones that write the file with plain SQLite | M |
-| 7. Beta | Independent review, a long fuzzing run, sanitizers, planted bugs, recorded benchmarks, docs, site | Released as a Beta on Linux, macOS and Windows | M |
+| 0. Spec | File format 2, the C API header, the SQL route, the test plan | The spec is approved | 0.5 to 1 |
+| 1. Storage | AltSql's storage vendored and extended: readers across processes, checksums, one sync per commit, group commit, mapped reads | AltSql's crash matrix and fault tests pass, plus HyperCrux's kill test and many-process test, on Linux, macOS and Windows; a committed put is no slower than 0.1 | 5 to 8 |
+| 2. Keys and records | IDs, the key spaces, records with changing fields, scans | Model tests against 0.x as the oracle; the get target | 2 to 3 |
+| 3. Vectors | Segments, kernels for each instruction set, filter bitmaps, the bounded quick pass, threads | Every kernel returns the same keys in the same order as the C reference, ties broken by key; the search targets | 3 to 4 |
+| 4. Links | Link key spaces, walks, deletes that take links with them | 0.x's link tests pass; the walk targets | 1 to 2 |
+| 5. SQL | Route A or B, with `walk()`, `nearest()` and `distance()` native | 0.x's SQL tests for queries and row writes pass; the crux query gives 0.x's answers on random data | 3 to 5 |
+| 6. Bindings | The Go API, the command, the Python binding, import and export | Every 0.x test of the Go API and the command passes through the Go binding, and import and export tests take the place of the ones that write the file with plain SQLite | 2 to 3 |
+| 7. Beta | Independent review, a long fuzzing run, sanitizers, planted bugs, recorded benchmarks, docs, site | Released as a Beta on Linux, macOS and Windows | 2 to 4 |
+
+## Time estimate
+
+About 19 to 30 working days of development to reach the Beta gate, or
+roughly four to six weeks of calendar time with a working session most days.
+A first working version with all four handles would take about a week. It
+would let one process use a file at a time and keep AltSql's two syncs per
+commit, and its search code would only run on x86. That's enough to try the
+design and well short of the Beta's bar.
+
+HyperCrux is developed in working sessions by Claude, an AI coding agent
+made by Anthropic; the project's owner decides at each gate and publishes
+the releases. The estimate is counted in those session days and rests on
+two projects from October 2026. HyperCrux 0.1, about 5,400 lines of Go and
+tests, went from the go-ahead to a published release in about a day.
+AltSql DB grew from 0.1 to 0.3 between October 2 and October 5, about
+11,300 lines of C counting its tests and tools. The Beta is roughly 30,000
+new lines with its tests, close to three times AltSql DB, with harder parts
+than either.
+
+What would make it longer:
+
+- Phase 1 could double if AltSql's crash tests keep finding problems with
+  the one-sync commit or the readers in other processes. Two syncs stay as
+  the fallback, so later phases don't wait for it.
+- Route B for SQL adds one to two weeks.
+- Starting without AltSql's storage adds one to two weeks, plus the crash
+  testing AltSql already has.
+- Windows, where growing a memory-mapped file is awkward.
+- Hours of machine time for fuzzing and crash-test runs, mostly overlapping
+  with other work.
+
+Passing every test at the Beta gate is a different thing from being trusted
+with real data, which only years of use can earn. The estimate is written up
+for readers of the site in
+[How Long a New HyperCrux Engine in C Would Take](https://hypercrux.com/how-long-a-new-hypercrux-engine-in-c-would-take-four-to-six-weeks-phase-by-phase/).
 
 ## Testing
 
