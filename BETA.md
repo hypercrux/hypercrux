@@ -587,7 +587,7 @@ first, alongside the spec.
 | R1 | Long runs: hours of fuzzing and crash runs on both architectures, every planted bug tried | I1, G5, G7, Q6 | Every job runs green for its full length, and every planted bug is caught | 3 |
 | R2 | Independent review: a review agent's findings, each fixed with a test or answered | I1, G5, G6, G7, Q6 | None is open | 5 |
 | R3 | Docs and site: `FORMAT.md` for the Beta, the README, notes on moving from 0.x, posts | G5 | A script checks the links and runs the examples | 3 |
-| R4 | Release run: static Linux builds for amd64 and arm64 with smoke tests, a last overnight run, tests and benchmarks recorded beside 0.1's | R1, R2, R3, T5 | A dry run passes and the results are written; then the owner publishes | 2 |
+| R4 | Release run: static Linux builds for amd64 and arm64 with smoke tests, a last overnight run, tests and benchmarks recorded beside 0.1's | R1, R2, R3, T5 | A dry run passes and the results are written; then raising the version publishes the release | 2 |
 
 How the work is run:
 
@@ -609,13 +609,14 @@ How the work is run:
   costs. The note at each stop also says so if the file tasks are running
   past one and a half times their hours, or if the first working version
   misses a speed target by more than double.
-- Publishing releases: a 0.x release with export and import once A2 is done,
-  and the Beta itself.
 
-Everything else is automatic. Each task's test is a CI job, a review agent
-checks the spec against this plan, a script compares the targets with 0.1's
-numbers from the same run, and a review agent does the final review, as one
-did for 0.1.
+Everything else is automatic, releases included. When the tests pass on main
+with a version that has no release yet, the release workflow builds and
+checks the binaries, then tags the commit and publishes the release, for 0.x
+and for the Beta alike. Each task's test is a CI job, a review agent checks
+the spec against this plan, a script compares the targets with 0.1's numbers
+from the same run, and a review agent does the final review, as one did for
+0.1.
 
 ## Time estimate
 
@@ -646,15 +647,16 @@ order on the task board: the same 133 hours, with the calendar set by the
 approvals.
 
 HyperCrux is developed in working sessions by Claude, an AI coding agent
-made by Anthropic. The project's owner gives the go-ahead and publishes the
-releases. The yardstick is 0.1: about 5,400 lines of Go and tests, from the
-go-ahead to a published release in about a day. The Beta is roughly 5,000
-lines of Go and as many again in tests, about twice 0.1's size. At 0.1's
-pace, size alone would mean a few days. The Beta also does itself what 0.1
-left to SQLite, from storage and crash safety to SQL, and code that has to
-survive a crash or a failed write at any moment takes many rounds of testing
-and fixing before it passes. Here the test harnesses, the spec and the
-integration are tasks of their own, about a fifth of the hours.
+made by Anthropic. The project's owner gives the go-ahead, and releases
+publish themselves once the tests pass. The yardstick is 0.1: about 5,400
+lines of Go and tests, from the go-ahead to a published release in about a
+day. The Beta is roughly 5,000 lines of Go and as many again in tests, about
+twice 0.1's size. At 0.1's pace, size alone would mean a few days. The Beta
+also does itself what 0.1 left to SQLite, from storage and crash safety to
+SQL, and code that has to survive a crash or a failed write at any moment
+takes many rounds of testing and fixing before it passes. Here the test
+harnesses, the spec and the integration are tasks of their own, about a
+fifth of the hours.
 
 What would make it longer:
 
@@ -758,7 +760,10 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   Beta side by side in one binary.
 - The five early tasks wait for the go-ahead too, and then run first,
   alongside the spec.
-- 0.x's export and import ship in a 0.x release of their own once A2 is
-  done.
+- 0.x's export and import shipped in a 0.x release of their own, 0.2.0, once
+  A2 was done.
+- The owner publishes no releases, here or in any other project. A release
+  goes out on its own when the version is raised on main and the tests pass.
+  A2 set this up, and 0.2.0 was the first release it published.
 - 0.x gets no C search loop in the meantime. The Beta brings its own search,
   and a C loop wouldn't carry over to it.
