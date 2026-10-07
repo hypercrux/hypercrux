@@ -152,7 +152,8 @@ Building needs cgo and a C compiler, because SQLite is compiled in through
 methods. `Adopt` turns a table you made with plain SQL into a record table,
 or brings one back in step after its schema changed. `Drop` deletes a record
 table with its records and their links. `Check` reads the whole file and
-confirms the four handles agree.
+confirms the four handles agree. `Export` writes every table, record and
+link as JSON lines, and `Import` reads them into a new file.
 
 - **Keys** are `table:id`. The table name is lower-case letters, digits and
   underscores. Anything can follow the colon, up to 1,024 bytes in all.
@@ -213,6 +214,17 @@ python3 examples/python/hcfile.py link notes.db customer:42 owns docs:4
 python3 examples/python/hcfile.py nearest notes.db docs '[1, 0, 0]' 3
 ```
 
+**Through an export.** `hypercrux export` writes every table, record and
+link as JSON lines, one object a line, which any language can read.
+`hypercrux import` reads them into a new file, so an export is also the way
+to bring data in from elsewhere and to move a file to a later HyperCrux.
+[EXPORT.md](EXPORT.md) describes the format:
+
+```sh
+hypercrux export notes.db > notes.jsonl
+hypercrux import copy.db < notes.jsonl
+```
+
 ## The hypercrux command
 
 | Command | Does |
@@ -231,12 +243,15 @@ python3 examples/python/hcfile.py nearest notes.db docs '[1, 0, 0]' 3
 | `hypercrux adopt FILE TABLE` | Makes a table created with plain SQL a record table, or brings one back in step after a schema change |
 | `hypercrux drop FILE TABLE` | Deletes a record table with its records and their links, or clears what's left of one dropped with plain SQL |
 | `hypercrux check FILE` | Confirms keys, rows, links and vectors agree, and SQLite's integrity check passes |
+| `hypercrux export FILE` | Writes every record table, record and link to standard output as JSON lines |
+| `hypercrux import FILE` | Reads an export from standard input into a new file, or one without record tables, all in one transaction |
 | `hypercrux version` | Prints the version |
 
 Options can go before or after the other arguments, except with `sql`,
 whose options go before FILE: everything after FILE is the statement and its
-arguments. Only `init` and `put` create a file. Every other command needs an existing HyperCrux file, so a
-typo in a file name is caught and other SQLite files are left alone.
+arguments. Only `init`, `put` and `import` create a file. Every other
+command needs an existing HyperCrux file, so a typo in a file name is caught
+and other SQLite files are left alone.
 
 ## What HyperCrux promises, and what it doesn't
 
@@ -280,7 +295,7 @@ harder cases. The results are recorded in [test/results](test/results):
   record with fields and a vector, linked it to the record before and to an
   anchor, deleted an old record every seventh time and moved a counter. After
   every kill, the file matched the last committed transaction exactly. That
-  was 30,306 transactions in all, ending with 25,979 records and 47,631 links:
+  was 28,017 transactions in all, ending with 24,017 records and 44,034 links:
   no torn record, no link to a missing record, Check and SQLite's integrity
   check passing every time, and searches and walks finding what they should.
 - **Processes sharing a file.** Four processes wrote 300 transactions each to
@@ -296,6 +311,13 @@ harder cases. The results are recorded in [test/results](test/results):
   over 20 queries, with and without a filter. Python, reading the raw vectors
   and comparing them itself, found the same closest records, with distances
   equal to within a billionth.
+- **Export and import.** Forty random files went through export, import and
+  a second export, with integers and reals at their limits, negative zero,
+  subnormal numbers, empty and random bytes, text in many scripts and with
+  control characters, and vectors of awkward floats. Each time the two
+  exports matched byte for byte, and every value came back with its SQLite
+  type and its exact bits. An export cut short at any byte was refused and
+  left nothing behind, and the format's reader ran under Go's fuzzer.
 - **Plain SQL that breaks a rule is refused.** Thirteen statements that would leave
   the file inconsistent, from changing a key to storing a vector of zeros,
   were all refused.

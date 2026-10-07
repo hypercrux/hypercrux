@@ -51,41 +51,59 @@ const maxProblems = 20
 // triggers. It runs in one read transaction, so it sees a single moment.
 func (db *DB) Check() (Report, error) {
 	var rep Report
+	err := db.snapshot(func(conn querier) error {
+		var err error
+		rep, err = check(conn, true)
+		return err
+	})
+	return rep, err
+}
+
+// snapshot runs fn on one connection inside a read transaction, so that
+// everything fn reads comes from a single moment.
+func (db *DB) snapshot(fn func(conn querier) error) error {
 	c, err := db.sql.Conn(bg)
 	if err != nil {
-		return rep, err
+		return err
 	}
 	defer c.Close()
 	conn := connQuerier{c}
-	// A deferred read transaction: one snapshot for every query below.
 	if _, err := conn.Exec(`BEGIN DEFERRED`); err != nil {
-		return rep, err
+		return err
 	}
 	defer conn.Exec(`ROLLBACK`)
+	return fn(conn)
+}
 
+// check is Check inside a snapshot. Export runs it without SQLite's
+// integrity check, which reads every page of the file.
+func check(conn querier, integrity bool) (Report, error) {
+	var rep Report
 	problem := func(format string, args ...any) {
 		rep.Problems = append(rep.Problems, fmt.Sprintf(format, args...))
 	}
-	var integrity []string
-	rows, err := conn.Query(`PRAGMA integrity_check`)
-	if err != nil {
-		return rep, err
-	}
-	for rows.Next() {
-		var s string
-		if err := rows.Scan(&s); err != nil {
-			rows.Close()
+	if integrity {
+		var lines []string
+		rows, err := conn.Query(`PRAGMA integrity_check`)
+		if err != nil {
 			return rep, err
 		}
-		integrity = append(integrity, s)
-	}
-	rows.Close()
-	if len(integrity) != 1 || integrity[0] != "ok" {
-		for i, s := range integrity {
-			if i == maxProblems {
-				break
+		for rows.Next() {
+			var s string
+			if err := rows.Scan(&s); err != nil {
+				rows.Close()
+				return rep, err
 			}
-			problem("SQLite integrity check: %s", s)
+			lines = append(lines, s)
+		}
+		rows.Close()
+		if len(lines) != 1 || lines[0] != "ok" {
+			for i, s := range lines {
+				if i == maxProblems {
+					break
+				}
+				problem("SQLite integrity check: %s", s)
+			}
 		}
 	}
 
@@ -94,7 +112,7 @@ func (db *DB) Check() (Report, error) {
 		dims *int64
 	}
 	var tables []tbl
-	rows, err = conn.Query(`SELECT name, dims FROM hc_tables ORDER BY name`)
+	rows, err := conn.Query(`SELECT name, dims FROM hc_tables ORDER BY name`)
 	if err != nil {
 		return rep, err
 	}

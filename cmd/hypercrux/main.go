@@ -43,12 +43,15 @@ Usage:
                                               or bring one back in step after a schema change
   hypercrux drop FILE TABLE                   delete a record table, its records and their links
   hypercrux check FILE                        confirm keys, rows, links and vectors agree
+  hypercrux export FILE                       write every table, record and link as JSON lines
+  hypercrux import FILE                       read an export from standard input into a new
+                                              or empty file
   hypercrux version                           print the version
 
 A key is table:id, such as docs:7. A VECTOR is a JSON array, such as
 '[0.12, 0.8, 0.05]'. Options can go before or after the other arguments,
 except with sql, whose options go before FILE: everything after FILE is the
-statement and its arguments. Only init and put create a file.`
+statement and its arguments. Only init, put and import create a file.`
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -211,12 +214,17 @@ func dispatch(cmd string, o *options, stdin io.Reader, stdout io.Writer) error {
 			return usageErr("expected FILE KEY [JSON]")
 		}
 		return put(o, stdin, stdout)
+	case "import":
+		if err := need(o, 1, "FILE"); err != nil {
+			return err
+		}
+		return importFile(o.pos[0], stdin, stdout)
 	}
 
 	commands := map[string]func(*hypercrux.DB, *options, io.Writer) error{
 		"get": get, "delete": del, "scan": scan, "sql": runSQL, "link": link, "unlink": unlink,
 		"neighbours": neighbours, "neighbors": neighbours, "walk": walk, "nearest": nearest,
-		"adopt": adopt, "drop": drop, "check": check,
+		"adopt": adopt, "drop": drop, "check": check, "export": exportFile,
 	}
 	f, ok := commands[cmd]
 	if !ok {
@@ -239,7 +247,7 @@ func dispatch(cmd string, o *options, stdin io.Reader, stdout io.Writer) error {
 func openExisting(path string) (*hypercrux.DB, error) {
 	st, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("%s: no such file (only init and put create one)", path)
+		return nil, fmt.Errorf("%s: no such file (only init, put and import create one)", path)
 	}
 	if st.IsDir() {
 		return nil, fmt.Errorf("%s is a directory", path)
@@ -536,18 +544,69 @@ func check(db *hypercrux.DB, o *options, w io.Writer) error {
 	if err != nil {
 		return err
 	}
-	summary := strings.Join([]string{count(rep.Tables, "table"), count(rep.Records, "record"),
-		count(rep.Links, "link"), count(rep.Vectors, "vector")}, ", ")
 	if rep.OK() {
-		fmt.Fprintln(w, "ok:", summary)
+		fmt.Fprintln(w, "ok:", summary(rep))
 		return nil
 	}
 	fmt.Fprintln(w, "problems in", o.pos[0]+":")
 	for _, p := range rep.Problems {
 		fmt.Fprintln(w, "  -", p)
 	}
-	fmt.Fprintln(w, summary)
+	fmt.Fprintln(w, summary(rep))
 	return errProblems
+}
+
+func exportFile(db *hypercrux.DB, o *options, w io.Writer) error {
+	if err := need(o, 1, "FILE"); err != nil {
+		return err
+	}
+	return db.Export(w)
+}
+
+// importFile reads an export into a new file, or into an existing
+// HyperCrux file without record tables, and checks the result.
+func importFile(path string, stdin io.Reader, stdout io.Writer) error {
+	_, statErr := os.Stat(path)
+	created := os.IsNotExist(statErr)
+	var db *hypercrux.DB
+	var err error
+	if created {
+		db, err = hypercrux.Open(path)
+	} else {
+		db, err = openExisting(path)
+	}
+	if err != nil {
+		return err
+	}
+	if err := db.Import(stdin); err != nil {
+		db.Close()
+		if created { // don't leave an empty file behind
+			for _, p := range []string{path, path + "-wal", path + "-shm"} {
+				os.Remove(p)
+			}
+		}
+		return err
+	}
+	rep, err := db.Check()
+	db.Close()
+	if err != nil {
+		return err
+	}
+	if !rep.OK() {
+		fmt.Fprintln(stdout, "problems in", path+":")
+		for _, p := range rep.Problems {
+			fmt.Fprintln(stdout, "  -", p)
+		}
+		return errProblems
+	}
+	fmt.Fprintf(stdout, "imported %s into %s\n", summary(rep), path)
+	return nil
+}
+
+// summary counts what a report found.
+func summary(rep hypercrux.Report) string {
+	return strings.Join([]string{count(rep.Tables, "table"), count(rep.Records, "record"),
+		count(rep.Links, "link"), count(rep.Vectors, "vector")}, ", ")
 }
 
 // count writes a number with thousands separators and the noun after it.

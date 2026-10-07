@@ -151,6 +151,64 @@ func TestEveryCommand(t *testing.T) {
 	expect(t, 1, "a vector is a JSON array", "nearest", f, "docs", "[1, oops]")
 }
 
+func TestExportAndImport(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "notes.db")
+	expect(t, 0, "docs:1", "put", f, "docs:1", `{"title": "Q3 plan", "score": 1.0, "vec": [0.9, 0.1, 0]}`)
+	expect(t, 0, "customer:42", "put", f, "customer:42", `{"name": "Dana"}`)
+	expect(t, 0, "customer:42 -owns-> docs:1", "link", f, "customer:42", "owns", "docs:1")
+	want := `{"hypercrux":"export","version":1}
+{"table":"customer","dims":null,"fields":["name"]}
+{"table":"docs","dims":3,"fields":["score","title","vec"]}
+{"key":"customer:42","fields":{"name":"Dana"}}
+{"key":"docs:1","fields":{"score":1.0,"title":"Q3 plan","vec":[0.9,0.1,0]}}
+{"from":"customer:42","type":"owns","to":"docs:1"}
+{"end":{"tables":2,"records":2,"links":1}}
+`
+	if got := expect(t, 0, "", "export", f); got != want {
+		t.Fatalf("export:\n%s\nwant:\n%s", got, want)
+	}
+	copied := filepath.Join(dir, "copy.db")
+	if code, out, errs := hc(t, want, "import", copied); code != 0 || out != "imported 2 tables, 2 records, 1 link, 1 vector into "+copied+"\n" {
+		t.Fatalf("import: exit %d\n%s\n%s", code, out, errs)
+	}
+	if got := expect(t, 0, "", "export", copied); got != want {
+		t.Fatalf("export of the copy:\n%s", got)
+	}
+	expect(t, 0, `{"typeof(score)":"real"}`, "sql", "--json", copied, "SELECT typeof(score) FROM docs")
+
+	// Into an existing HyperCrux file without records.
+	empty := filepath.Join(dir, "empty.db")
+	expect(t, 0, "is ready", "init", empty)
+	if code, out, errs := hc(t, want, "import", empty); code != 0 {
+		t.Fatalf("import into an empty file: exit %d\n%s\n%s", code, out, errs)
+	}
+
+	if code, out, errs := hc(t, want, "import", f); code != 1 || !strings.Contains(errs, "already holds record tables") {
+		t.Fatalf("import into a file with records: exit %d\n%s\n%s", code, out, errs)
+	}
+	bad := filepath.Join(dir, "bad.db")
+	if code, _, errs := hc(t, "nonsense", "import", bad); code != 1 || !strings.Contains(errs, "not a valid HyperCrux export: line 1") {
+		t.Fatalf("import of nonsense: exit %d\n%s", code, errs)
+	}
+	if _, err := os.Stat(bad); !os.IsNotExist(err) {
+		t.Fatalf("a failed import left %s behind: %v", bad, err)
+	}
+	app := filepath.Join(dir, "app.db")
+	plain, err := sql.Open("sqlite3", app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.Exec(`CREATE TABLE settings (k TEXT, v TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	plain.Close()
+	expect(t, 1, "isn't a HyperCrux file", "import", app)
+	expect(t, 1, "no such file", "export", filepath.Join(dir, "typo.db"))
+	expect(t, 2, "expected FILE", "import")
+	expect(t, 2, "expected FILE", "export", f, "extra")
+}
+
 func TestOtherSQLiteFilesAreLeftAlone(t *testing.T) {
 	f := filepath.Join(t.TempDir(), "app.db")
 	plain, err := sql.Open("sqlite3", f)

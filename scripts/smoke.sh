@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # A quick check that a built hypercrux binary works: puts records with
-# vectors, links them, and reads them back through every handle.
+# vectors, links them, reads them back through every handle, and sends them
+# through an export and an import.
 #
 #   sh scripts/smoke.sh ./hypercrux
 set -eu
@@ -22,6 +23,10 @@ file="$dir/smoke.db"
 test "$("$bin" walk "$file" customer:42 2 | tr -s ' ' | tr '\n' ' ')" = "1 docs:1 2 docs:2 "
 "$bin" nearest "$file" docs '[1, 0, 0]' -k 1 | grep -q 'docs:1'
 "$bin" sql "$file" "SELECT d.key FROM json_each(walk('customer:42', 2)) w JOIN docs d ON d.key = w.value ORDER BY distance(d.vec, '[0, 1, 0]') LIMIT 1" | grep -q 'docs:2'
+"$bin" export "$file" > "$dir/one.jsonl"
+"$bin" import "$dir/copy.db" < "$dir/one.jsonl" | grep -q 'imported 2 tables, 3 records, 2 links, 2 vectors'
+"$bin" export "$dir/copy.db" > "$dir/two.jsonl"
+cmp "$dir/one.jsonl" "$dir/two.jsonl"
 "$bin" delete "$file" docs:1 >/dev/null
 test -z "$("$bin" neighbours "$file" customer:42)"
 "$bin" check "$file"

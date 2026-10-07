@@ -1,10 +1,21 @@
 name: release
 
-# Builds the hypercrux binaries when a GitHub release is published, checks each
-# one, and attaches them to the release. It can also be run by hand for an
-# existing release tag.
+# Builds the hypercrux binaries, checks each one, and publishes them with a
+# release.
+#
+# Releases go out on their own. When the tests pass on a push to main and the
+# version in hypercrux.go has no tag yet, this workflow builds and checks the
+# binaries from that commit, then tags it and publishes the release with the
+# binaries attached. Nothing goes public unless every build and check passes.
+#
+# It also attaches binaries to a release someone publishes by hand, and it
+# can be run by hand to rebuild the binaries of an existing tag.
 
 on:
+  workflow_run:
+    workflows: [test]
+    types: [completed]
+    branches: [main]
   release:
     types: [published]
   workflow_dispatch:
@@ -16,11 +27,62 @@ on:
 permissions:
   contents: read
 
-env:
-  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      new: ${{ steps.plan.outputs.new }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          case "$EVENT" in
+          workflow_run)
+            if [ "$RUN_CONCLUSION" != success ] || [ "$RUN_EVENT" != push ]; then
+              echo "No release: the tests didn't pass on a push to main."
+              exit 0
+            fi
+            version=$(sed -n 's/^const Version = "\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' hypercrux.go)
+            if [ -z "$version" ]; then
+              echo "hypercrux.go has no Version of the form X.Y.Z" >&2
+              exit 1
+            fi
+            if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+              echo "No release: v$version is out already."
+              exit 0
+            elif [ $? -ne 2 ]; then
+              echo "Couldn't read the repository's tags" >&2
+              exit 1
+            fi
+            echo "Releasing v$version from $RUN_SHA."
+            { echo "tag=v$version"; echo "ref=$RUN_SHA"; echo "new=true"; } >> "$GITHUB_OUTPUT"
+            ;;
+          release)
+            { echo "tag=$RELEASE_TAG"; echo "ref=$RELEASE_TAG"; } >> "$GITHUB_OUTPUT"
+            ;;
+          workflow_dispatch)
+            { echo "tag=$INPUT_TAG"; echo "ref=$INPUT_TAG"; } >> "$GITHUB_OUTPUT"
+            ;;
+          esac
+
   linux:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
     strategy:
       matrix:
         include:
@@ -32,7 +94,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.x"
@@ -55,6 +117,8 @@ jobs:
           path: hypercrux_linux_${{ matrix.arch }}.tar.gz
 
   macos:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
     strategy:
       matrix:
         include:
@@ -66,7 +130,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.x"
@@ -89,11 +153,13 @@ jobs:
           path: hypercrux_darwin_${{ matrix.arch }}.tar.gz
 
   windows:
+    needs: plan
+    if: needs.plan.outputs.tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ needs.plan.outputs.ref }}
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.x"
@@ -133,6 +199,10 @@ jobs:
           '{"title": "one", "vec": [1, 0]}' | & $hc put check.db docs:1
           '{"title": "two", "vec": [0, 1]}' | & $hc put check.db docs:2
           & $hc link check.db customer:42 owns docs:1
+          & $hc export check.db | & $hc import copy.db
+          $one = (& $hc export check.db) -join "`n"
+          $two = (& $hc export copy.db) -join "`n"
+          if ($one -ne $two) { throw "the copy exports differently" }
           $near = & $hc nearest check.db docs '[1,0]' -k 1
           if ("$near" -notmatch 'docs:1') { throw "nearest gave $near" }
           $walk = & $hc walk check.db customer:42 1
@@ -142,31 +212,26 @@ jobs:
           Write-Output "windows check passed"
 
   release:
-    needs: [linux, macos, windows, windows-check]
+    needs: [plan, linux, macos, windows, windows-check]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      TAG: ${{ needs.plan.outputs.tag }}
+      REF: ${{ needs.plan.outputs.ref }}
+      NEW: ${{ needs.plan.outputs.new }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
-      - name: Attach the binaries to the release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Checksums and notes
         run: |
           cd dist
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            hypercrux_linux_amd64.tar.gz hypercrux_linux_arm64.tar.gz hypercrux_darwin_arm64.tar.gz hypercrux_darwin_amd64.tar.gz hypercrux_windows_amd64.zip SHA256SUMS
-      - name: Describe the binaries if the release has no notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
-          if [ -n "$body" ]; then exit 0; fi
-          cat > notes.md <<'EOF'
+          cat > ../notes.md <<'EOF'
           Ready-built hypercrux binaries. Each archive holds the `hypercrux` command with its license files.
 
           | System | File |
@@ -179,4 +244,20 @@ jobs:
 
           SHA256SUMS lists the checksums. The macOS binaries aren't signed by Apple, so macOS may ask you to allow them the first time, or you can run `xattr -d com.apple.quarantine hypercrux`.
           EOF
-          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+      - name: Tag the commit and publish the release, binaries attached
+        if: env.NEW == 'true'
+        run: |
+          cd dist
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$REF" \
+            --title "HyperCrux $TAG" --notes-file ../notes.md \
+            hypercrux_linux_amd64.tar.gz hypercrux_linux_arm64.tar.gz hypercrux_darwin_arm64.tar.gz hypercrux_darwin_amd64.tar.gz hypercrux_windows_amd64.zip SHA256SUMS
+      - name: Attach the binaries to an existing release
+        if: env.NEW != 'true'
+        run: |
+          cd dist
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            hypercrux_linux_amd64.tar.gz hypercrux_linux_arm64.tar.gz hypercrux_darwin_arm64.tar.gz hypercrux_darwin_amd64.tar.gz hypercrux_windows_amd64.zip SHA256SUMS
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          if [ -z "$body" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file ../notes.md
+          fi

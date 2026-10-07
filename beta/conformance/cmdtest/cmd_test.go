@@ -93,6 +93,7 @@ func TestCommands(t *testing.T) {
 		{"SQLTriggers", sqlTriggers},
 		{"UnlinkDeleteAndCheck", unlinkDeleteAndCheck},
 		{"AdoptAndDrop", adoptAndDrop},
+		{"ExportAndImport", exportAndImport},
 		{"Mistakes", mistakes},
 	}
 	known := map[string]bool{}
@@ -231,6 +232,35 @@ func adoptAndDrop(t *testing.T, f string) {
 	expect(t, 0, "dropped notes", "drop", f, "notes")
 	expect(t, 0, "", "neighbours", f, "docs:3")
 	expect(t, 1, "no record table notes", "drop", f, "notes")
+}
+
+// Export, import into a new file, and export again: the two exports match
+// byte for byte. Added with 0.x's export and import, in 0.2.0.
+func exportAndImport(t *testing.T, f string) {
+	code, first, errs := hc(t, "", "export", f)
+	if code != 0 || !strings.HasPrefix(first, `{"hypercrux":"export","version":1}`+"\n") || !strings.Contains(first, `{"end":`) {
+		t.Fatalf("export: exit %d\n%s\n%s", code, first, errs)
+	}
+	dir := t.TempDir()
+	copied := filepath.Join(dir, "copy.db")
+	if code, out, errs := hc(t, first, "import", copied); code != 0 || !strings.Contains(out, "imported ") {
+		t.Fatalf("import: exit %d\n%s\n%s", code, out, errs)
+	}
+	if code, second, errs := hc(t, "", "export", copied); code != 0 || second != first {
+		t.Fatalf("the second export differs: exit %d\n%s\n---\n%s\n%s", code, first, second, errs)
+	}
+	expect(t, 0, "ok:", "check", copied)
+	if code, out, errs := hc(t, first, "import", f); code != 1 || !strings.Contains(out+errs, "already holds record tables") {
+		t.Fatalf("import into a file with records: exit %d\n%s\n%s", code, out, errs)
+	}
+	bad := filepath.Join(dir, "bad.db")
+	if code, out, errs := hc(t, first[:len(first)/2], "import", bad); code != 1 || !strings.Contains(out+errs, "not a valid HyperCrux export") {
+		t.Fatalf("import of half an export: exit %d\n%s\n%s", code, out, errs)
+	}
+	if _, err := os.Stat(bad); !os.IsNotExist(err) {
+		t.Fatalf("a failed import left %s behind: %v", bad, err)
+	}
+	expect(t, 1, "no such file", "export", filepath.Join(dir, "typo.db"))
 }
 
 func mistakes(t *testing.T, f string) {
