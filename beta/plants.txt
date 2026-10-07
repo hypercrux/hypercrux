@@ -1,0 +1,5 @@
+# Planted bugs, one a line: its name, then the packages whose tests must
+# catch it. scripts/planted.sh builds with the hypercrux_planted tag, sets
+# HYPERCRUX_PLANT to each name in turn, and requires the tests to fail.
+vecmath/four-sums ./beta/internal/vecmath
+vecmath/sums-in-a-row ./beta/internal/vecmath

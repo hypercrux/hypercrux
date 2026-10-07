@@ -1,0 +1,71 @@
+name: beta
+
+# The Beta's own jobs, beside the test workflow's (task P1 in BETA.md).
+# Releases of 0.x wait for the test workflow only, which already runs the
+# Beta's tests on amd64 with the race detector; nothing here holds one up.
+# When the Beta itself is released (task R4), its release waits for these.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: beta-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Every file in beta/ builds only on Linux, apart from a doc.go per
+  # package, and the code is gofmt'd.
+  rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: sh scripts/check-beta.sh
+
+  # The Beta's tests on ARM Linux, with the race detector, including the
+  # search loop's check for the same bits as on x86.
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: go vet ./beta/...
+      - run: go test -count=1 ./beta/...
+      - run: go test -race -count=1 -short ./beta/...
+
+  # Every fuzz target for 30 seconds. Hours-long runs are task R1's. An
+  # input that fails is kept as an artifact, to add to testdata/fuzz.
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: sh scripts/fuzz.sh 30s
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: failing-fuzz-inputs
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
+
+  # Each bug planted in the Beta's code, listed in beta/plants.txt, has to
+  # make the tests fail.
+  planted:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: sh scripts/planted.sh

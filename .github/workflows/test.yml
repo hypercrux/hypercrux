@@ -24,14 +24,3 @@ jobs:
       - run: go test -count=1 ./...
       - if: runner.os == 'Linux'
         run: go test -race -count=1 -short ./...
-
-  # The Beta's search loop has to give the same bits on ARM as on x86 (task
-  # A5). P1 widens this job to the whole of beta/.
-  arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: "1.27.x"
-      - run: go test -count=1 -v ./beta/internal/vecmath/

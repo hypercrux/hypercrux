@@ -27,6 +27,9 @@ import "math"
 
 // Dot returns the dot product of a and b, which have the same length.
 func Dot(a, b []float32) float64 {
+	if plant != "" { // only in builds with planted bugs; see plant_on.go
+		return plantedDot(a, b)
+	}
 	b = b[:len(a)]
 	var s0, s1, s2, s3, s4, s5, s6, s7 float64
 	n := len(a) &^ 7
@@ -66,6 +69,9 @@ func Widen(q []float32) Wide {
 // Dot returns the dot product of w and v, the same bits as Dot on the
 // float32 values w was made from.
 func (w Wide) Dot(v []float32) float64 {
+	if plant != "" {
+		return plantedWideDot(w, v)
+	}
 	v = v[:len(w)]
 	var s0, s1, s2, s3, s4, s5, s6, s7 float64
 	n := len(w) &^ 7
