@@ -34,21 +34,31 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   stubs that name the task that makes them work.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
+- `internal/fault/`: the crash tests' fault layer, a disk held in memory
+  behind `fsys.FS` and `fsys.File`. A simulated power cut keeps, loses or
+  tears each sector written since the last sync, any call can be made to
+  fail at its nth use, and a seed decides every choice.
 - `internal/format/`: the change list, `Change`, which the format's batches
   carry, and the format's golden fixtures in `internal/format/testdata`,
   annotated hex for each part of the format and two small databases, with
   the test that checks them against FORMAT.md, and the codec, which reads
   and writes headers, batches and markers as pure functions.
 - `internal/fsys/`: the file calls, `File` and `FS`, which the crash tests'
-  fault layers wrap. The real ones, through Go's `syscall` package, come
-  with the log.
+  fault layers wrap, and the real ones, `OS`, through Go's `syscall`
+  package.
+- `internal/logfile/`: the database file: creating a database, reading its
+  log on opening, and commits under the write lock, a mutex then `flock`,
+  each with its batch, a sync and its marker.
 - `internal/query/`: SQL. For now, the operator iterator, `Rows`.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
 - `internal/store/`: the in-memory copy, with its read API, `Reader`. So
   far it holds the records with their fields and each table's field list,
-  and its writes give the changes they amount to.
+  and its writes give the changes they amount to. Reads share it through
+  `Read`, and writes go through a transaction from `Begin`, which holds
+  readers off from its first change until it ends, and puts the copy back
+  with its undo list when it rolls back.
 - `internal/value/`: the value type, holding FORMAT.md's six kinds of value
   bit for bit, and `FromGo`, 0.x's conversions from Go values.
 - `internal/vecmath/`: the search loop. Dot products, norms and distances
