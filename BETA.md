@@ -1,11 +1,14 @@
 # HyperCrux Beta: a plan for a new engine in Go
 
-**Status: a plan. Nothing in it is built.** HyperCrux 0.x stays what it is,
-a Go library and command on SQLite, and keeps getting fixes. This document
-describes a new engine for HyperCrux, written in Go, with all four handles
-built in, and what it would take to build. Every 0.1 measurement below comes
-from [test/results](test/results). The Beta figures are targets, to be
-measured the same way before anyone quotes them.
+**Status: under way.** The go-ahead came on 7 October 2026. The work is in
+[beta/](beta/), one task at a time, and
+[beta/tasks/README.md](beta/tasks/README.md) shows where it stands.
+HyperCrux 0.x stays what it is, a Go library and command on SQLite, and
+keeps getting fixes. This document describes a new engine for HyperCrux,
+written in Go, with all four handles built in, and what it would take to
+build. Every 0.1 measurement below comes from [test/results](test/results).
+The Beta figures are targets, to be measured the same way before anyone
+quotes them.
 
 ## What the Beta is for
 
@@ -588,10 +591,10 @@ first, alongside the spec.
 
 How the work is run:
 
-- The task board lives in the repository, one file per task, with its
-  contract, the files it owns, its closing test, its status and notes. A
-  session starts from the task's file and ends with its test green and a
-  note.
+- The task board is [beta/tasks/README.md](beta/tasks/README.md), with one
+  file per task beside it: a brief before the task starts, and a record of
+  what was done once it's finished. A session starts from the task's file
+  and ends with its test green and a note.
 - The interfaces from P3 change only through a small task that updates every
   caller at once.
 - Each task owns its files. Shared files, such as CI, the interfaces and the
@@ -600,12 +603,14 @@ How the work is run:
 
 ### The owner's part
 
-- The go-ahead, the one decision still open.
+- The go-ahead, given on 7 October 2026.
+- After each task, the word to carry on. The work runs one task at a time
+  and stops after each, so the owner sees every step and controls what it
+  costs. The note at each stop also says so if the file tasks are running
+  past one and a half times their hours, or if the first working version
+  misses a speed target by more than double.
 - Publishing releases: a 0.x release with export and import once A2 is done,
   and the Beta itself.
-- One check-in, only if the file tasks run past one and a half times their
-  hours, or the first working version misses a speed target by more than
-  double. Otherwise progress is a note in the repository.
 
 Everything else is automatic. Each task's test is a CI job, a review agent
 checks the spec against this plan, a script compares the targets with 0.1's
@@ -629,13 +634,16 @@ that must run in order come to 16, and they can be done by hour 22.
 | Working days after the go-ahead | about 17 | about 9 to 10 | about 7 |
 | First working version, with its tests, in working days | about 5 | about 4 | about 3 |
 
-The plan assumes two agents, which keeps most of the gain for little
+The estimate assumed two agents, which keeps most of the gain for little
 coordination: about 9 to 10 working days after the go-ahead, roughly two
 weeks of calendar time with a working session most days. Work split between
 agents costs 10 to 20 per cent more effort in merging and integration, which
-the two- and three-agent figures include. The schedule does the first
+the two- and three-agent figures include. That schedule does the first
 working version's tasks first, which doesn't delay the finish, and runs the
-five early tasks alongside the spec.
+five early tasks alongside the spec. The owner chose instead to approve each
+task before the next one starts, so the work runs one task at a time, in the
+order on the task board: the same 133 hours, with the calendar set by the
+approvals.
 
 HyperCrux is developed in working sessions by Claude, an AI coding agent
 made by Anthropic. The project's owner gives the go-ahead and publishes the
@@ -743,10 +751,8 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 
 ## Decisions
 
-Still open: the go-ahead for the Beta.
-
-Decided:
-
+- The go-ahead came on 7 October 2026. The work runs one task at a time, and
+  after each task it stops until the owner says to carry on.
 - The Beta lives in a `beta/` folder in this repository, beside 0.x, which
   stays as it is. A branch wouldn't do, because the tests run 0.x and the
   Beta side by side in one binary.
@@ -754,6 +760,5 @@ Decided:
   alongside the spec.
 - 0.x's export and import ship in a 0.x release of their own once A2 is
   done.
-- 0.x gets no C search loop in the meantime. The Beta's own search would
-  come about two weeks after the go-ahead, and a C loop wouldn't carry over
-  to it.
+- 0.x gets no C search loop in the meantime. The Beta brings its own search,
+  and a C loop wouldn't carry over to it.
