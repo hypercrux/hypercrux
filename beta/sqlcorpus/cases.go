@@ -63,8 +63,9 @@ func each(sql string, preds []string) []Case {
 	return out
 }
 
-// statements are written by hand, with a first guess at which are inside
-// the Beta's subset, from BETA.md's "Queries and SQL". P5 settles them.
+// statements are written by hand, from BETA.md's "Queries and SQL". Which
+// are inside the Beta's subset is settled in beta/SQL.md, and each one
+// outside it says why in its note.
 func statements() []Case {
 	var s []Case
 	add := func(cs ...Case) { s = append(s, cs...) }
@@ -98,7 +99,7 @@ func statements() []Case {
 		in(`SELECT key FROM docs ORDER BY key LIMIT -1`).with("a negative limit means no limit"),
 		in(`SELECT key FROM docs ORDER BY key LIMIT 100 OFFSET 7`),
 		in(`SELECT key FROM docs ORDER BY key LIMIT ? OFFSET ?`, int64(2), int64(1)),
-		out(`SELECT key FROM docs ORDER BY key LIMIT 2, 3`).with("SQLite's LIMIT offset, count"),
+		out(`SELECT key FROM docs ORDER BY key LIMIT 2, 3`).with("SQLite's LIMIT offset, count; the subset has LIMIT and OFFSET"),
 		in(`SELECT name, age FROM people ORDER BY age, key`),
 		in(`SELECT name FROM people WHERE email IS NULL ORDER BY key`),
 		in(`SELECT * FROM docs WHERE key = 'docs:3'`),
@@ -158,15 +159,15 @@ func statements() []Case {
 		in(`SELECT count(*) FROM docs LIMIT 1`),
 		in(`SELECT sum(n) FROM docs WHERE status IS NULL`),
 		in(`SELECT count(*) AS c FROM t_1 WHERE vec IS NULL`),
-		out(`SELECT group_concat(key) FROM docs`).with("the order isn't set"),
-		out(`SELECT count(DISTINCT status) FROM docs`),
+		out(`SELECT group_concat(key) FROM docs`).with("group_concat(), whose order isn't set"),
+		out(`SELECT count(DISTINCT status) FROM docs`).with("DISTINCT in an aggregate"),
 		out(`SELECT key, count(*) FROM docs`).with("a bare column next to an aggregate"),
 	)
 
 	// Walks, in 0.x's forms and the Beta's.
 	walk2 := `SELECT value AS key FROM json_each(walk('people:1', 2)) ORDER BY key`
 	add(
-		in(`SELECT walk('people:1', 1)`).with("the scalar form, JSON text; P5 decides"),
+		in(`SELECT walk('people:1', 1)`).with("the function form, which gives JSON text"),
 		in(`SELECT walk('people:1', 2)`),
 		in(`SELECT walk('people:1', 3, 'owns')`),
 		in(`SELECT walk('docs:3', 1, NULL, 'in')`),
@@ -184,9 +185,9 @@ func statements() []Case {
 		in(`SELECT key FROM docs WHERE key IN (SELECT value FROM json_each(walk('people:1', 2))) ORDER BY key`),
 		in(`SELECT key FROM docs WHERE key NOT IN (SELECT value FROM json_each(walk('people:1', 2))) ORDER BY key`),
 		in(`SELECT key FROM people WHERE key IN (SELECT value FROM json_each(walk('people:3', 2, 'knows'))) ORDER BY key`),
-		out(`SELECT key, value FROM json_each(walk('people:1', 2)) ORDER BY key`).with("json_each's other columns"),
+		out(`SELECT key, value FROM json_each(walk('people:1', 2)) ORDER BY key`).with("json_each's columns other than value"),
 		in(`SELECT key FROM walk('people:1', 2) ORDER BY key`).via(walk2).
-			with("walk as a table, the Beta's form; its columns are for P5 to settle"),
+			with("walk as a table, the Beta's form, with the columns key and depth"),
 		in(`SELECT d.key, d.title FROM walk('people:1', 2) w JOIN docs d ON d.key = w.key ORDER BY d.key`).
 			via(`SELECT d.key, d.title FROM json_each(walk('people:1', 2)) w JOIN docs d ON d.key = w.value ORDER BY d.key`),
 		in(`SELECT key FROM docs WHERE key IN (SELECT key FROM walk('people:1', 2)) ORDER BY key`).
@@ -258,58 +259,70 @@ func statements() []Case {
 		in(`DELETE FROM docs`).after(`SELECT count(*), walk('people:1', 2) FROM docs`),
 		in(`DELETE FROM people WHERE key = 'people:404'`),
 		in(`DELETE FROM people WHERE age < ?`, int64(30)).after(`SELECT key FROM people ORDER BY key`),
-		out(`INSERT INTO docs (key, title) SELECT 'docs:30', title FROM docs WHERE key = 'docs:1'`).after(allDocs),
-		out(`INSERT OR REPLACE INTO docs (key, title) VALUES ('docs:1', 'replaced')`).after(allDocs),
-		out(`INSERT INTO docs (key, n) VALUES ('docs:1', 9) ON CONFLICT (key) DO UPDATE SET n = excluded.n`).after(allDocs),
-		out(`REPLACE INTO docs (key) VALUES ('docs:1')`).after(allDocs),
-		out(`UPDATE docs SET n = (SELECT max(n) FROM docs)`).after(allDocs),
-		out(`DELETE FROM docs WHERE key IN (SELECT key FROM docs WHERE n > 5)`).after(allDocs),
-		out(`UPDATE docs SET n = 1 WHERE key = 'docs:1' RETURNING key`),
+		out(`INSERT INTO docs (key, title) SELECT 'docs:30', title FROM docs WHERE key = 'docs:1'`).after(allDocs).
+			with("INSERT ... SELECT"),
+		out(`INSERT OR REPLACE INTO docs (key, title) VALUES ('docs:1', 'replaced')`).after(allDocs).
+			with("a conflict clause"),
+		out(`INSERT INTO docs (key, n) VALUES ('docs:1', 9) ON CONFLICT (key) DO UPDATE SET n = excluded.n`).after(allDocs).
+			with("an upsert"),
+		out(`REPLACE INTO docs (key) VALUES ('docs:1')`).after(allDocs).with("REPLACE"),
+		out(`UPDATE docs SET n = (SELECT max(n) FROM docs)`).after(allDocs).
+			with("a subquery other than the one-record one"),
+		out(`DELETE FROM docs WHERE key IN (SELECT key FROM docs WHERE n > 5)`).after(allDocs).
+			with("IN over a subquery other than a walk"),
+		out(`UPDATE docs SET n = 1 WHERE key = 'docs:1' RETURNING key`).with("RETURNING"),
 	)
 
 	// Outside the subset.
 	add(
-		out(`SELECT status, count(*) FROM docs GROUP BY status ORDER BY status`),
-		out(`SELECT status, count(*) FROM docs GROUP BY status HAVING count(*) > 1 ORDER BY status`),
-		out(`SELECT d.key, p.name FROM docs d JOIN people p ON p.key = 'people:1' ORDER BY d.key`),
-		out(`SELECT d.key FROM docs d LEFT JOIN people p ON p.name = d.title ORDER BY d.key`),
-		out(`SELECT d.key, p.key FROM docs d, people p WHERE d.n = p.age ORDER BY 1`),
-		out(`SELECT key FROM docs NATURAL JOIN people`),
-		out(`SELECT DISTINCT status FROM docs ORDER BY status`),
-		out(`SELECT key, CASE WHEN n > 5 THEN 'big' ELSE 'small' END FROM docs ORDER BY key`),
-		out(`WITH x AS (SELECT key FROM docs) SELECT key FROM x ORDER BY key`),
-		out(`WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 3) SELECT i FROM c`),
-		out(`SELECT key, row_number() OVER (ORDER BY key) FROM docs ORDER BY key`),
-		out(`SELECT key FROM docs UNION SELECT key FROM people ORDER BY 1`),
-		out(`SELECT key FROM docs EXCEPT SELECT value FROM json_each(walk('people:1', 1)) ORDER BY 1`),
-		out(`SELECT key FROM docs INTERSECT SELECT key FROM docs WHERE n > 2 ORDER BY 1`),
-		out(`SELECT key FROM docs WHERE n > (SELECT avg(n) FROM docs) ORDER BY key`),
-		out(`SELECT key FROM docs d WHERE EXISTS (SELECT 1 FROM people p WHERE p.name = d.title) ORDER BY key`),
-		out(`SELECT key FROM docs WHERE key IN (SELECT key FROM people) ORDER BY key`),
-		out(`SELECT (SELECT count(*) FROM people)`),
-		out(`SELECT * FROM (SELECT key FROM docs) ORDER BY key`),
+		out(`SELECT status, count(*) FROM docs GROUP BY status ORDER BY status`).with("GROUP BY"),
+		out(`SELECT status, count(*) FROM docs GROUP BY status HAVING count(*) > 1 ORDER BY status`).
+			with("GROUP BY and HAVING"),
+		out(`SELECT d.key, p.name FROM docs d JOIN people p ON p.key = 'people:1' ORDER BY d.key`).
+			with("a join of two tables"),
+		out(`SELECT d.key FROM docs d LEFT JOIN people p ON p.name = d.title ORDER BY d.key`).with("a left join"),
+		out(`SELECT d.key, p.key FROM docs d, people p WHERE d.n = p.age ORDER BY 1`).with("a join of two tables"),
+		out(`SELECT key FROM docs NATURAL JOIN people`).with("a natural join"),
+		out(`SELECT DISTINCT status FROM docs ORDER BY status`).with("DISTINCT"),
+		out(`SELECT key, CASE WHEN n > 5 THEN 'big' ELSE 'small' END FROM docs ORDER BY key`).with("CASE"),
+		out(`WITH x AS (SELECT key FROM docs) SELECT key FROM x ORDER BY key`).with("WITH"),
+		out(`WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM c WHERE i < 3) SELECT i FROM c`).
+			with("a recursive WITH; walks follow links"),
+		out(`SELECT key, row_number() OVER (ORDER BY key) FROM docs ORDER BY key`).with("a window function"),
+		out(`SELECT key FROM docs UNION SELECT key FROM people ORDER BY 1`).with("UNION"),
+		out(`SELECT key FROM docs EXCEPT SELECT value FROM json_each(walk('people:1', 1)) ORDER BY 1`).with("EXCEPT"),
+		out(`SELECT key FROM docs INTERSECT SELECT key FROM docs WHERE n > 2 ORDER BY 1`).with("INTERSECT"),
+		out(`SELECT key FROM docs WHERE n > (SELECT avg(n) FROM docs) ORDER BY key`).
+			with("a subquery other than the one-record one"),
+		out(`SELECT key FROM docs d WHERE EXISTS (SELECT 1 FROM people p WHERE p.name = d.title) ORDER BY key`).
+			with("EXISTS"),
+		out(`SELECT key FROM docs WHERE key IN (SELECT key FROM people) ORDER BY key`).
+			with("IN over a subquery other than a walk"),
+		out(`SELECT (SELECT count(*) FROM people)`).with("a subquery other than the one-record one"),
+		out(`SELECT * FROM (SELECT key FROM docs) ORDER BY key`).with("a subquery in FROM"),
 		out(`SELECT date(joined, '+1 day') FROM people ORDER BY key`).with("date on a stored date"),
-		out(`SELECT strftime('%Y', '2026-10-07')`),
-		out(`SELECT json_extract(tags, '$[0]') FROM docs WHERE key = 'docs:4'`),
-		out(`SELECT printf('%05d', n) FROM docs ORDER BY key`),
-		out(`SELECT key, n & 1, n | 2, n << 1, ~n FROM docs ORDER BY key`),
-		out(`SELECT key FROM docs WHERE title GLOB 'Q*' ORDER BY key`),
-		out(`SELECT key FROM docs ORDER BY key COLLATE NOCASE`),
-		out(`SELECT key FROM docs WHERE title = 'retro' COLLATE NOCASE`),
-		out(`SELECT key, title FROM docs ORDER BY title NULLS LAST, key`),
-		out(`SELECT sqlite_version() > '3'`),
-		out(`SELECT name FROM sqlite_schema WHERE name = 'docs'`),
+		out(`SELECT strftime('%Y', '2026-10-07')`).with("strftime()"),
+		out(`SELECT json_extract(tags, '$[0]') FROM docs WHERE key = 'docs:4'`).with("JSON functions over fields"),
+		out(`SELECT printf('%05d', n) FROM docs ORDER BY key`).with("printf()"),
+		out(`SELECT key, n & 1, n | 2, n << 1, ~n FROM docs ORDER BY key`).with("bit operators"),
+		out(`SELECT key FROM docs WHERE title GLOB 'Q*' ORDER BY key`).with("GLOB"),
+		out(`SELECT key FROM docs ORDER BY key COLLATE NOCASE`).with("COLLATE"),
+		out(`SELECT key FROM docs WHERE title = 'retro' COLLATE NOCASE`).with("COLLATE"),
+		out(`SELECT key, title FROM docs ORDER BY title NULLS LAST, key`).with("NULLS LAST"),
+		out(`SELECT sqlite_version() > '3'`).with("SQLite's own functions"),
+		out(`SELECT name FROM sqlite_schema WHERE name = 'docs'`).with("SQLite's own tables"),
 		out(`SELECT src, type, dst FROM hc_links ORDER BY src, type, dst`).with("0.x's own tables"),
-		out(`SELECT key FROM docs WHERE rowid = 1`),
-		out(`VALUES (1, 2)`),
-		out(`EXPLAIN SELECT key FROM docs`).with("the answer depends on SQLite's version"),
-		out(`PRAGMA table_info(docs)`),
-		out(`CREATE TABLE extra (key TEXT PRIMARY KEY)`).after(`SELECT count(*) FROM sqlite_schema WHERE name = 'extra'`),
-		out(`DROP TABLE people`),
-		out(`ALTER TABLE docs ADD COLUMN extra`),
-		out(`CREATE INDEX docs_n ON docs (n)`),
-		out(`VACUUM`),
-		out(`BEGIN`),
+		out(`SELECT key FROM docs WHERE rowid = 1`).with("rowid, which records haven't got"),
+		out(`VALUES (1, 2)`).with("VALUES on its own"),
+		out(`EXPLAIN SELECT key FROM docs`).with("EXPLAIN, whose answer depends on SQLite's version"),
+		out(`PRAGMA table_info(docs)`).with("PRAGMA"),
+		out(`CREATE TABLE extra (key TEXT PRIMARY KEY)`).after(`SELECT count(*) FROM sqlite_schema WHERE name = 'extra'`).
+			with("CREATE TABLE; tables come from Put"),
+		out(`DROP TABLE people`).with("DROP TABLE; Drop does it"),
+		out(`ALTER TABLE docs ADD COLUMN extra`).with("ALTER TABLE; fields come from Put"),
+		out(`CREATE INDEX docs_n ON docs (n)`).with("CREATE INDEX"),
+		out(`VACUUM`).with("VACUUM; Compact does it"),
+		out(`BEGIN`).with("BEGIN; transactions go through Update"),
 		out(`SELECT 1; SELECT 2`).with("two statements"),
 	)
 
@@ -340,9 +353,9 @@ type expr struct {
 }
 
 // exprGen makes random expressions from literals of every type, the
-// operators and the candidate functions BETA.md lists for P5, plus CAST and
-// nullif. About a third of the operators go without parentheses, so the
-// corpus holds SQLite's precedence too.
+// operators, and the text and number functions beta/SQL.md takes, CAST and
+// nullif among them. About a third of the operators go without parentheses,
+// so the corpus holds SQLite's precedence too.
 type exprGen struct {
 	r    *rand.Rand
 	args []difftest.Value

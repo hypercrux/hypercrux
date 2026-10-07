@@ -113,6 +113,22 @@ func TestReplayTwice(t *testing.T) {
 	t.Logf("%d cases replayed clean on 0.x twice", len(cases))
 }
 
+// TestTheMarksFollowTheSpec checks the corpus is marked as beta/SQL.md says:
+// every statement outside the subset says why in its note, every expression
+// and every case on 'now' is in, and every date case on a fixed date is out.
+func TestTheMarksFollowTheSpec(t *testing.T) {
+	for _, cs := range loadAll(t) {
+		switch {
+		case cs.Kind == "statement" && !cs.In && cs.Note == "":
+			t.Errorf("%s is outside the subset, and its note doesn't say why: %s", cs.ID, cs.SQL)
+		case (cs.Kind == "expression" || cs.Kind == "now") && !cs.In:
+			t.Errorf("%s is marked out, and beta/SQL.md has every %s case in: %s", cs.ID, cs.Kind, cs.SQL)
+		case cs.Kind == "date" && cs.In:
+			t.Errorf("%s is marked in, and beta/SQL.md has dates on 'now' only: %s", cs.ID, cs.SQL)
+		}
+	}
+}
+
 // TestTheCorpusIsBroad checks the corpus is the size the plan asks for and
 // that its answers cover every kind of value and error.
 func TestTheCorpusIsBroad(t *testing.T) {

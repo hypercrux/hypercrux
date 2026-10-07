@@ -47,6 +47,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   checks on both against a golden file.
 - `plants.txt`: the bugs planted in the Beta's code, each built in only
   with the `hypercrux_planted` tag. Every one has to make its tests fail.
+- `SQL.md`: the Beta's SQL, the subset of SQLite's that it takes, with the
+  grammar, the functions, the rules for values, the kind of each error, and
+  the named 0.x tests the Beta must pass.
 - `sqlcorpus/`: SQL with 0.x's answers, in `sqlcorpus/testdata` as JSON
   lines: statements inside and outside the Beta's subset, 3,000 generated
   expressions and 600 date cases. They run on a small fixed database that

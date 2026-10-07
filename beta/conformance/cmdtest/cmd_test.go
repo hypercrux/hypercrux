@@ -69,6 +69,24 @@ func expect(t *testing.T, wantCode int, wantOut string, args ...string) string {
 	return out
 }
 
+// sections are the parts of TestCommands, in the order they run.
+var sections = []struct {
+	name string
+	fn   func(t *testing.T, f string)
+}{
+	{"VersionAndHelp", versionAndHelp},
+	{"PutGetAndLink", putGetAndLink},
+	{"Scan", scan},
+	{"NeighboursAndWalk", neighboursAndWalk},
+	{"Nearest", nearest},
+	{"SQL", sqlStatements},
+	{"SQLTriggers", sqlTriggers},
+	{"UnlinkDeleteAndCheck", unlinkDeleteAndCheck},
+	{"AdoptAndDrop", adoptAndDrop},
+	{"ExportAndImport", exportAndImport},
+	{"Mistakes", mistakes},
+}
+
 // TestCommands is 0.x's TestEveryCommand in sections, run in order on one
 // file. Sections leave the file as later ones expect, so any of them can be
 // skipped without breaking the rest.
@@ -80,22 +98,6 @@ func TestCommands(t *testing.T) {
 		}
 	}
 	f := filepath.Join(t.TempDir(), "notes.db")
-	sections := []struct {
-		name string
-		fn   func(t *testing.T, f string)
-	}{
-		{"VersionAndHelp", versionAndHelp},
-		{"PutGetAndLink", putGetAndLink},
-		{"Scan", scan},
-		{"NeighboursAndWalk", neighboursAndWalk},
-		{"Nearest", nearest},
-		{"SQL", sqlStatements},
-		{"SQLTriggers", sqlTriggers},
-		{"UnlinkDeleteAndCheck", unlinkDeleteAndCheck},
-		{"AdoptAndDrop", adoptAndDrop},
-		{"ExportAndImport", exportAndImport},
-		{"Mistakes", mistakes},
-	}
 	known := map[string]bool{}
 	for _, s := range sections {
 		known[s.name] = true

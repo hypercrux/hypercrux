@@ -21,8 +21,8 @@ import (
 	"github.com/hypercrux/hypercrux/beta/difftest"
 )
 
-// Case is one entry in the corpus: a statement, its arguments, a first
-// guess at whether it's inside the Beta's subset, and 0.x's answer.
+// Case is one entry in the corpus: a statement, its arguments, whether it's
+// inside the Beta's subset, and 0.x's answer.
 type Case struct {
 	ID    string           `json:"id"`
 	Kind  string           `json:"kind"` // statement, expression, date or now
@@ -30,9 +30,9 @@ type Case struct {
 	Args  []difftest.Value `json:"args,omitempty"`
 	Via   string           `json:"via,omitempty"`   // what 0.x runs instead, for a form only the Beta has
 	After string           `json:"after,omitempty"` // a query run after a write, before it's rolled back
-	In    bool             `json:"in"`              // the first guess at whether it's inside the subset, for P5
+	In    bool             `json:"in"`              // inside the Beta's subset, as beta/SQL.md settles it
 	Close bool             `json:"close,omitempty"` // reals may differ by conformance.DistanceBound
-	Note  string           `json:"note,omitempty"`
+	Note  string           `json:"note,omitempty"`  // for a statement outside the subset, why
 	// Answer is 0.x's answer. A "now" case has none, since the date moves:
 	// it's compared with a reference engine's answer at the time.
 	Answer *Answer `json:"answer,omitempty"`
