@@ -2,25 +2,23 @@
 
 **Status: a plan. Nothing in it is built.** HyperCrux 0.x stays what it is,
 a Go library and command on SQLite, and keeps getting fixes. This document
-describes a HyperCrux built for as much speed as a native engine allows: a
-new database engine written in C with all four handles, and what it would
-take. Every 0.1 figure below comes from [test/results](test/results). The
-Beta figures are targets, to be measured the same way before anyone quotes
-them.
+describes a new engine for HyperCrux, written in C, with all four handles
+built in, and what it would take to build. Every 0.1 measurement below
+comes from [test/results](test/results). The Beta figures are targets, to be
+measured the same way before anyone quotes them.
 
 ## What the Beta is for
 
 HyperCrux 0.1 proved the idea: one record, reachable by key, SQL, links and
-similarity, with all four kept in step by one transaction. It runs on
-SQLite and keeps its rules in the file as triggers, which is why any program
-that speaks SQLite and follows [FORMAT.md](FORMAT.md) can share a HyperCrux
-file safely.
+similarity, with all four kept in step by one transaction. It runs on SQLite
+and keeps its rules in the file as triggers, which is why any program that
+speaks SQLite and follows [FORMAT.md](FORMAT.md) can share a HyperCrux file
+safely.
 
-The Beta keeps the idea and replaces the machinery. A native engine can lay
-out vectors, links and keys for the way they're actually read, and it can do
-the arithmetic of search with SIMD instructions inside the engine. The cost
-is the SQLite file, with everything that comes with it, from its tools to
-its decades of testing.
+The Beta keeps the idea and replaces the machinery with something smaller
+and faster, built for the way each handle actually reads. The cost is the
+SQLite file, with everything that comes with it, from its tools to its
+decades of testing.
 
 ## Where 0.1 spends its time
 
@@ -29,255 +27,384 @@ runs:
 
 | Operation | 0.1 | Where the time goes |
 |---|---|---|
-| Nearest 10 among 10,000 vectors of 384 values | 42 ms | About 4.2 µs a vector. SQLite needs about 1 µs to read a row (see below); the rest is the driver copying each vector into Go and a Go loop that decodes each float on its own |
+| Nearest 10 among 10,000 vectors of 384 values | 42 ms | About 4.2 µs a vector. SQLite needs about 1 µs to read a row (see below), which leaves about 3 µs for the driver handing each row and vector to Go and the Go loop that decodes each float; that split isn't timed |
 | Nearest 10 among 100,000 vectors of 384 values | 0.41 s | The same cost per vector |
 | The same, a tenth passing a filter | 0.13 s | The 90,000 rows that fail the filter cost about 1 µs each, which is SQLite reading and testing a row |
 | Nearest 10 among 10,000 vectors of 1,536 values | 0.12 s | Each extra value adds about 7 ns. Rows this long spill onto an SQLite overflow page and each vector is copied into Go first, so the loop is only part of it |
 | Get a record by key | 18 µs | One indexed SQL query through Go's database/sql; not timed in parts |
-| Walk 1 and 3 links out, 100,000 records with 5 links each | 43 µs and 0.51 ms | A recursive SQL query through database/sql; not timed in parts |
-| Put one record, committed | 0.35 ms | Mostly the commit's sync, which any engine with the same guarantee pays |
+| Walk 1 and 3 links out, 100,000 records with 5 links each | 43 µs and 0.51 ms | A key check and a recursive SQL query through database/sql; not timed in parts |
+| Put one record, committed | 0.35 ms | Mostly the commit, probably its sync, which any engine with the same guarantee pays; not timed in parts |
 | Put records with 384-value vectors, 1,000 per transaction | 51 µs a record | Each key stored three times (the row, its primary-key index and hc_keys, the last by a trigger), trigger checks on the vector, and three statements a record through database/sql; not timed apart |
 
 The 1 µs figure is derived: the filtered run compares as many vectors as
 the 10,000-vector run, reads 90,000 more rows that fail the filter, and
 takes about 86 ms longer.
 
+## The idea
+
+Start from what each handle needs:
+
+- **Key:** find one record. A hash lookup does it.
+- **SQL:** filter and sort fields. That's fastest when each field sits in a
+  column that can be scanned in one pass.
+- **Links:** follow references. That's fastest when each record's references
+  sit in an array.
+- **Similarity:** stream vectors. That's fastest when a table's vectors sit
+  in one block.
+
+Three of the four want their data as arrays in memory. A B-tree is the right
+structure for data bigger than memory, and HyperCrux's data, on one machine,
+from thousands to around a million records, fits in memory.
+
+Two more observations finish the design. A link is a field that holds other
+records' keys, and a vector is a field that holds numbers, so there's only
+one thing to store: records with fields. And if every index is built from
+the records, only the records have to survive a crash. For that, nothing is
+simpler than an append-only log, where a crash can only cut off the end.
+
+So the Beta has one durable truth, the log. Every index for every handle is
+built from it, kept in a snapshot that processes share and a small delta in
+each process. The four handles can't disagree, because they're all views of
+the same point in the same log.
+
 ## What stays and what goes
 
 **Stays:**
 
-- The promise that the four handles never disagree. A record, its key, its
-  links and its vector change in one transaction, and a delete takes the
-  links with it.
+- The promise that the four handles never disagree. A record, its fields,
+  its links and its vector change in one transaction, and a delete takes
+  the record's links with it, in both directions.
 - Exact search by default. A search compares every vector that passes the
   filter.
-- One database in one file, shared by many processes on one machine, with a
-  small lock file beside it.
-- The Go API and the command's verbs, so programs written against 0.x move
-  over with little change.
+- Many processes sharing one database on one machine.
+- The Go API and the command's verbs, so programs that stick to the Go API
+  and the SQL subset move over with little change.
 - The test philosophy: kill the writer at random, many processes on one
-  file, a second language on the same file, every figure recorded.
+  database, a second language on the same database, every figure recorded.
 
 **Goes:**
 
-- The file stops being an SQLite file. SQLite tools can't open it, and other
+- The SQLite file. SQLite tools can't open a Beta database, and other
   languages reach it through bindings instead of their own SQLite driver.
 - Rules in the file. The engine enforces them, which is safe because every
   write goes through the engine.
+- Data bigger than memory. The Beta is built for data that fits; past that,
+  it slows down sharply.
+- Windows. The Beta runs on Linux and macOS. 0.x keeps its Windows build.
+- Full SQL. The Beta's SQL is a defined subset, listed below. Missing from
+  it, among others: JSON functions over fields, SQL on HyperCrux's own
+  tables (links change through the API instead), declared column types,
+  `UNIQUE` and `CHECK` constraints, upserts and `INSERT OR REPLACE`, and
+  recursive queries over ordinary fields, since walks follow links only.
+- The `adopt` command, and creating a database inside an existing SQLite
+  file.
+- Copying one file as a backup. A database is three files, and copying them
+  by hand in the middle of a compaction can pair the wrong ones, so
+  `hypercrux backup` writes a consistent copy.
 
-**Bridges:** `hypercrux import` reads a 0.x file and writes a Beta file;
-`hypercrux export` goes the other way. 0.x keeps working on its own files
-for as long as anyone uses it.
+**Bridges:** `hypercrux import` reads a 0.x file and writes a Beta
+database; `hypercrux export` goes the other way. 0.x keeps working on its
+own files for as long as anyone uses it.
 
 ## Design
 
-### Storage
+### Records
 
-The base is AltSql DB's storage, described under AltSql below: a
-copy-on-write B-tree in one file, two commit headers, large values on
-overflow pages, and a free list that holds back the pages the last commit
-freed for one more commit, so both headers always describe whole trees.
-Four changes turn it into what HyperCrux needs:
+A record is a key and its fields. The key is `table:id`, as in 0.x. A field
+holds null, a whole number, a real number, text or bytes. Two kinds of field
+carry the other handles:
 
-1. **Readers in other processes.** A lock file holds a reader table in shared
-   memory. A reader records the commit it started from and reads that
-   snapshot for as long as it likes. The writer never reuses a page that a
-   recorded snapshot can still see. Readers never wait for the writer, and
-   the writer never waits for readers. Each reader holds a lock on its own
-   byte of the lock file while its entry is in use, and the writer clears an
-   entry only when it can take that lock. That works across containers and
-   with reused process IDs, given care with POSIX locks, which a process
-   loses when it closes any handle to the file.
-2. **One sync per commit, if it survives the crash tests.** Every page
-   carries a CRC32C checksum (the field exists in AltSql DB and is zero
-   today). A commit writes all its new pages, then its header, and syncs
-   once; it's durable when the sync returns. The header carries the
-   checksum of a list of every page that commit wrote, and each listed page
-   must carry this commit's number as well as the right checksum, so a page
-   that kept its old contents is caught as surely as a torn one. On open,
-   under the writer lock, if the newest header, the list or any page on it
-   doesn't match, the file opens at the commit before, whose pages copy on
-   write never touched. Only one commit is ever unsynced: the next starts
-   writing after this one's sync returns. The writer records each new
-   commit in the lock file once its sync returns, and readers take their
-   starting commit from there, since the newest header on disk may not be
-   durable yet. Opening a file then costs a check of the last commit's
-   pages, so it grows with that commit's size. This has to pass AltSql's
-   crash matrix (a cut at every write, torn sectors, lost unsynced writes)
-   before it's trusted. Until it does, the two syncs AltSql DB does today
-   stay.
-3. **Group commit.** Writers in one process queue up, and their transactions
-   commit together under a single header and a single sync. A lone committed
-   write still costs one sync; many concurrent writers share them.
-4. **Reads from a memory map.** Pages are read in place, with no copy into a
-   cache. A page's checksum and structure are checked the first time a
-   process reads it, and `check` verifies every page. Writes still go
-   through the engine's own buffers.
+- **The vector**, in the field `vec`, as in 0.x: up to 65,536 float32
+  values, the same size across a table, set by the table's first vector.
+- **Links**, named by their type. `customer:42` linking to `docs:7` with the
+  type `owns` means `customer:42` has the link `owns` holding `docs:7`
+  among its targets. Links have a namespace of their own: a link type is any
+  text of 1 to 200 characters, as in 0.x, and never clashes with an ordinary
+  field of the same name. A link must point at a record that exists. `Get`,
+  `Scan` and `SELECT *` return ordinary fields only; links are read with
+  `Neighbours` and walks.
 
-### Keys and records
+Tables and fields appear when a record first uses them, as `Put` does in 0.x.
 
-Every record gets an internal 64-bit ID when it's created. Two key spaces in
-the tree hold it: text key to ID, and ID to the record's key, table and
-packed fields. Links and vectors use IDs, which are eight fixed bytes and
-compare quickly.
+### Files
 
-A record's fields are packed in one value: a field number from the table's
-field dictionary, then the value, for each field present. HyperCrux's `Put`
-can add new fields at any time, and this layout lets it do that without
-rewriting existing rows, which AltSql DB's fixed row layouts can't.
+A Beta database is three files side by side:
 
-`Get` is two lookups in a memory-mapped tree. `Scan` by key prefix walks the
-key space in order, since its keys compare as bytes. Each key is stored
-twice, once in each key space, where 0.1 stores it three times.
+| File | What it holds |
+|---|---|
+| `NAME` | The snapshot: every index, ready to read in place |
+| `NAME-log-N` | The log of generation N: every change since that snapshot |
+| `NAME-lock` | The write lock, and the generation and published end of the log |
+
+The snapshot's header names its generation, and with it the one log that
+goes with it, so opening the snapshot always finds the right log.
+
+### The log
+
+The log is the only file that changes in normal use, and it only grows. A
+commit appends one batch: a length, the generation, a sequence number that
+follows the one before, the changes (put fields, delete a record, add or
+remove a link, create or drop a table), and a CRC32C checksum over all of
+it. A batch counts only when its checksum matches, so a crash can only cut
+off a batch that was being written.
+
+A commit:
+
+1. Takes the write lock (`flock` on the lock file, plus a mutex inside the
+   process), waiting up to 10 seconds, as 0.x does, before failing.
+2. Catches up with any batches it hasn't applied yet.
+3. Checks the changes against the current state: link targets exist,
+   vectors have the table's size, hold only finite values and aren't all
+   zero, and keys and names are valid.
+4. Appends the batch and syncs the log once.
+5. Publishes the new end of the log in the lock file, then applies the batch
+   to its own delta and releases the lock.
+
+If the append or the sync fails, the writer cuts the log back to the
+published end and syncs that before releasing the lock, and the commit
+reports the error. If the cut fails too, the database stops taking writes
+until it's reopened.
+
+Readers only read up to the published end, so they never see a batch before
+its sync has returned. Whoever takes the write lock first reads the log and
+checks each batch in turn: its length fits, its sequence number follows the
+one before, and its checksum, which also covers the generation, matches.
+The first batch that fails ends the log. Complete batches past the
+published end, left by a writer that died before publishing, are synced and
+published, and everything from the first failed batch on is cut off. If
+valid batches follow a failed one, that's damage in the middle of the log:
+the database reports it and cuts nothing. Opening a database does the same
+under the write lock, waiting for it if a writer holds it, so the published
+end is rebuilt from the log and never trusted across a restart. Nothing is
+cut without the write lock. A reader that meets a failed batch before the
+published end, or finds that its snapshot and the lock file name different
+generations, waits for the write lock and reads both again.
+
+The log is read with ordinary reads, never mapped, so cutting off its tail
+can't break a process that's reading it.
+
+Each sync of a growing file also commits its new size, which can cost more
+than overwriting space that's already there. Phase 1 measures it first. If
+it's too slow, the log is grown in large steps ahead of time, and the
+sequence numbers and checksums above mark where the real end is.
+
+On macOS, a plain `fsync` doesn't make the drive flush its own cache. For
+commits, the Beta does what SQLite does by default, a plain `fsync`, with a
+full flush (`F_FULLFSYNC`) as an option. Compaction always uses the full
+flush, as described below.
+
+### Transactions
+
+`Update` takes the write lock and catches up before running its function,
+as 0.x's `BEGIN IMMEDIATE` does, so a read followed by a write inside it
+can't lose another process's commit. Reads inside the function, SQL
+included, see the function's own changes through a layer above the delta.
+The function's changes become one batch when it returns, or vanish if it
+fails. Each call outside `Update`, such as a single `Put`, is a transaction
+of its own.
+
+### The snapshot
+
+The snapshot holds the whole database as of one point in the log, laid out
+for reading in place. Every process maps it into memory, so they share one
+copy through the operating system, and opening a database costs a map and a
+read of the log since the snapshot. That matters for the `hypercrux`
+command, where every call is a new process.
+
+For each table, the snapshot holds:
+
+- the keys, a hash table from key to row, and the rows in key order, for
+  gets and prefix scans;
+- one column per field, each cell a type tag and an 8-byte value, with
+  text and bytes in a shared string area; a column stores only the rows
+  that have the field, so a field few records use costs little;
+- the vector block: every vector of the table back to back, in row order,
+  starting 64-byte aligned and padded at the end, with the float64 norms in
+  an array of their own;
+- the links, as two arrays per table: each row's outgoing links (type,
+  target) and each row's incoming links (type, source).
+
+A header lists every section with its offset, length and CRC32C checksum.
+Opening a database checks the header, and every offset read from the mapped
+snapshot is bounds-checked. `check` reads every section.
+
+### The delta
+
+Each process keeps the changes since the snapshot in memory:
+
+- the records that changed, with their fields, vectors and links, where a
+  cleared field hides the snapshot's value;
+- a mark on every snapshot row that a change replaced or deleted, which
+  scans, searches and filters skip;
+- the links added to and removed from records, indexed by target as well as
+  by source, each holding its latest state, so a key deleted and created
+  again starts with no links;
+- the tables dropped and created since the snapshot, so a table created
+  again doesn't see its old rows.
+
+Reads look at the delta first, then the snapshot. The delta stays small
+because compaction folds it into a new snapshot.
+
+### Processes
+
+One writer at a time per database, any number of readers, across processes.
+The lock file is mapped into every process and holds the log's generation
+and published end in one 64-bit word, written with a single atomic store, so
+checking for new commits is one memory read, and a writer that dies
+mid-update can't leave it half written. A process that finds new batches
+reads and applies them before its next read starts. Inside a process, reads
+share a lock on the delta and catching up takes it briefly on its own, so a
+read always sees one consistent point in the log.
+
+Readers in other processes never wait for the writer. The writer never
+waits for readers; it can wait briefly while a process that's opening the
+database checks the end of the log.
+
+### Compaction
+
+When the log passes a size limit, the writer, still holding the lock, moves
+the database to the next generation:
+
+1. It writes the new snapshot under a temporary name, from the current
+   snapshot and its delta. Its header names generation N+1 and says it
+   covers log N to its end. The writer creates the new, empty log N+1, syncs
+   both files and syncs the directory.
+2. It renames the new snapshot into place and syncs the directory. This
+   rename is the switch: before it, the database is generation N; after it,
+   N+1.
+3. It publishes the new generation in the lock file.
+4. It removes log N.
+
+A crash before the rename leaves generation N whole, plus leftover files
+that the next holder of the write lock removes before it does anything
+else; only the lock holder ever removes them. A crash after the rename
+leaves generation N+1 whole. A process that opened the old snapshot and
+then can't find log N simply opens the snapshot again. Processes in the
+middle of reading the old files keep reading them, since Linux and macOS
+keep a removed or replaced file alive for as long as someone has it open or
+mapped.
+
+Every sync in a compaction is a full flush (`F_FULLFSYNC` on macOS), for
+both files and both directory syncs, since losing a new snapshot after its
+switch would lose the whole database. Compaction runs rarely, so the cost
+is small.
+
+Writers wait while compaction runs. Compacting before the log grows large
+keeps those pauses short; building the next snapshot in the background is a
+later improvement.
+
+### Keys, fields and deletes
+
+- `Get` is a lookup in the delta, then a lookup in the snapshot's hash table.
+- `Put` merges the given fields into the record, as in 0.x.
+- `Scan` by key prefix reads the snapshot's rows in key order and merges the
+  delta's keys in.
+- `Delete` removes the record and its links in both directions. The log
+  stores only the delete; every process works out the same links to remove
+  from the same state, so the batch stays small.
+- `Drop` removes a table with its records and their links.
 
 ### Vectors
 
-Each table's vectors live in a vector segment: runs of contiguous pages
-holding fixed-size slots, one per vector, each with the record's ID. A
-search streams through the segment and computes one dot product per slot.
+A search streams through the table's vector block, skipping rows the delta
+replaced or deleted, then through the delta's vectors, computing one dot
+product per vector and keeping the closest k in a heap.
 
-- **Stored as given.** A vector comes back from `Get` exactly as it went in.
-  The engine also keeps each vector's norm, computed in float64, so cosine
-  distance needs only the dot product. The question is normalised once per
-  search. Zero vectors stay refused, as in 0.x, and SQL's `distance()` keeps
-  returning 1 when one side is zero.
+- **Stored as given.** A vector comes back exactly as it went in. Its norm
+  is kept beside it, and the distance is the dot product divided by the two
+  norms, the formula 0.x uses.
 - **Kernels.** AVX2 and AVX-512 on x86 and NEON on ARM, with a plain C loop
   as the fallback and the reference. Every kernel widens values to float64
-  and adds them in one fixed order, with the same use of fused
-  multiply-add, so every kernel returns the same bits as the reference.
-- **Filters.** A filter is turned into a bitmap of the slots it allows, from
-  an index when there is one, and the scan skips the rest.
-- **A bounded quick pass, still exact.** Optionally, each table keeps a
-  separate run of 8-bit copies of its normalised vectors, each with the size
-  of its rounding error, measured against the values the search uses and
-  rounded up. The quick pass reads that run, a quarter of the bytes, and
-  gives each candidate a range its true distance must fall in, which follows
-  from the Cauchy-Schwarz inequality. If the question is rounded to 8 bits
-  too, its own error widens the range. A candidate is checked against its
-  full vector unless its range starts above the k-th best distance so far
-  plus a margin covering rounding in both passes; until k candidates have
-  full distances, the k-th smallest upper bound stands in. The answer is the
-  same as a full scan's.
-- **Several cores.** Large segments split across threads, each keeping its
-  own top k, merged at the end.
-- **Upkeep.** Deleted slots are marked and reused. Copy on write breaks a
-  run when it copies one page, so a later commit repacks runs that have
-  split up.
+  and adds them in one fixed order: 16 running sums, with value i going to
+  sum i mod 16, and a fixed way of combining them at the end, which the
+  plain C loop follows too. The question isn't scaled before the loop, and a
+  float32 times a float32 is exact in float64, so fused multiply-add can't
+  change the result. The C is built with `-ffp-contract=off` and never with
+  `-ffast-math`, and a search clears denormal flushing in the calling thread
+  and restores it after. Every kernel then returns the same bits as the
+  reference.
+- **Filters.** A filter becomes a bitmap of the rows it allows, built by
+  scanning columns, and the search skips the rest.
+- **Exact.** Every vector that passes the filter is compared. Zero vectors
+  are refused, as in 0.x, and `distance()` treats zero vectors as 0.x does.
 
 ### Links
 
-Two key spaces hold every link, one for each direction: (source ID, type,
-target ID) and (target ID, type, source ID), as fixed-width integers. Link
-types are numbered in a small dictionary. A walk is a breadth-first search
-over IDs with a visited set, reading one short key range per record. It
-doesn't touch SQL or build temporary tables, and it turns IDs back into
-keys only for the answer. Deleting a record reads both of its ranges and
-removes each link from the other side.
+A walk is a breadth-first search over rows with a visited set, reading each
+row's link arrays in the snapshot and merging the delta's added and removed
+links. It never touches SQL or builds temporary tables. `Neighbours` reads
+one row's arrays and merges the delta's links. Incoming links come from the
+incoming arrays, so walking backwards costs the same as walking forwards.
 
-If deep walks across very large graphs ever take most of the time, a
-read-only compressed copy of the adjacency can be added later. The key
-spaces come first because they reuse the tree and its crash safety.
+### Queries and SQL
 
-### SQL
+One small engine serves every handle. Its operators:
 
-AltSql DB's SQL has no joins or subqueries yet, and reads up to 16 columns
-a table. HyperCrux's SQL handle needs joins, `IN (SELECT ...)` filters and
-the one-statement crux query. Two routes, one decision:
+- scan a table's columns, skipping replaced rows, then the delta's rows;
+- filter, a column at a time;
+- walk, from a key, as a source of rows;
+- nearest, over the rows a filter allows;
+- join on equal values, with a hash table;
+- group and aggregate;
+- sort, top k, limit and offset.
 
-- **Route A: SQLite's query engine as the front end.** HyperCrux tables
-  appear to SQLite as virtual tables. SQLite parses and runs the SQL, every
-  row it reads and writes comes from the native engine, and SQLite keeps no
-  file of its own. `distance()` becomes a C function that reads vectors in
-  place. The scalar `walk()` that returns JSON stays, so the crux query
-  keeps its form, and it gains table-valued twins: a `walk()` that returns
-  rows and a new `nearest()`. Queries and row writes in 0.x's SQL keep
-  working, the crux query included. Schema statements change: SQLite won't
-  index, alter or put triggers on a virtual table, so record tables get
-  their columns and indexes through the engine's own calls. SQLite tells a
-  virtual table only about transactions that write to it, so nested
-  savepoints and read snapshots spanning several statements have to come
-  from the engine. The cost is about a megabyte of code and SQLite's per-row
-  overhead between the two.
-- **Route B: grow AltSql's SQL.** Add joins on keys, `IN` subqueries, more
-  columns, and the walk and nearest operators, with a planner that knows
-  them. The engine stays small and easy to follow, and the crux query could
-  plan better than SQLite plans it. It takes longer, and SQL would cover
-  less than 0.x does at first.
+The Go API calls them directly. SQL is parsed and planned onto them. The
+Beta's SQL:
 
-Route A is the pick for the Beta, with the native operators kept apart from
-the front end so that route B can replace it later without touching
-storage.
+- `SELECT` with expressions and aliases, `FROM` one or more tables joined on
+  equal values, `WHERE`, `GROUP BY` with `HAVING`, `ORDER BY`, `LIMIT` and
+  `OFFSET`;
+- `walk(key, depth [, type [, direction]])` as a table in `FROM`, and the
+  0.x form `json_each(walk(...))` accepted unchanged, so the crux query runs
+  as it does today;
+- `distance(a, b)` and `vector('[...]')`. Rows without a vector sort first
+  under `ORDER BY distance(...)`, as in SQLite, so the crux query's
+  `vec IS NOT NULL` keeps its meaning; with that condition and a `LIMIT`,
+  the planner uses a nearest search;
+- `IN` lists and `IN (SELECT ...)`, `BETWEEN`, `LIKE`, `IS NULL`, `CASE` and
+  the usual text and number functions;
+- `date`, `time`, `datetime`, `julianday` and `strftime`, with `'now'` and
+  SQLite's modifiers (plus or minus days, months and years, and the start of
+  a day, month or year), giving SQLite's results, edge cases included;
+- `INSERT`, `UPDATE` and `DELETE`, which go through the same checks as
+  `Put` and `Delete`;
+- `CREATE INDEX` and `DROP INDEX`, optional, for tables large enough that a
+  sorted index beats a column scan.
 
-### Transactions and processes
-
-One writer at a time per file, any number of readers, across processes.
-Every write takes the writer lock and runs in one transaction across all
-four handles. It commits with one sync once that protocol has passed
-AltSql's crash matrix, and with two until then. Readers see a consistent
-snapshot from start to finish. Writes made through SQL go through the same
-write path as `Put`, `Link` and `Delete`, so the rules hold whichever way a
-change comes in.
+Left for later: outer joins, `WITH` and recursive queries (walks cover what
+0.x used them for), views, triggers and window functions.
 
 ### Bindings and tools
 
 - A small, stable C API.
-- The Go package, keeping 0.x's API: `Open`, `Get`, `Put`, `Delete`, `Scan`,
-  `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest`, `Update`, `Exec`,
-  `Query`, `QueryRow`, `Drop` and `Check`. `Query` and `QueryRow` keep their
-  database/sql types, so the binding ships a database/sql driver. `Adopt`
-  and `SQL()` go, since there's no SQLite file to adopt tables from or hand
-  out.
-- The `hypercrux` command with the same verbs, plus `import` and `export`.
+- The Go package, keeping 0.x's exported API apart from `Adopt`, `SQL()`
+  and `ApplicationID`, which have no meaning without an SQLite file.
+  `DriverName` names the new database/sql driver, which `Query` and
+  `QueryRow` use as before.
+- The `hypercrux` command with the same verbs apart from `adopt`, plus
+  `import`, `export`, `compact` and `backup`. Only the command links SQLite,
+  for import and export; the library doesn't.
 - A Python binding over the C API, in place of `hcfile.py`'s direct SQL.
-- `FORMAT.md` for file format 2, as complete as 0.x's.
+- `FORMAT.md` for the new format, as complete as 0.x's.
 
-## AltSql: what to take and what to add
+### Rules for the files
 
-[AltSql](https://github.com/AltSql/altsql) is a small database for sensor
-fleets: AltSql Core keeps key-value and time-series records on devices, and
-AltSql DB keeps a whole fleet's records on a gateway. AltSql DB 0.3.0-alpha
-is one C file of 5,468 lines on top of AltSql Core's single file, Apache
-2.0, with no `malloc`, so vendoring it brings Core along. The AltSql README
-calls the project "Written to prove the design and measure it" and "Not for
-production."
-
-**Worth taking:**
-
-- The copy-on-write B-tree with two commit headers, overflow pages and free
-  lists. AltSql measured a reopen at 0.03 ms; the one-sync commit above
-  would add a check of the last commit's pages to that.
-- The direct path: buckets, get, put, delete, and cursors that survive
-  writes, with no SQL on the way. In AltSql's own Gate 1 runs it read
-  cached keys 4.42 times faster than SQLite through SQL and wrote
-  10,000-write transactions 2.58 times faster. With whole-number keys
-  against SQLite's blob path it was 1.22 times faster, short of its own
-  2x mark.
-- Keys encoded so they compare as bytes in the values' order, and secondary
-  indexes as key spaces of their own.
-- The test harness, which matters as much as the code: model tests, a power
-  cut at every write with torn sectors and lost writes, a failure at every
-  file call, coverage-guided fuzzing, planted bugs, and random SQL compared
-  with SQLite's answers.
-
-**Still to add, most of it useful to AltSql too:**
-
-- Readers in other processes. AltSql DB takes an exclusive lock today, so
-  one process uses a file at a time.
-- One sync per commit. AltSql DB syncs twice, and its README notes that this
-  makes single-write transactions slower than SQLite in WAL mode.
-- Page checksums, which AltSql DB leaves room for but sets to zero, and
-  compaction after big loads.
-- Reads from a memory map.
-- An ordered scan as fast as SQLite's: AltSql's Gate 1 measured 0.74 times
-  SQLite's speed and left the cause open.
-- For HyperCrux alone: records with changing fields, vectors, links and the
-  SQL front end.
-
-**How to share the code.** For the Beta, vendor a pinned copy of AltSql's
-storage into HyperCrux and carry improvements back by hand. Once both
-projects rely on the same storage, a shared library becomes worth the work
-of keeping the two in step. Both projects are Apache 2.0; HyperCrux's
-NOTICE and THIRD_PARTY_LICENSES.md would carry AltSql's notice.
+- Local file systems only. Network file systems such as NFS and SMB, and
+  folders shared into containers through a virtual machine, don't keep the
+  locks or the mappings honest.
+- The lock file is created under a temporary name, sized, then linked into
+  place, so no process ever maps it before it's complete. It's opened with
+  `O_CLOEXEC`, so a child process can't keep the lock alive, and after
+  taking the lock a writer checks that the file it locked is still the one
+  in the folder.
+- Snapshots are written with ordinary writes and never changed once
+  they're in place. Overwriting a live database's files, with `cp` for
+  example, can crash every process that has them mapped, which is what
+  `backup` is for.
+- A process opened read-only still takes the lock to check the end of the
+  log, which `flock` allows on a file opened for reading. If the log needs
+  repair, it reports that and leaves the repair to a process that can
+  write.
 
 ## Targets
 
@@ -287,15 +414,14 @@ been measured.
 
 | Operation | 0.1 recorded | Beta target | Basis |
 |---|---|---|---|
-| Nearest 10, 100,000 vectors of 384 values, one thread | 0.41 s | 50 ms | 154 MB of floats, streamed from memory |
-| The same with the bounded quick pass | 0.41 s | 15 ms | 38 MB in the quick pass, then a few full checks |
-| Nearest 10, 100,000 of 384, a tenth passing a filter on an unindexed field | 0.13 s | 30 ms | Reading that field for 100,000 records, then 15 MB of vectors |
-| Nearest 10, 10,000 vectors of 1,536 values | 0.12 s | 15 ms | 61 MB of floats |
-| Get by key, from C / from Go | 18 µs (Go) | 2 µs / 4 µs | Two lookups in a mapped tree |
-| Walk 1 link out / 3 links out | 43 µs / 0.51 ms | 3 µs / 60 µs | Integer key ranges, no SQL |
-| Put with a 384-value vector, 1,000 per transaction | 51 µs | 10 µs | No triggers, each key stored twice, one write path |
-| Put one record, committed | 0.35 ms | no slower than 0.1 | One sync per commit, if it passes the crash tests |
-| File size for the same records and links | baseline | smaller | Keys stored twice instead of three times, links as integers |
+| Nearest 10, 100,000 vectors of 384 values | 0.41 s | 50 ms | 154 MB of floats, streamed from memory on one core at about 3 GB/s |
+| Nearest 10, 100,000 of 384, a tenth passing a filter on an unindexed field | 0.13 s | 10 ms | One column scan, then 15 MB of vectors |
+| Nearest 10, 10,000 vectors of 1,536 values | 0.12 s | 20 ms | 61 MB of floats at the same rate |
+| Get by key, from C / from Go | 18 µs (Go) | 1 µs / 2 µs | Two hash lookups in memory |
+| Walk 1 link out / 3 links out, from Go | 43 µs / 0.51 ms | 3 µs / 40 µs | Arrays in memory, no SQL |
+| Put with a 384-value vector, 1,000 per transaction | 51 µs | 5 µs | One append to the log, one update to the delta |
+| Put one record, committed | 0.35 ms | no slower than 0.1 | One sync per commit |
+| Open a database for one command | not recorded | 5 ms, plus the log since the snapshot | A map and a header check |
 
 ## Phases and gates
 
@@ -305,101 +431,112 @@ below.
 
 | Phase | Work | Gate | Days |
 |---|---|---|---|
-| 0. Spec | File format 2, the C API header, the SQL route, the test plan | The spec is approved | 0.5 to 1 |
-| 1. Storage | AltSql's storage vendored and extended: readers across processes, checksums, one sync per commit, group commit, mapped reads | AltSql's crash matrix and fault tests pass, plus HyperCrux's kill test and many-process test, on Linux, macOS and Windows; a committed put is no slower than 0.1 | 5 to 8 |
-| 2. Keys and records | IDs, the key spaces, records with changing fields, scans | Model tests against 0.x as the oracle; the get target | 2 to 3 |
-| 3. Vectors | Segments, kernels for each instruction set, filter bitmaps, the bounded quick pass, threads | Every kernel returns the same keys in the same order as the C reference, ties broken by key; the search targets | 3 to 4 |
-| 4. Links | Link key spaces, walks, deletes that take links with them | 0.x's link tests pass; the walk targets | 1 to 2 |
-| 5. SQL | Route A or B, with `walk()`, `nearest()` and `distance()` native | 0.x's SQL tests for queries and row writes pass; the crux query gives 0.x's answers on random data | 3 to 5 |
-| 6. Bindings | The Go API, the command, the Python binding, import and export | Every 0.x test of the Go API and the command passes through the Go binding, and import and export tests take the place of the ones that write the file with plain SQLite | 2 to 3 |
-| 7. Beta | Independent review, a long fuzzing run, sanitizers, planted bugs, recorded benchmarks, docs, site | Released as a Beta on Linux, macOS and Windows | 2 to 4 |
+| 0. Spec | The file format, the C API header, the SQL subset, the test plan | The spec is approved | 0.5 to 1 |
+| 1. The log | Batches, checksums, recovery, the write lock, publishing, catching up across processes, the cost of syncing a growing file | A kill and a simulated power cut at every write of the log pass; many processes see every commit, in order; a committed put is no slower than 0.1 | 2 to 3 |
+| 2. Snapshot and compaction | The mapped snapshot, the delta, generations, switching processes over | A cut at every write of a compaction leaves a database that opens at the last commit; processes switch without losing or repeating a commit; the open target | 3 to 4 |
+| 3. Records and keys | The record model, the hash index, columns, `Put`, `Get`, `Delete`, `Scan`, `Drop`, transactions | Model tests against 0.x as the oracle; the get and batch put targets | 2 to 3 |
+| 4. Vectors | Vector blocks, the kernels, filter bitmaps | Every kernel returns the same keys in the same order as the plain C reference, ties broken by key; the search targets | 2 to 3 |
+| 5. Links | Link fields, the link arrays, walks, deletes that clear incoming links | 0.x's link tests pass; the walk targets | 1 to 2 |
+| 6. Queries and SQL | The operators, the SQL subset, `walk()`, `distance()` | 0.x's SQL tests within the subset pass; the crux query gives 0.x's answers on random data, apart from distances within the stated bound | 4 to 6 |
+| 7. Bindings and tools | The Go package, the command, the Python binding, import, export and backup | Every 0.x test of the Go API and the command within the Beta's scope passes through the Go package | 2 to 3 |
+| 8. Review and release | Independent review, long fuzzing and crash runs, sanitizers, planted bugs, recorded benchmarks, docs, site | Released as a Beta for Linux and macOS | 2 to 3 |
 
 ## Time estimate
 
-About 19 to 30 working days of development to reach the Beta gate, or
+About 19 to 28 working days of development to reach the Beta gate, or
 roughly four to six weeks of calendar time with a working session most days.
-A first working version with all four handles would take about a week. It
-would let one process use a file at a time and keep AltSql's two syncs per
-commit, and its search code would only run on x86. That's enough to try the
-design and well short of the Beta's bar.
+A first working version would take about a week, with every handle except
+SQL: the log and an in-memory delta without a snapshot, the plain C search
+loop, and the Go API, with searches unfiltered until SQL arrives. That's
+enough to try the design and well short of the Beta's bar.
 
 HyperCrux is developed in working sessions by Claude, an AI coding agent
-made by Anthropic; the project's owner decides at each gate and publishes
-the releases. The estimate is counted in those session days and rests on
-two projects from October 2026. HyperCrux 0.1, about 5,400 lines of Go and
-tests, went from the go-ahead to a published release in about a day.
-AltSql DB grew from 0.1 to 0.3 between October 2 and October 5, about
-11,300 lines of C counting its tests and tools. The Beta is roughly 30,000
-new lines with its tests, close to three times AltSql DB, with harder parts
-than either.
+made by Anthropic. The project's owner decides at each gate and publishes
+the releases. The estimate is counted in those session days. Its one
+yardstick is 0.1: about 5,400 lines of Go and tests, from the go-ahead to a
+published release in about a day. The Beta is roughly 10,000 lines of C and
+as many again in tests, close to four times 0.1's size. It also has to do
+itself what 0.1 left to SQLite, from storage and crash safety to SQL, which
+is why it takes weeks.
 
 What would make it longer:
 
-- Phase 1 could double if AltSql's crash tests keep finding problems with
-  the one-sync commit or the readers in other processes. Two syncs stay as
-  the fallback, so later phases don't wait for it.
-- Route B for SQL adds one to two weeks.
-- Starting without AltSql's storage adds one to two weeks, plus the crash
-  testing AltSql already has.
-- Windows, where growing a memory-mapped file is awkward.
-- Hours of machine time for fuzzing and crash-test runs, mostly overlapping
-  with other work.
+- Snapshot and compaction, the main risk. It's the one place where the
+  files have to change together, and if the crash tests keep finding
+  problems in the switch between generations, the phase could double.
+- More SQL. Each feature past the subset, such as outer joins or `WITH`,
+  adds time. A smaller first subset, with only the join to `walk()` that the
+  crux query needs and no `GROUP BY`, would take a day or two off.
+- Very large tables. Building a snapshot for millions of records without
+  holding them twice in memory needs a streaming build, which isn't counted
+  here.
+- Machine time. Long fuzzing and crash-test runs take hours each, though
+  most of it overlaps with other work.
+- Fresh starts. Claude only remembers what's written down in the repository
+  between sessions, so every session begins with some reading. The phases
+  are sized so each fits in a week of sessions or less.
 
-Passing every test at the Beta gate is a different thing from being trusted
-with real data, which only years of use can earn. The estimate is written up
-for readers of the site in
+Passing every test at the Beta gate earns a release. Trust with real data
+takes years of use. The estimate is written up for readers of the site in
 [How Long a New HyperCrux Engine in C Would Take](https://hypercrux.com/how-long-a-new-hypercrux-engine-in-c-would-take-four-to-six-weeks-phase-by-phase/).
 
 ## Testing
 
-Everything 0.x tests, and AltSql's harness on top:
+Everything 0.x tests, and more:
 
 - **Differential tests.** The same random workload on 0.x and on the Beta,
   through the same Go API, with every answer compared. 0.x on SQLite is the
   oracle. Distances agree within a stated bound, since 0.x adds in a
   different order, and results may differ only where two distances fall
   within it.
-- **Crash safety.** HyperCrux's 200 SIGKILLs at random moments; AltSql's
-  power cut at every write, with torn sectors and lost unsynced writes; a
-  failure at every file call. After each one, the file opens at the last
-  commit or the one under way, and `check` passes.
-- **Many processes.** Writers and readers on one file at once, readers never
-  blocking, every record and link accounted for.
-- **Exactness.** Every SIMD kernel and the bounded quick pass against a
-  brute-force search, on random vectors including awkward ones (very small,
-  very large, nearly identical).
-- **Fuzzing and sanitizers.** Damaged files, API call sequences and SQL,
-  under AddressSanitizer, UBSan and ThreadSanitizer.
-- **Planted bugs.** Every planted bug in storage, vectors and links has to
-  be caught.
+- **Crash safety.** HyperCrux's 200 SIGKILLs at random moments. A file layer
+  for tests that can lose unsynced writes and tear the last one, with a cut
+  at every write of the log and of a compaction. After each cut, the
+  database opens at the last commit or the one under way, and `check`
+  passes.
+- **Many processes.** Writers and readers on one database at once, every
+  reader seeing every commit in order, through compactions.
+- **Exact results.** Every kernel against a brute-force search, on random
+  vectors including awkward ones (very small, very large, nearly identical).
+- **Fuzzing and sanitizers.** Damaged logs and snapshots, API call sequences
+  and SQL, under AddressSanitizer, UBSan and ThreadSanitizer.
+- **Planted bugs.** Every planted bug in the log, compaction, vectors and
+  links has to be caught.
 
 ## Risks
 
 | Risk | Why it matters | What limits it |
 |---|---|---|
-| A new commit protocol | One sync per commit is where data loss would come from | AltSql's crash matrix before anything else; two syncs stay until it passes |
-| Readers across processes | Stale readers can pin old pages and grow the file | Per-reader byte locks, and `check` reporting pinned pages |
-| Memory maps differ by system | Windows can't easily grow a mapped file | Reserve address space ahead; Windows runs the storage tests from Gate 1 on |
+| Compaction | The one place where the files have to change together | Logs named by generation, one rename as the switch, full flushes, a cut at every write of a compaction |
+| Memory | Data bigger than memory slows down sharply | The limit is documented, and `check` reports sizes |
+| Pauses | Writers wait while a compaction runs | Compact early, while the log is small; build snapshots in the background later |
+| A growing log | Each sync also commits a size change | Measured in Phase 1; grow the log ahead of time if needed |
+| SQL scope | People expect all of SQLite's SQL | A documented subset, and export to 0.x for anything outside it |
 | C memory safety | A memory bug can sit quietly for months | Sanitizers, fuzzing, planted bugs, the plain C kernel as reference |
-| Upkeep | A storage engine needs care, and this project is meant to run with little | 0.x stays the stable line; the Beta lives apart until Gate 7 |
-| AltSql DB is alpha | Its format may change | Vendor a pinned copy; carry changes over by hand |
+| Upkeep | A storage engine needs care, and this project is meant to run with little | 0.x stays the stable line; the Beta lives apart until Gate 8 |
+| macOS durability | A plain `fsync` there doesn't flush the drive's cache | The same default as SQLite for commits, with a full flush as an option; full flushes always in compaction |
 
 ## Left out of the Beta
 
+- Data bigger than memory.
+- Windows.
 - Approximate vector indexes. They're the usual way to search tens of
-  millions of vectors in milliseconds, and they can miss results. If they
-  come, they come later, opt-in and clearly labelled.
+  millions of vectors in milliseconds, and they can miss results.
+- Speed-ups that can come later without changing the format: splitting one
+  search across several cores, an 8-bit quick pass before the full vectors,
+  building snapshots in the background, and letting several writers share
+  one sync.
 - Servers, replication and anything across machines.
 - 32-bit systems.
 
 ## Open decisions
 
 1. Whether to start Phase 0, the spec.
-2. Route A or route B for SQL.
-3. AltSql's storage as a vendored copy or a shared library.
-4. Where the Beta lives until Gate 7: a folder in this repository, a branch
+2. The first SQL subset: whether joins and `GROUP BY` are in from the start.
+   The estimate assumes they are.
+3. The files: three side by side, as above, or one folder holding them.
+4. Where the Beta lives until Gate 8: a folder in this repository, a branch
    or a repository of its own.
-5. Whether 0.x gets the smaller step meanwhile: a C search loop inside
-   SQLite, using SIMD in the same float64 arithmetic 0.x uses now, which
-   keeps the file and every rule as they are. Its dot-product kernels could
-   carry over to the Beta.
+5. Whether 0.x gets a smaller step meanwhile: a C search loop inside SQLite,
+   using SIMD in float64 as 0.x does now, which keeps the file and every
+   rule as they are. Its dot-product kernels could carry over to the Beta.
