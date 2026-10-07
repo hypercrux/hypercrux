@@ -15,6 +15,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   small `Engine` interface so the same tests run on 0.x and on the Beta.
 - `conformance/zerox/`: the adapter for 0.x. Its test runs the whole suite on
   0.x.
+- `conformance/betax/`: the adapter for the Beta, zerox's code over the
+  Beta's package. Its test runs the whole suite on the Beta from task G1 on.
 - `conformance/cmdtest/`: 0.x's tests of the `hypercrux` command, run from
   outside against the binary `HYPERCRUX_BIN` names, or against 0.x's command,
   built for the test, when it's unset. `HYPERCRUX_CMD_SKIP` lists sections to
@@ -27,8 +29,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   catch.
 - `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
   reading, checking and writing the log.
-- `hypercrux/`: the place of the Beta's Go package, beside 0.x's until the
-  release. P4 fills it with 0.x's API as stubs.
+- `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
+  0.x's API. The helpers that hold no state work already, and the rest are
+  stubs that name the task that makes them work.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/format/`: the change list, `Change`, which the format's batches
