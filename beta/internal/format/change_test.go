@@ -36,8 +36,9 @@ func TestTheSixChanges(t *testing.T) {
 // TestChangesCarryTheFixtures takes every change in the fixtures, as
 // fixtures_test.go reads them, through a Change and back, and checks that
 // nothing is lost: every name, size and field list, and every value's kind
-// and bits. A vector's bits must be the bytes the file holds. F1's decoder
-// can take the place of this test's reader.
+// and bits. A vector's bits must be the bytes the file holds. The codec's
+// tests, in codec_test.go, read the fixtures with the decoder and check it
+// against the same reader, which stays apart from the codec.
 func TestChangesCarryTheFixtures(t *testing.T) {
 	var all []change
 	for _, name := range fixtures {

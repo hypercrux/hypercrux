@@ -60,7 +60,7 @@ func le64(b []byte) uint64 { return binary.LittleEndian.Uint64(b) }
 
 // readFixture reads a fixture's bytes: pairs of hex digits, with everything
 // from a # to the end of its line a comment.
-func readFixture(t *testing.T, name string) []byte {
+func readFixture(t testing.TB, name string) []byte {
 	t.Helper()
 	f, err := os.Open(filepath.Join("testdata", name))
 	if err != nil {
