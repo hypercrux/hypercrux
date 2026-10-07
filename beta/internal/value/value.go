@@ -8,7 +8,6 @@ package value
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -231,37 +230,4 @@ func (v Value) String() string {
 		return "vector [" + strings.Join(parts, ", ") + "]"
 	}
 	return v.kind.String()
-}
-
-// FromGo converts v, given for the field named field, into a Value, the
-// way 0.x's Put converts the values of a Fields map:
-//
-//   - nil, or a nil pointer: null.
-//   - A string: text, which must be valid UTF-8.
-//   - A bool: the whole number 1 or 0.
-//   - Any integer type: a whole number. A uint, uint64 or uintptr beyond
-//     the largest int64 is refused.
-//   - A float32 or float64: a real number, refused when it's NaN or
-//     infinite.
-//   - A json.Number: a whole number when it reads as an int64, or else a
-//     real number.
-//   - A []byte: bytes.
-//   - A time.Time: text, in RFC 3339 with nanoseconds, in UTC.
-//   - A map, slice, array or struct: text holding its JSON.
-//   - A named type is converted as the type it's based on, and a pointer
-//     as what it points to.
-//   - In the vector field, whose name matches "vec" regardless of case: a
-//     []float32, which includes the public package's Vector, a []float64,
-//     a []any of numbers or a string holding a JSON array, giving a vector
-//     of 1 to 65,536 finite values that aren't all zero; or null. A vector
-//     in any other field is refused.
-//
-// What it refuses gives an error that wraps errs.ErrInvalid, with 0.x's
-// wording. The field's name is for that wording and for finding the
-// vector field; checking the name itself is the store's job.
-//
-// Task S1 writes it, to pass 0.x's PutAndGetRoundTrip and MoreFieldTypes.
-// Until then it returns an error that matches errors.ErrUnsupported.
-func FromGo(field string, v any) (Value, error) {
-	return Value{}, fmt.Errorf("value: FromGo, for the field %s, is an %w until task S1 writes it", field, errors.ErrUnsupported)
 }

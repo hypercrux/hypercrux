@@ -7,7 +7,6 @@ package value_test
 
 import (
 	"bytes"
-	"errors"
 	"math"
 	"slices"
 	"strings"
@@ -202,13 +201,5 @@ func TestAccessorsPanicOnTheWrongKind(t *testing.T) {
 func TestAValueIsSmall(t *testing.T) {
 	if n := unsafe.Sizeof(value.Value{}); n != 32 {
 		t.Errorf("a Value takes %d bytes, where its comment says 32", n)
-	}
-}
-
-// TestFromGoWaitsForS1 touches the stub that S1 replaces with 0.x's
-// conversions.
-func TestFromGoWaitsForS1(t *testing.T) {
-	if _, err := value.FromGo("title", "x"); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("FromGo returned %v", err)
 	}
 }

@@ -1,0 +1,160 @@
+// Copyright HyperCrux.com 2026
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build linux
+
+package store
+
+import (
+	"errors"
+	"fmt"
+	"iter"
+
+	"github.com/hypercrux/hypercrux/beta/internal/errs"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
+	"github.com/hypercrux/hypercrux/beta/internal/rules"
+)
+
+// Store is the in-memory copy of a database. So far it holds the records
+// with their fields, and each table's field list and vector size (S1).
+// Each table's keys in order come with S4, the links with S5 and the
+// vector arrays with V1.
+//
+// A Store is for one goroutine at a time. The lock that lets reads share
+// it, and holds them off while a transaction changes it, is S2's.
+type Store struct {
+	records map[string]*record // the hash table, from key to record
+	tables  map[string]*table  // by name
+}
+
+var _ Reader = (*Store)(nil)
+
+// New returns an empty store.
+func New() *Store {
+	return &Store{records: map[string]*record{}, tables: map[string]*table{}}
+}
+
+// table is one table's shape.
+type table struct {
+	name string
+	// fields are the table's fields in their fixed order, each spelt as
+	// the put that first named it spelt it. The list only grows, until the
+	// table is dropped, so a field's place never changes.
+	fields []string
+	// index holds each field's place by its name with its letters in lower
+	// case, as rules.Fold gives it, so names match regardless of case.
+	index map[string]int
+	// vec is the vector field's place, or -1 until a put names it.
+	vec int
+	// size is the vector size: 0 until the table's first vector, then that
+	// vector's length until the table is dropped.
+	size int
+	// S4 keeps the table's keys in byte order here, and V1 its vector
+	// array.
+}
+
+func (s *Store) newTable(name string) *table {
+	t := &table{name: name, index: map[string]int{}, vec: -1}
+	s.tables[name] = t
+	return t
+}
+
+// add puts a new field at the end of the table's list, and returns its
+// place.
+func (t *table) add(name string) int {
+	p := len(t.fields)
+	t.fields = append(t.fields, name)
+	t.index[rules.Fold(name)] = p
+	if rules.IsVec(name) {
+		t.vec = p
+	}
+	return p
+}
+
+// record is one record.
+type record struct {
+	key   string
+	table *table
+	// fields are the fields that hold a value, in order of their places in
+	// the table's list, with nulls and the vector left out. A put replaces
+	// the slice whole and never changes one in place, so a slice a read
+	// handed out stays as it was.
+	fields []FieldValue
+	// vec is the record's vector, or nil. It stands in for V1's slot: V1
+	// keeps the vector in the table's vector array, and the record holds
+	// the slot's number here.
+	vec []float32
+	// S5 keeps the record's links here, out of it and into it.
+}
+
+// Table returns the shape of the table called name, or false when there's
+// none. Its Fields share the store's memory: they're good until the
+// table's next change, and nothing may change them.
+func (s *Store) Table(name string) (Table, bool) {
+	t := s.tables[name]
+	if t == nil {
+		return Table{Vec: -1}, false
+	}
+	return Table{Name: t.name, Fields: t.fields[:len(t.fields):len(t.fields)], Vec: t.vec, Size: t.size}, true
+}
+
+// Find returns the place of the field whose name matches name regardless
+// of ASCII case, as Put and SQL match names, or -1 when the table has
+// none. It looks through Fields, so it works on a Table that a fake store
+// builds too. The store's own writes use an index instead.
+func (t Table) Find(name string) int {
+	for i, f := range t.Fields {
+		if rules.SameName(f, name) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Get returns the record with this key. A key that breaks 0.x's rules
+// gives an error that wraps errs.ErrInvalid, and a key with no record one
+// that wraps errs.ErrNotFound, as in 0.x.
+func (s *Store) Get(key string) (Record, error) {
+	if _, err := rules.TableOf(key); err != nil {
+		return Record{}, err
+	}
+	r := s.records[key]
+	if r == nil {
+		return Record{}, fmt.Errorf("%w: %s", errs.ErrNotFound, key)
+	}
+	return r.read(), nil
+}
+
+// read gives the record as Reader hands it out, sharing the store's
+// memory. The slices can't grow into the store's.
+func (r *record) read() Record {
+	return Record{Key: r.key, Fields: r.fields[:len(r.fields):len(r.fields)], Vec: r.vec[:len(r.vec):len(r.vec)]}
+}
+
+// notYet is the error of a method whose task hasn't written it yet.
+func notYet(method, task string) error {
+	return fmt.Errorf("store: %s comes with task %s: %w", method, task, errors.ErrUnsupported)
+}
+
+// Scan comes with S4.
+func (s *Store) Scan(prefix, after string) (Cursor, error) { return nil, notYet("Scan", "S4") }
+
+// Neighbours comes with S5.
+func (s *Store) Neighbours(key string, dir Direction, typ string) ([]Link, error) {
+	return nil, notYet("Neighbours", "S5")
+}
+
+// Walk comes with S5.
+func (s *Store) Walk(key string, dir Direction, typ string, depth int) ([]Step, error) {
+	return nil, notYet("Walk", "S5")
+}
+
+// Nearest comes with V1.
+func (s *Store) Nearest(table string, q []float32, k int, keep Filter) ([]Hit, error) {
+	return nil, notYet("Nearest", "V1")
+}
+
+// Snapshot comes with S3. Until then, ranging over what it returns panics.
+func (s *Store) Snapshot() iter.Seq[format.Change] {
+	return func(func(format.Change) bool) { panic(notYet("Snapshot", "S3")) }
+}

@@ -3,3 +3,7 @@
 # HYPERCRUX_PLANT to each name in turn, and requires the tests to fail.
 vecmath/four-sums ./beta/internal/vecmath
 vecmath/sums-in-a-row ./beta/internal/vecmath
+store/nulls-kept ./beta/internal/store
+store/drop-keeps-records ./beta/internal/store
+store/spelt-as-given ./beta/internal/store
+store/size-unchecked ./beta/internal/store

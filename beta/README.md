@@ -42,9 +42,14 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   fault layers wrap. The real ones, through Go's `syscall` package, come
   with the log.
 - `internal/query/`: SQL. For now, the operator iterator, `Rows`.
-- `internal/store/`: the in-memory copy. For now, its read API, `Reader`.
+- `internal/rules/`: 0.x's rules for keys, table and field names, link
+  types, vectors and stored values, with 0.x's errors and messages. The
+  store and `FromGo` check with it, and the public package can share it.
+- `internal/store/`: the in-memory copy, with its read API, `Reader`. So
+  far it holds the records with their fields and each table's field list,
+  and its writes give the changes they amount to.
 - `internal/value/`: the value type, holding FORMAT.md's six kinds of value
-  bit for bit.
+  bit for bit, and `FromGo`, 0.x's conversions from Go values.
 - `internal/vecmath/`: the search loop. Dot products, norms and distances
   in 8 running sums, giving the same bits on amd64 and arm64, which CI
   checks on both against a golden file.
