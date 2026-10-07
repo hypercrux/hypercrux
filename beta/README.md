@@ -18,6 +18,12 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   outside against the binary `HYPERCRUX_BIN` names, or against 0.x's command,
   built for the test, when it's unset. `HYPERCRUX_CMD_SKIP` lists sections to
   leave out, separated by commas.
+- `difftest/`: the differential harness. It runs random sequences of steps
+  on two engines and compares every answer and then the whole database. A
+  sequence they disagree on is shrunk and saved in `difftest/testdata`,
+  where it replays as a test. For now it runs 0.x against itself, and
+  against copies of 0.x with one thing each done wrong, which it has to
+  catch.
 
 ## Running the tests
 
@@ -25,6 +31,7 @@ On Linux:
 
 ```sh
 go test ./beta/...           # everything, with 200 killed writers
-go test -short ./beta/...    # 20 killed writers instead of 200
+go test -short ./beta/...    # 20 killed writers instead of 200, 300 sequences instead of 2,000
 HYPERCRUX_BIN=/path/to/hypercrux go test ./beta/conformance/cmdtest
+HYPERCRUX_DIFF_SEQUENCES=50000 go test -run TestZeroxAgainstItself ./beta/difftest   # a long run
 ```

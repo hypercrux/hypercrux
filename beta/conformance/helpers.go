@@ -111,17 +111,25 @@ func randomVector(r *rand.Rand, dims int) Vector {
 	return v
 }
 
-// sameHits compares two result lists. Distances must agree within
-// DistanceBound. Keys must come in the same order, except within a run of
-// distances that agree within the bound, where either order is right.
+// sameHits fails the test when CompareHits finds a difference.
 func sameHits(t testing.TB, got, want []Hit) {
 	t.Helper()
+	if err := CompareHits(got, want); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// CompareHits compares two result lists, as both engines must agree on
+// them. Distances must agree within DistanceBound. Keys must come in the
+// same order, except within a run of distances that agree within the bound,
+// where either order is right.
+func CompareHits(got, want []Hit) error {
 	if len(got) != len(want) {
-		t.Fatalf("got %d hits, want %d:\ngot  %v\nwant %v", len(got), len(want), got, want)
+		return fmt.Errorf("got %d hits, want %d:\ngot  %v\nwant %v", len(got), len(want), got, want)
 	}
 	for i := range got {
 		if math.Abs(got[i].Distance-want[i].Distance) > DistanceBound {
-			t.Fatalf("hit %d: got %v, want %v", i, got[i], want[i])
+			return fmt.Errorf("hit %d: got %v, want %v", i, got[i], want[i])
 		}
 	}
 	for i := 0; i < len(want); {
@@ -133,10 +141,11 @@ func sameHits(t testing.TB, got, want []Hit) {
 		sort.Strings(g)
 		sort.Strings(w)
 		if strings.Join(g, " ") != strings.Join(w, " ") {
-			t.Fatalf("hits %d to %d: got %v, want %v", i, j-1, got[i:j], want[i:j])
+			return fmt.Errorf("hits %d to %d: got %v, want %v", i, j-1, got[i:j], want[i:j])
 		}
 		i = j
 	}
+	return nil
 }
 
 func keysOf(hits []Hit) []string {
