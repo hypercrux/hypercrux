@@ -27,10 +27,21 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   catch.
 - `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
   reading, checking and writing the log.
-- `internal/format/`: for now, the format's golden fixtures in
-  `internal/format/testdata`, annotated hex for each part of the format and
-  two small databases, and the test that checks them against FORMAT.md. The
-  codec joins them here.
+- `hypercrux/`: the place of the Beta's Go package, beside 0.x's until the
+  release. P4 fills it with 0.x's API as stubs.
+- `internal/errs/`: the error values every layer returns, each of one kind
+  in the differential harness's terms.
+- `internal/format/`: the change list, `Change`, which the format's batches
+  carry, and the format's golden fixtures in `internal/format/testdata`,
+  annotated hex for each part of the format and two small databases, with
+  the test that checks them against FORMAT.md. The codec joins them here.
+- `internal/fsys/`: the file calls, `File` and `FS`, which the crash tests'
+  fault layers wrap. The real ones, through Go's `syscall` package, come
+  with the log.
+- `internal/query/`: SQL. For now, the operator iterator, `Rows`.
+- `internal/store/`: the in-memory copy. For now, its read API, `Reader`.
+- `internal/value/`: the value type, holding FORMAT.md's six kinds of value
+  bit for bit.
 - `internal/vecmath/`: the search loop. Dot products, norms and distances
   in 8 running sums, giving the same bits on amd64 and arm64, which CI
   checks on both against a golden file.
@@ -42,6 +53,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   any engine can build. The answers are recorded through 0.x with
   `HYPERCRUX_CORPUS_RECORD=1 go test -run TestRecord ./beta/sqlcorpus`,
   and replayed by the package's tests.
+
+[tasks/P3.md](tasks/P3.md) maps the packages still to come, and which
+task works in each.
 
 ## Running the tests
 
