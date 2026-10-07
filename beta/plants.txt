@@ -12,3 +12,8 @@ logfile/one-try ./beta/internal/logfile
 logfile/any-marker ./beta/internal/logfile
 logfile/marker-before-sync ./beta/internal/logfile
 logfile/no-read-check ./beta/internal/logfile
+store/undo-oldest-first ./beta/internal/store
+store/changes-kept ./beta/internal/store
+store/readers-not-held ./beta/internal/store
+store/readers-in-early ./beta/internal/store
+store/inside-unchecked ./beta/internal/store

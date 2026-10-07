@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"sync"
+	"sync/atomic"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -20,9 +22,36 @@ import (
 // Each table's keys in order come with S4, the links with S5 and the
 // vector arrays with V1.
 //
-// A Store is for one goroutine at a time. The lock that lets reads share
-// it, and holds them off while a transaction changes it, is S2's.
+// Many goroutines share a Store (S2). Reads go through Read, under the
+// copy's lock held shared, and writes through a transaction from Begin,
+// which takes the lock alone at its first change. The Store's own Reader
+// methods take no lock: they serve Read's callback and the transaction,
+// and like Put, Delete, Drop and Apply they serve a goroutine that has the
+// store to itself, such as a test.
+//
+// A read changes nothing in the store, a cache included: readers share the
+// lock, and a transaction reads beside them, without the lock, until its
+// first change.
 type Store struct {
+	// mu is the copy's lock. Read holds it shared. A transaction takes it
+	// alone at its first change and keeps it until Commit or Rollback, so
+	// readers never see a change that isn't committed. Go's RWMutex lets a
+	// waiting writer in ahead of readers that come after it, so a stream of
+	// reads can't hold a transaction off.
+	mu sync.RWMutex
+	// writer lets one transaction run at a time. Begin takes it, and the
+	// transaction's end releases it, after mu.
+	writer sync.Mutex
+	// owner is the goroutine that began the open transaction, by the number
+	// runtime.Stack shows, or 0 when none is open. held is true while that
+	// transaction holds mu. They're what the check behind
+	// errs.ErrInsideUpdate reads, from any goroutine.
+	owner atomic.Int64
+	held  atomic.Bool
+	// tx is the open transaction, or nil. Only the goroutine using the
+	// transaction reads it.
+	tx *Tx
+
 	records map[string]*record // the hash table, from key to record
 	tables  map[string]*table  // by name
 }
@@ -53,7 +82,9 @@ type table struct {
 	// array.
 }
 
+// newTable adds an empty table called name, which the store hasn't got.
 func (s *Store) newTable(name string) *table {
+	s.changing(undo{op: undoNoTable, name: name})
 	t := &table{name: name, index: map[string]int{}, vec: -1}
 	s.tables[name] = t
 	return t
@@ -61,7 +92,8 @@ func (s *Store) newTable(name string) *table {
 
 // add puts a new field at the end of the table's list, and returns its
 // place.
-func (t *table) add(name string) int {
+func (s *Store) add(t *table, name string) int {
+	s.changing(undo{op: undoFields, table: t, n: len(t.fields)})
 	p := len(t.fields)
 	t.fields = append(t.fields, name)
 	t.index[rules.Fold(name)] = p
@@ -69,6 +101,12 @@ func (t *table) add(name string) int {
 		t.vec = p
 	}
 	return p
+}
+
+// setSize sets a table's vector size.
+func (s *Store) setSize(t *table, size int) {
+	s.changing(undo{op: undoSize, table: t, n: t.size})
+	t.size = size
 }
 
 // record is one record.

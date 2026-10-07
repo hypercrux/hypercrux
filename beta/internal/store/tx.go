@@ -1,0 +1,440 @@
+// Copyright HyperCrux.com 2026
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build linux
+
+package store
+
+import (
+	"fmt"
+	"iter"
+
+	"github.com/hypercrux/hypercrux/beta/internal/errs"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
+	"github.com/hypercrux/hypercrux/beta/internal/rules"
+)
+
+// Transactions (S2). An Update in the public package runs like this (G1):
+//
+//	if err := s.Outside(); err != nil { // a write through db inside Update
+//		return err
+//	}
+//	// take the write lock and catch up (F2, F6)
+//	tx, err := s.Begin()
+//	if err != nil {
+//		return err
+//	}
+//	defer tx.Rollback() // does nothing once Commit has ended tx
+//	if err := fn(tx); err != nil { // through the public package's Tx
+//		return err
+//	}
+//	return tx.Commit(log.Append) // the batch, its sync and its marker
+//
+// SQL's writes (Q6) mark the start of each statement with Mark, and a
+// statement that fails takes its own changes back with RollbackTo, while
+// the transaction carries on. A batch applied from the log (S3, F6) is a
+// transaction of Apply calls, committed with no write, or rolled back
+// whole at the first change that fails.
+
+// Tx is a transaction on the store: the writes of one Update, or one batch
+// applied from the log. Its changes go straight into the copy. An undo list
+// records how to reverse each one, and a change list records them for the
+// log. Commit keeps them and hands the change list on, and Rollback puts the
+// copy back as it was at Begin. A write that fails undoes its own changes
+// and leaves the transaction open.
+//
+// A Tx is a Reader too, and sees its own changes. One goroutine uses it at
+// a time. Until its first change it holds up no reader, and reads beside
+// them. Its first change takes the copy's lock alone, and readers wait
+// from then until it ends, while the Tx itself reads and writes without
+// waiting. What a read through it hands out is good until its next change.
+//
+// Once Commit or Rollback has ended it, its methods fail with an error that
+// wraps errs.ErrClosed, Table finds no table, ranging over Snapshot panics,
+// and Rollback does nothing.
+type Tx struct {
+	s       *Store
+	undo    []undo          // how to reverse each change so far, newest last
+	changes []format.Change // the change list
+	locked  bool            // the transaction holds s.mu, from its first change
+	done    bool            // Commit or Rollback has ended it
+}
+
+var _ Reader = (*Tx)(nil)
+
+// Begin starts a transaction. It waits while another is open, so one runs
+// at a time. The transaction notes the goroutine that began it, by the
+// number runtime.Stack shows, for the check behind errs.ErrInsideUpdate:
+// on the goroutine running the open transaction, Begin returns that error
+// at once instead of waiting for itself.
+//
+// Begin takes no lock that readers wait for. The transaction's first change
+// does.
+func (s *Store) Begin() (*Tx, error) {
+	me := goroutine()
+	if s.owner.Load() == me {
+		return nil, errs.ErrInsideUpdate
+	}
+	s.writer.Lock()
+	s.owner.Store(me)
+	tx := &Tx{s: s}
+	s.tx = tx
+	return tx, nil
+}
+
+// Read calls fn with the store as a Reader, under the copy's lock held
+// shared, and returns fn's error. fn sees one point in the log: the copy as
+// the last commit left it. Reads share the lock. A read waits while a
+// transaction holds it, from that transaction's first change until its
+// end, and a transaction's first change waits for the reads under way.
+// What fn is handed is good until fn returns. fn mustn't make a change
+// through a transaction, since that would wait for fn.
+//
+// On the goroutine running a transaction that has made its first change,
+// Read returns errs.ErrInsideUpdate at once, since it would wait for that
+// same transaction. That's the check for a read through the database
+// inside Update; the transaction reads through the Tx. Before the first
+// change such a read goes ahead, and sees nothing of the transaction.
+func (s *Store) Read(fn func(r Reader) error) error {
+	if s.held.Load() && plant != "store/inside-unchecked" && s.inside() {
+		return errs.ErrInsideUpdate
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return fn(s)
+}
+
+// Outside returns errs.ErrInsideUpdate when the calling goroutine is running
+// the store's open transaction, and nil otherwise. A write through the
+// database there would wait for that transaction, since every such write is
+// an Update of its own. So the public package's Update calls Outside first,
+// before it waits for the write lock, and anything else that takes the
+// write lock, such as Compact, does the same. Reads need no call, since Read
+// checks by itself, and so does Begin.
+//
+// While no transaction is open, Outside costs one atomic load. While one is,
+// it costs a call to runtime.Stack, and the call it guards would wait for
+// the transaction anyway.
+func (s *Store) Outside() error {
+	if s.owner.Load() != 0 && s.inside() {
+		return errs.ErrInsideUpdate
+	}
+	return nil
+}
+
+// inside reports whether the calling goroutine began the open transaction.
+// Only that goroutine can make owner its own number, so the answer can't
+// go stale while it's asking.
+func (s *Store) inside() bool {
+	o := s.owner.Load()
+	return o != 0 && o == goroutine()
+}
+
+// changing comes just before each change to the store, with the undo entry
+// that reverses it. Inside a transaction, the first change takes the copy's
+// lock, so readers wait from then on, and the entry joins the undo list.
+// Outside one it does nothing, since a direct write has the store to
+// itself.
+func (s *Store) changing(u undo) {
+	tx := s.tx
+	if tx == nil {
+		return
+	}
+	if !tx.locked && plant != "store/readers-not-held" {
+		s.mu.Lock()
+		tx.locked = true
+		s.held.Store(true)
+	}
+	tx.undo = append(tx.undo, u)
+}
+
+// undo is one entry in a transaction's undo list: how one part of the store
+// was just before a change. Putting that back reverses the change. An entry
+// records the whole earlier state of its part, so putting it back works
+// even when a panic cut its change short. A rollback walks the list newest
+// first, so each entry finds the store as its own change left it.
+//
+// S4, S5 and V1 add kinds for each table's keys, the links both ways and
+// the vector arrays.
+type undo struct {
+	op     undoOp
+	name   string       // undoNoTable: the table's name; undoNoRecord: the key
+	table  *table       // undoHadTable, undoFields, undoSize
+	record *record      // undoHadRecord, undoRecord
+	n      int          // undoFields: how many fields the table had; undoSize: its size
+	fields []FieldValue // undoRecord: the record's fields
+	vec    []float32    // undoRecord: the record's vector
+}
+
+type undoOp uint8
+
+const (
+	undoNoTable   undoOp = iota + 1 // no table was called name
+	undoHadTable                    // table was in the store, whole
+	undoFields                      // table had its first n fields only
+	undoSize                        // table had the vector size n
+	undoNoRecord                    // no record had the key name
+	undoHadRecord                   // record was in the store, whole
+	undoRecord                      // record held fields and vec
+)
+
+// back puts back the state one entry records.
+func (s *Store) back(u undo) {
+	switch u.op {
+	case undoNoTable:
+		delete(s.tables, u.name)
+	case undoHadTable:
+		s.tables[u.table.name] = u.table
+	case undoFields:
+		t := u.table
+		for _, name := range t.fields[u.n:] {
+			delete(t.index, rules.Fold(name))
+		}
+		if t.vec >= u.n {
+			t.vec = -1
+		}
+		// A list cut back gets no room past its end, so a field added
+		// later never lands in an array a read handed out.
+		t.fields = t.fields[:u.n:u.n]
+		if u.n == 0 {
+			t.fields = nil // as a new table has it
+		}
+	case undoSize:
+		u.table.size = u.n
+	case undoNoRecord:
+		delete(s.records, u.name)
+	case undoHadRecord:
+		s.records[u.record.key] = u.record
+	case undoRecord:
+		u.record.fields, u.record.vec = u.fields, u.vec
+	default:
+		panic(fmt.Sprintf("store: an undo entry of kind %d", u.op))
+	}
+}
+
+// undoTo walks the undo list back to its first n entries, newest first.
+func (tx *Tx) undoTo(n int) {
+	if plant == "store/undo-oldest-first" {
+		for _, u := range tx.undo[n:] {
+			tx.s.back(u)
+		}
+	} else {
+		for i := len(tx.undo) - 1; i >= n; i-- {
+			tx.s.back(tx.undo[i])
+		}
+	}
+	clear(tx.undo[n:]) // so the old fields and records can be collected
+	tx.undo = tx.undo[:n]
+}
+
+// Mark is a point in a transaction, for RollbackTo.
+type Mark struct{ undo, changes int }
+
+// Mark returns the transaction's present point, for RollbackTo.
+func (tx *Tx) Mark() Mark { return Mark{len(tx.undo), len(tx.changes)} }
+
+// RollbackTo takes back every change made since m, newest first, and cuts
+// the change list back to where it was at m. The transaction carries on,
+// and keeps the copy's lock if it has it. A mark that's past the
+// transaction's present point, after an earlier RollbackTo, panics. On a
+// transaction that has ended, RollbackTo does nothing.
+func (tx *Tx) RollbackTo(m Mark) {
+	if tx.done {
+		return
+	}
+	if m.undo > len(tx.undo) || m.changes > len(tx.changes) {
+		panic(fmt.Sprintf("store: RollbackTo a mark at %d changes, past the transaction's %d", m.changes, len(tx.changes)))
+	}
+	tx.undoTo(m.undo)
+	if plant != "store/changes-kept" {
+		clear(tx.changes[m.changes:])
+		tx.changes = tx.changes[:m.changes]
+	}
+}
+
+// Commit ends the transaction and keeps its changes. When it made changes
+// and write isn't nil, Commit first hands write the change list, with the
+// copy still locked, so other goroutines read the changes only once write
+// has put them in the file. In an Update, write is the log's append, sync
+// and marker (G1), and for a batch applied from the log it's nil. If write
+// returns an error or panics, Commit puts the copy back as Rollback does,
+// then returns the error or panics again. The change list is write's to
+// keep, and the transaction doesn't touch it again.
+//
+// On a transaction that has ended, Commit fails with an error that wraps
+// errs.ErrClosed.
+func (tx *Tx) Commit(write func(changes []format.Change) error) error {
+	if err := tx.open(); err != nil {
+		return err
+	}
+	if write != nil && len(tx.changes) > 0 {
+		if err := tx.handOn(write); err != nil {
+			return err
+		}
+	}
+	tx.end()
+	return nil
+}
+
+// handOn hands write the change list, and rolls the transaction back if
+// write fails or panics.
+func (tx *Tx) handOn(write func([]format.Change) error) (err error) {
+	written := false
+	defer func() {
+		if !written {
+			tx.Rollback()
+		}
+	}()
+	if plant == "store/readers-in-early" && tx.locked {
+		tx.s.mu.Unlock()
+		defer tx.s.mu.Lock() // before the rollback above, which runs last
+	}
+	err = write(tx.changes)
+	written = err == nil
+	return err
+}
+
+// Rollback ends the transaction and takes back every change it made, newest
+// first, so the copy is as it was at Begin. On a transaction that has ended
+// it does nothing, so a caller can defer it straight after Begin.
+func (tx *Tx) Rollback() {
+	if tx.done {
+		return
+	}
+	tx.undoTo(0)
+	tx.end()
+}
+
+// end releases the copy's lock, if the transaction took it, and then the
+// store for the next transaction.
+func (tx *Tx) end() {
+	s := tx.s
+	tx.done = true
+	tx.undo, tx.changes = nil, nil
+	s.tx = nil
+	if tx.locked {
+		tx.locked = false
+		s.held.Store(false)
+		s.mu.Unlock()
+	}
+	// The owner goes before the writer's lock does, so a transaction that
+	// begins next never has its number cleared.
+	s.owner.Store(0)
+	s.writer.Unlock()
+}
+
+func (tx *Tx) open() error {
+	if tx.done {
+		return fmt.Errorf("%w: the transaction has ended", errs.ErrClosed)
+	}
+	return nil
+}
+
+// Put is Store.Put inside the transaction. Its changes join the
+// transaction's change list. On an error, the transaction is as it was
+// before the call, and carries on.
+func (tx *Tx) Put(key string, fields []format.Field) error {
+	return tx.write(func(dst []format.Change) ([]format.Change, error) { return tx.s.putFields(dst, key, fields) })
+}
+
+// Delete is Store.Delete inside the transaction.
+func (tx *Tx) Delete(key string) error {
+	return tx.write(func(dst []format.Change) ([]format.Change, error) { return tx.s.deleteKey(dst, key) })
+}
+
+// Drop is Store.Drop inside the transaction.
+func (tx *Tx) Drop(name string) error {
+	return tx.write(func(dst []format.Change) ([]format.Change, error) { return tx.s.dropTable(dst, name) })
+}
+
+// Apply is Store.Apply inside the transaction: one change of a change list,
+// such as a batch the log has read, which joins the transaction's change
+// list too. S3 applies whole lists with it.
+func (tx *Tx) Apply(c format.Change) error {
+	return tx.write(func(dst []format.Change) ([]format.Change, error) {
+		if err := tx.s.apply(c); err != nil {
+			return dst, err
+		}
+		return append(dst, c), nil
+	})
+}
+
+// write runs one write of the store's, which appends to the change list.
+// If it fails, everything it changed is taken back, so a write that fails
+// part of the way through leaves the transaction as it was. The store's
+// writes check everything first, so for now they change nothing when they
+// fail, but the transaction doesn't count on it.
+func (tx *Tx) write(w func(dst []format.Change) ([]format.Change, error)) error {
+	if err := tx.open(); err != nil {
+		return err
+	}
+	m := tx.Mark()
+	changes, err := w(tx.changes)
+	if err != nil {
+		tx.RollbackTo(m)
+		return err
+	}
+	tx.changes = changes
+	return nil
+}
+
+// The read side: the store's, with the transaction's changes in it.
+
+// Table is Store.Table inside the transaction. On a transaction that has
+// ended it finds no table.
+func (tx *Tx) Table(name string) (Table, bool) {
+	if tx.done {
+		return Table{Vec: -1}, false
+	}
+	return tx.s.Table(name)
+}
+
+// Get is Store.Get inside the transaction.
+func (tx *Tx) Get(key string) (Record, error) {
+	if err := tx.open(); err != nil {
+		return Record{}, err
+	}
+	return tx.s.Get(key)
+}
+
+// Scan is Store.Scan inside the transaction.
+func (tx *Tx) Scan(prefix, after string) (Cursor, error) {
+	if err := tx.open(); err != nil {
+		return nil, err
+	}
+	return tx.s.Scan(prefix, after)
+}
+
+// Neighbours is Store.Neighbours inside the transaction.
+func (tx *Tx) Neighbours(key string, dir Direction, typ string) ([]Link, error) {
+	if err := tx.open(); err != nil {
+		return nil, err
+	}
+	return tx.s.Neighbours(key, dir, typ)
+}
+
+// Walk is Store.Walk inside the transaction.
+func (tx *Tx) Walk(key string, dir Direction, typ string, depth int) ([]Step, error) {
+	if err := tx.open(); err != nil {
+		return nil, err
+	}
+	return tx.s.Walk(key, dir, typ, depth)
+}
+
+// Nearest is Store.Nearest inside the transaction.
+func (tx *Tx) Nearest(table string, q []float32, k int, keep Filter) ([]Hit, error) {
+	if err := tx.open(); err != nil {
+		return nil, err
+	}
+	return tx.s.Nearest(table, q, k, keep)
+}
+
+// Snapshot is Store.Snapshot inside the transaction, with its changes in
+// it. Compaction takes its snapshot through Read after the commit instead
+// (P3's note for F8).
+func (tx *Tx) Snapshot() iter.Seq[format.Change] {
+	if tx.done {
+		return func(func(format.Change) bool) { panic(tx.open()) }
+	}
+	return tx.s.Snapshot()
+}

@@ -364,8 +364,9 @@ func equalChange(a, b format.Change) bool {
 		slices.Equal(a.Fields, b.Fields) && a.Type == b.Type && a.To == b.To
 }
 
-// compareRecord checks one record of the store against the model's.
-func compareRecord(t *testing.T, s *Store, m *model, r Record) {
+// compareRecord checks one record read through s, the store or a
+// transaction, against the model's.
+func compareRecord(t *testing.T, s Reader, m *model, r Record) {
 	t.Helper()
 	tbl := tableOfKey(r.Key)
 	shape, ok := s.Table(tbl)

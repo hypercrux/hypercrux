@@ -23,9 +23,15 @@ import (
 // returns. Each checks everything before it changes anything, so on an
 // error the store is as it was and dst comes back as it went in. Apply
 // makes one change of a change list, such as a batch the log has read,
-// checked by FORMAT.md's rules for changes. Transactions, with the undo
-// list that takes changes back, are S2's, and emitting change lists and
-// applying them whole are S3's.
+// checked by FORMAT.md's rules for changes.
+//
+// The four change the store directly, so they're for a goroutine that has
+// the store to itself, and they panic while a transaction is open. The
+// transaction's own Put, Delete, Drop and Apply, in tx.go, run the same
+// code with the copy's lock and the undo list (S2). Every change to the
+// store goes through one of the small functions that call changing first:
+// newTable, add and setSize in store.go, and put, remove and drop here.
+// Emitting change lists and applying them whole are S3's.
 
 // Put merges fields into the record with this key, and creates the record
 // if it isn't there. The fields given take their values, a null clears a
@@ -46,6 +52,11 @@ import (
 // come in 0.x's order: the key, the field names, the values in byte order
 // of name, the number of fields, then the vector's size.
 func (s *Store) Put(dst []format.Change, key string, fields []format.Field) ([]format.Change, error) {
+	s.direct("Put")
+	return s.putFields(dst, key, fields)
+}
+
+func (s *Store) putFields(dst []format.Change, key string, fields []format.Field) ([]format.Change, error) {
 	tbl, err := rules.TableOf(key)
 	if err != nil {
 		return dst, err
@@ -94,6 +105,11 @@ func (s *Store) Put(dst []format.Change, key string, fields []format.Field) ([]f
 // 0.x's: ErrInvalid for a key that breaks the rules, and ErrNotFound when
 // there's no such record. Its links go with it once S5 adds them.
 func (s *Store) Delete(dst []format.Change, key string) ([]format.Change, error) {
+	s.direct("Delete")
+	return s.deleteKey(dst, key)
+}
+
+func (s *Store) deleteKey(dst []format.Change, key string) ([]format.Change, error) {
 	if err := s.delete(key); err != nil {
 		return dst, err
 	}
@@ -104,10 +120,23 @@ func (s *Store) Delete(dst []format.Change, key string) ([]format.Change, error)
 // its vector size. The error is 0.x's: ErrInvalid for a name that breaks
 // the rules, and ErrNotFound when there's no such table.
 func (s *Store) Drop(dst []format.Change, name string) ([]format.Change, error) {
+	s.direct("Drop")
+	return s.dropTable(dst, name)
+}
+
+func (s *Store) dropTable(dst []format.Change, name string) ([]format.Change, error) {
 	if err := s.drop(name); err != nil {
 		return dst, err
 	}
 	return append(dst, format.Change{Op: format.Drop, Table: name}), nil
+}
+
+// direct panics while a transaction is open: a write that went around it
+// would change the copy without the lock, the undo list or the change list.
+func (s *Store) direct(op string) {
+	if s.tx != nil {
+		panic("store: " + op + " on the store while a transaction is open; use the transaction's " + op)
+	}
 }
 
 // Apply makes one change of a change list, after checking it against the
@@ -122,6 +151,11 @@ func (s *Store) Drop(dst []format.Change, name string) ([]format.Change, error) 
 // Link and Unlink come with S5, and until then give an error that matches
 // errors.ErrUnsupported. S3 applies whole change lists on top of Apply.
 func (s *Store) Apply(c format.Change) error {
+	s.direct("Apply")
+	return s.apply(c)
+}
+
+func (s *Store) apply(c format.Change) error {
 	switch c.Op {
 	case format.CreateTable:
 		return s.applyCreate(c)
@@ -162,9 +196,11 @@ func (s *Store) applyCreate(c format.Change) error {
 	}
 	t := s.newTable(strings.Clone(c.Table))
 	for _, name := range c.Names {
-		t.add(strings.Clone(name))
+		s.add(t, strings.Clone(name))
 	}
-	t.size = c.Size
+	if c.Size != 0 {
+		s.setSize(t, c.Size)
+	}
 	return nil
 }
 
@@ -236,18 +272,23 @@ func (s *Store) put(t *table, key string, fields []format.Field, vec []float32) 
 	r := s.records[key]
 	if r == nil {
 		r = &record{key: strings.Clone(key), table: t}
+		s.changing(undo{op: undoNoRecord, name: r.key})
 		s.records[r.key] = r // S4 adds the key to its table's order here
+	} else {
+		// A new record goes whole when its put is undone, so only a
+		// record that was there needs its fields and vector kept.
+		s.changing(undo{op: undoRecord, record: r, fields: r.fields, vec: r.vec})
 	}
 	set := make([]FieldValue, 0, len(fields))
 	for _, f := range fields {
 		p, ok := t.index[rules.Fold(f.Name)]
 		if !ok {
-			p = t.add(strings.Clone(f.Name))
+			p = s.add(t, strings.Clone(f.Name))
 		}
 		if p == t.vec {
 			r.vec = vec // nil when the put clears the vector
 			if vec != nil && t.size == 0 {
-				t.size = len(vec)
+				s.setSize(t, len(vec))
 			}
 			continue
 		}
@@ -296,8 +337,10 @@ func (s *Store) delete(key string) error {
 }
 
 // remove takes a record out of the store. S4 takes its key out of its
-// table's order here, S5 its links both ways, and V1 frees its slot.
+// table's order here, S5 its links both ways, and V1 frees its slot, each
+// with undo entries of their own, or with more in this one.
 func (s *Store) remove(r *record) {
+	s.changing(undo{op: undoHadRecord, record: r})
 	delete(s.records, r.key)
 }
 
@@ -316,6 +359,9 @@ func (s *Store) drop(name string) error {
 			s.remove(r)
 		}
 	}
+	// The table and its records keep everything they hold, so undoing the
+	// drop is putting them back in the maps.
+	s.changing(undo{op: undoHadTable, table: t})
 	delete(s.tables, name)
 	return nil
 }
