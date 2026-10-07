@@ -23,15 +23,31 @@ import (
 // line, and Import refuses an export without it.
 func (db *DB) Export(w io.Writer) error {
 	return db.snapshot(func(conn querier) error {
-		rep, err := check(conn, false)
-		if err != nil {
+		if err := checkForExport(conn, "it isn't exported"); err != nil {
 			return err
-		}
-		if !rep.OK() {
-			return fmt.Errorf("%w: hypercrux check finds problems in the file, so it isn't exported; the first is: %s", ErrInvalid, rep.Problems[0])
 		}
 		return exportAll(conn, export.NewWriter(w))
 	})
+}
+
+// checkForExport refuses a file stored as UTF-16, whose order of keys isn't
+// UTF-8's, and a file that Check finds problems in.
+func checkForExport(q querier, outcome string) error {
+	var enc string
+	if err := q.QueryRow(`PRAGMA encoding`).Scan(&enc); err != nil {
+		return err
+	}
+	if enc != "UTF-8" {
+		return fmt.Errorf("%w: the file stores its text as %s, so %s; export and import take UTF-8 files, which is what HyperCrux creates", ErrInvalid, enc, outcome)
+	}
+	rep, err := check(q, true)
+	if err != nil {
+		return err
+	}
+	if !rep.OK() {
+		return fmt.Errorf("%w: hypercrux check finds problems in the file, so %s; the first is: %s", ErrInvalid, outcome, rep.Problems[0])
+	}
+	return nil
 }
 
 func exportAll(q querier, w *export.Writer) error {
@@ -58,17 +74,20 @@ func exportAll(q querier, w *export.Writer) error {
 	}
 	for i := range tables {
 		t := &tables[i]
-		cols, err := q.Query(`SELECT name FROM pragma_table_info(?) ORDER BY cid`, t.Name)
+		// table_xinfo lists generated columns too, which an export keeps as
+		// plain fields holding their values.
+		cols, err := q.Query(`SELECT name, hidden FROM pragma_table_xinfo(?) ORDER BY cid`, t.Name)
 		if err != nil {
 			return err
 		}
 		for cols.Next() {
 			var name string
-			if err := cols.Scan(&name); err != nil {
+			var hidden int
+			if err := cols.Scan(&name, &hidden); err != nil {
 				cols.Close()
 				return err
 			}
-			if strings.EqualFold(name, "key") {
+			if strings.EqualFold(name, "key") || hidden == 1 {
 				continue
 			}
 			if err := checkField(name); err != nil {
@@ -193,6 +212,10 @@ func (db *DB) Import(r io.Reader) error {
 		}
 		if n > 0 {
 			return fmt.Errorf("%w: the file already holds record tables; import into a new file", ErrInvalid)
+		}
+		// The rules an import relies on are the file's own triggers.
+		if err := checkForExport(tx.tx, "nothing was imported"); err != nil {
+			return err
 		}
 		im := importer{tx: tx, tables: map[string]*importTable{}}
 		for {

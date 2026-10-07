@@ -27,12 +27,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: release
-  cancel-in-progress: false
-
 jobs:
   plan:
+    # After the tests, only for a push to main in this repository that passed.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
@@ -45,16 +47,17 @@ jobs:
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
-          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-          RUN_EVENT: ${{ github.event.workflow_run.event }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           case "$EVENT" in
           workflow_run)
-            if [ "$RUN_CONCLUSION" != success ] || [ "$RUN_EVENT" != push ]; then
-              echo "No release: the tests didn't pass on a push to main."
+            # Only the commit main is at now; if main has moved on, the run
+            # after the next push decides.
+            head=$(git ls-remote origin refs/heads/main | cut -f1)
+            if [ "$head" != "$RUN_SHA" ]; then
+              echo "No release: main has moved on from $RUN_SHA to $head."
               exit 0
             fi
             version=$(sed -n 's/^const Version = "\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' hypercrux.go)
@@ -62,11 +65,14 @@ jobs:
               echo "hypercrux.go has no Version of the form X.Y.Z" >&2
               exit 1
             fi
-            if git ls-remote --exit-code --tags origin "refs/tags/v$version" > /dev/null; then
+            tags=$(git ls-remote --tags --refs origin) || { echo "Couldn't read the repository's tags" >&2; exit 1; }
+            if grep -q "refs/tags/v$version\$" <<< "$tags"; then
               echo "No release: v$version is out already."
               exit 0
-            elif [ $? -ne 2 ]; then
-              echo "Couldn't read the repository's tags" >&2
+            fi
+            newest=$({ grep -o 'refs/tags/v[0-9]*\.[0-9]*\.[0-9]*$' <<< "$tags" || true; } | sed 's|refs/tags/v||' | sort -V | tail -n 1)
+            if [ -n "$newest" ] && [ "$(printf '%s\n%s\n' "$newest" "$version" | sort -V | tail -n 1)" != "$version" ]; then
+              echo "v$version is older than the newest release, v$newest; raise the version above it" >&2
               exit 1
             fi
             echo "Releasing v$version from $RUN_SHA."
@@ -202,7 +208,7 @@ jobs:
           & $hc export check.db | & $hc import copy.db
           $one = (& $hc export check.db) -join "`n"
           $two = (& $hc export copy.db) -join "`n"
-          if ($one -ne $two) { throw "the copy exports differently" }
+          if ($one -cne $two) { throw "the copy exports differently" }
           $near = & $hc nearest check.db docs '[1,0]' -k 1
           if ("$near" -notmatch 'docs:1') { throw "nearest gave $near" }
           $walk = & $hc walk check.db customer:42 1
@@ -213,6 +219,10 @@ jobs:
 
   release:
     needs: [plan, linux, macos, windows, windows-check]
+    # Two runs for the same tag take turns; the second finds it published.
+    concurrency:
+      group: release-${{ needs.plan.outputs.tag }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -247,6 +257,10 @@ jobs:
       - name: Tag the commit and publish the release, binaries attached
         if: env.NEW == 'true'
         run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG is out already."
+            exit 0
+          fi
           cd dist
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$REF" \
             --title "HyperCrux $TAG" --notes-file ../notes.md \

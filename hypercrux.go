@@ -15,7 +15,7 @@ import (
 )
 
 // Version is the version of the package and of the hypercrux command.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // FormatVersion is the version of the file layout described in FORMAT.md.
 // HyperCrux refuses to open a file with a newer format version.

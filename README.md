@@ -13,7 +13,7 @@ small `hypercrux` binary from a script or any other language. The file is
 plain SQLite, and the rules that keep it consistent are stored inside it, so
 even a program that has never heard of HyperCrux reads and writes it safely.
 
-Version 0.1.0 · Apache License 2.0 · [hypercrux.com](https://hypercrux.com)
+Version 0.2.0 · Apache License 2.0 · [hypercrux.com](https://hypercrux.com)
 
 - [Why one file for all four](#why-one-file-for-all-four)
 - [Quick start](#quick-start)
@@ -295,7 +295,7 @@ harder cases. The results are recorded in [test/results](test/results):
   record with fields and a vector, linked it to the record before and to an
   anchor, deleted an old record every seventh time and moved a counter. After
   every kill, the file matched the last committed transaction exactly. That
-  was 28,017 transactions in all, ending with 24,017 records and 44,034 links:
+  was 30,520 transactions in all, ending with 26,162 records and 47,966 links:
   no torn record, no link to a missing record, Check and SQLite's integrity
   check passing every time, and searches and walks finding what they should.
 - **Processes sharing a file.** Four processes wrote 300 transactions each to
@@ -317,7 +317,8 @@ harder cases. The results are recorded in [test/results](test/results):
   control characters, and vectors of awkward floats. Each time the two
   exports matched byte for byte, and every value came back with its SQLite
   type and its exact bits. An export cut short at any byte was refused and
-  left nothing behind, and the format's reader ran under Go's fuzzer.
+  left nothing behind. The format's reader and its JSON parser also ran under
+  Go's fuzzer for a minute each.
 - **Plain SQL that breaks a rule is refused.** Thirteen statements that would leave
   the file inconsistent, from changing a key to storing a vector of zeros,
   were all refused.

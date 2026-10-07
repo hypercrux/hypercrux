@@ -35,8 +35,8 @@ in this order:
 2. **A line for each record table**, in order of name. `table` is its name.
    `dims` is its vector size, or `null` when it has none recorded; a table
    keeps its size after its vectors are deleted, and an import keeps it too.
-   `fields` lists its columns after the key, in order, with the vector's
-   column, `vec`, where it falls.
+   `fields` lists its columns other than the key, in order, with the
+   vector's column, `vec`, where it falls.
 3. **A line for each record**, table by table in the tables' order, and in
    order of key within each table. `key` is the record's key, and `fields`
    holds its fields that aren't NULL, in the table's order.
@@ -72,13 +72,19 @@ decimal for a 32-bit float, without the `.0`.
 
 A string escapes the quote, the backslash and the control characters below
 U+0020, and nothing else. Control characters use JSON's short forms, such as
-`\n` and `\t`, where it has them, and `\u00XX` otherwise.
+`\n` and `\t`, where it has them, and `\u00XX` with lower-case hex digits
+otherwise.
 
 ## What an export holds
 
 Only record tables and links. Tables HyperCrux hasn't adopted stay behind,
 and so do a table's declared column types and constraints, its indexes and
-any triggers of its own. In an imported table the key is the first column.
+any triggers of its own. A generated column comes back as a plain column
+holding its values, and in an imported table the key is the first column.
+
+Export and import take files that store their text as UTF-8, which is what
+HyperCrux creates. An SQLite file can be set to UTF-16 instead, and then the
+order of its keys isn't UTF-8's, so both refuse it.
 
 Export writes what `Put` and `Link` take. Plain SQL can store values they'd
 refuse, and export stops at the first one with an error that names the
@@ -91,8 +97,9 @@ record:
 - a link type that isn't 1 to 200 characters of UTF-8.
 
 Change the value with SQL, and export again. Export also refuses a file that
-`hypercrux check` finds problems in. What it wrote before stopping has no
-last line, so import won't take it.
+`hypercrux check` finds problems in, from its own checks to SQLite's
+integrity check. What it wrote before stopping has no last line, so import
+won't take it.
 
 Export reads one moment of the file, so writers carry on while it runs.
 
@@ -107,7 +114,9 @@ exporting the result gives the same bytes.
 
 Import refuses:
 
-- a file that already holds record tables;
+- a file that already holds record tables, or that `hypercrux check` finds
+  problems in, since the rules an import relies on are the file's own
+  triggers;
 - a table whose name is taken by a table, view or index already in the
   file, in any mix of upper and lower case;
 - a record or a link that is there twice;

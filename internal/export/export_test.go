@@ -641,8 +641,12 @@ func FuzzLine(f *testing.F) {
 		if !json.Valid([]byte(s)) {
 			t.Fatalf("accepted %q, which isn't JSON", s)
 		}
+		// Numbers stay as written, since a valid one like 1e999 overflows a
+		// float64.
+		dec := json.NewDecoder(strings.NewReader(s))
+		dec.UseNumber()
 		var m map[string]any
-		if err := json.Unmarshal([]byte(s), &m); err != nil {
+		if err := dec.Decode(&m); err != nil {
 			t.Fatal(err)
 		}
 		for _, mem := range v.obj {

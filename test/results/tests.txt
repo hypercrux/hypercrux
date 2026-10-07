@@ -1,12 +1,12 @@
 # Every test, verbose
-# recorded 2026-10-07 12:50 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
+# recorded 2026-10-07 13:38 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
 # Linux 6.18.44-fc-v77, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs
 # command: go test -count=1 -v ./...
 
 === RUN   TestExportImportRoundTrip
---- PASS: TestExportImportRoundTrip (3.08s)
+--- PASS: TestExportImportRoundTrip (2.50s)
 === RUN   TestExportKeepsWhatTablesRemember
---- PASS: TestExportKeepsWhatTablesRemember (0.05s)
+--- PASS: TestExportKeepsWhatTablesRemember (0.04s)
 === RUN   TestExportRefusesWhatPutWouldNot
 === RUN   TestExportRefusesWhatPutWouldNot/infinity
 === RUN   TestExportRefusesWhatPutWouldNot/bad_text
@@ -15,24 +15,28 @@
 === RUN   TestExportRefusesWhatPutWouldNot/bad_field_name
 === RUN   TestExportRefusesWhatPutWouldNot/NaN_in_a_vector
 === RUN   TestExportRefusesWhatPutWouldNot/missing_trigger
---- PASS: TestExportRefusesWhatPutWouldNot (0.11s)
+=== RUN   TestExportRefusesWhatPutWouldNot/vector_size_out_of_range
+--- PASS: TestExportRefusesWhatPutWouldNot (0.14s)
     --- PASS: TestExportRefusesWhatPutWouldNot/infinity (0.02s)
-    --- PASS: TestExportRefusesWhatPutWouldNot/bad_text (0.01s)
+    --- PASS: TestExportRefusesWhatPutWouldNot/bad_text (0.02s)
     --- PASS: TestExportRefusesWhatPutWouldNot/bad_key (0.02s)
     --- PASS: TestExportRefusesWhatPutWouldNot/bad_link_type (0.02s)
     --- PASS: TestExportRefusesWhatPutWouldNot/bad_field_name (0.02s)
     --- PASS: TestExportRefusesWhatPutWouldNot/NaN_in_a_vector (0.02s)
     --- PASS: TestExportRefusesWhatPutWouldNot/missing_trigger (0.02s)
+    --- PASS: TestExportRefusesWhatPutWouldNot/vector_size_out_of_range (0.02s)
 === RUN   TestImportRefuses
---- PASS: TestImportRefuses (2.17s)
+--- PASS: TestImportRefuses (2.15s)
 === RUN   TestExportReadsOneMoment
 --- PASS: TestExportReadsOneMoment (0.18s)
+=== RUN   TestExportAndImportWantUTF8
+--- PASS: TestExportAndImportWantUTF8 (0.01s)
 === RUN   TestOpenSetsUpTheFile
 --- PASS: TestOpenSetsUpTheFile (0.01s)
 === RUN   TestOpenRefusesANewerFormat
 --- PASS: TestOpenRefusesANewerFormat (0.01s)
 === RUN   TestOpenAddsTablesToAnExistingDatabase
---- PASS: TestOpenAddsTablesToAnExistingDatabase (0.02s)
+--- PASS: TestOpenAddsTablesToAnExistingDatabase (0.01s)
 === RUN   TestPutAndGetRoundTrip
 --- PASS: TestPutAndGetRoundTrip (0.01s)
 === RUN   TestPutKeepsFieldsItIsNotGiven
@@ -46,41 +50,41 @@
 === RUN   TestPrefixEnd
 --- PASS: TestPrefixEnd (0.00s)
 === RUN   TestLinksFollowTheirRecords
---- PASS: TestLinksFollowTheirRecords (0.03s)
+--- PASS: TestLinksFollowTheirRecords (0.02s)
 === RUN   TestWalk
---- PASS: TestWalk (0.01s)
+--- PASS: TestWalk (0.02s)
 === RUN   TestWalkInSQL
 --- PASS: TestWalkInSQL (0.01s)
 === RUN   TestVectors
---- PASS: TestVectors (0.02s)
+--- PASS: TestVectors (0.01s)
 === RUN   TestCosine
 --- PASS: TestCosine (0.00s)
 === RUN   TestNearestIsExact
---- PASS: TestNearestIsExact (0.31s)
+--- PASS: TestNearestIsExact (0.29s)
 === RUN   TestOneStatementCrossesAllFour
 --- PASS: TestOneStatementCrossesAllFour (0.02s)
 === RUN   TestPlainSQLFollowsTheRules
---- PASS: TestPlainSQLFollowsTheRules (0.02s)
+--- PASS: TestPlainSQLFollowsTheRules (0.03s)
 === RUN   TestUpdateIsAllOrNothing
---- PASS: TestUpdateIsAllOrNothing (0.01s)
+--- PASS: TestUpdateIsAllOrNothing (0.02s)
 === RUN   TestAdopt
 --- PASS: TestAdopt (0.02s)
 === RUN   TestCheckFindsProblems
---- PASS: TestCheckFindsProblems (0.02s)
+--- PASS: TestCheckFindsProblems (0.01s)
 === RUN   TestGoroutinesShareADB
---- PASS: TestGoroutinesShareADB (0.61s)
+--- PASS: TestGoroutinesShareADB (0.60s)
 === RUN   TestKilledWritersNeverLeaveAMess
-    process_test.go:244: 200 SIGKILLs at random moments in 55.662s: 28017 transactions committed, each a record with fields and a vector, two links, a counter and every 7th a delete; after every kill the file matched the last committed transaction exactly (24017 records, 44034 links at the end), Check passed, and the vector and link handles agreed; 0 rounds were killed before the writer committed anything
---- PASS: TestKilledWritersNeverLeaveAMess (55.69s)
+    process_test.go:244: 200 SIGKILLs at random moments in 57.471s: 30520 transactions committed, each a record with fields and a vector, two links, a counter and every 7th a delete; after every kill the file matched the last committed transaction exactly (26162 records, 47966 links at the end), Check passed, and the vector and link handles agreed; 0 rounds were killed before the writer committed anything
+--- PASS: TestKilledWritersNeverLeaveAMess (57.50s)
 === RUN   TestProcessesShareAFile
-    process_test.go:351: 4 processes wrote 300 transactions each to one file in 788ms while reading it; every record and link arrived and Check passed
---- PASS: TestProcessesShareAFile (0.81s)
+    process_test.go:351: 4 processes wrote 300 transactions each to one file in 843ms while reading it; every record and link arrived and Check passed
+--- PASS: TestProcessesShareAFile (0.87s)
 === RUN   TestPythonFollowsTheRules
---- PASS: TestPythonFollowsTheRules (0.31s)
+--- PASS: TestPythonFollowsTheRules (0.28s)
 === RUN   TestPythonAgreesOnNearest
---- PASS: TestPythonAgreesOnNearest (0.24s)
+--- PASS: TestPythonAgreesOnNearest (0.23s)
 === RUN   TestPythonAndGoWriteAtOnce
---- PASS: TestPythonAndGoWriteAtOnce (0.87s)
+--- PASS: TestPythonAndGoWriteAtOnce (0.82s)
 === RUN   TestTableNamesLikeHyperCruxsOwn
 --- PASS: TestTableNamesLikeHyperCruxsOwn (0.03s)
 === RUN   TestReplaceOnAnotherUniqueColumn
@@ -110,10 +114,10 @@
 === RUN   TestMissingKeyColumnIsNotFound
 --- PASS: TestMissingKeyColumnIsNotFound (0.01s)
 PASS
-ok  	github.com/hypercrux/hypercrux	64.864s
+ok  	github.com/hypercrux/hypercrux	66.007s
 ?   	github.com/hypercrux/hypercrux/beta/conformance	[no test files]
 === RUN   TestCommands
-    cmd_test.go:108: binary: /tmp/hypercrux-cmdtest1980830812/hypercrux
+    cmd_test.go:108: binary: /tmp/hypercrux-cmdtest3462550658/hypercrux
 === RUN   TestCommands/VersionAndHelp
 === RUN   TestCommands/PutGetAndLink
 === RUN   TestCommands/Scan
@@ -125,22 +129,22 @@ ok  	github.com/hypercrux/hypercrux	64.864s
 === RUN   TestCommands/AdoptAndDrop
 === RUN   TestCommands/ExportAndImport
 === RUN   TestCommands/Mistakes
---- PASS: TestCommands (0.54s)
+--- PASS: TestCommands (0.49s)
     --- PASS: TestCommands/VersionAndHelp (0.01s)
-    --- PASS: TestCommands/PutGetAndLink (0.08s)
+    --- PASS: TestCommands/PutGetAndLink (0.07s)
     --- PASS: TestCommands/Scan (0.02s)
-    --- PASS: TestCommands/NeighboursAndWalk (0.03s)
+    --- PASS: TestCommands/NeighboursAndWalk (0.02s)
     --- PASS: TestCommands/Nearest (0.02s)
-    --- PASS: TestCommands/SQL (0.11s)
-    --- PASS: TestCommands/SQLTriggers (0.02s)
-    --- PASS: TestCommands/UnlinkDeleteAndCheck (0.03s)
-    --- PASS: TestCommands/AdoptAndDrop (0.06s)
+    --- PASS: TestCommands/SQL (0.09s)
+    --- PASS: TestCommands/SQLTriggers (0.03s)
+    --- PASS: TestCommands/UnlinkDeleteAndCheck (0.04s)
+    --- PASS: TestCommands/AdoptAndDrop (0.08s)
     --- PASS: TestCommands/ExportAndImport (0.06s)
-    --- PASS: TestCommands/Mistakes (0.08s)
+    --- PASS: TestCommands/Mistakes (0.07s)
 PASS
-ok  	github.com/hypercrux/hypercrux/beta/conformance/cmdtest	1.679s
+ok  	github.com/hypercrux/hypercrux/beta/conformance/cmdtest	1.639s
 === RUN   TestConformance
-    suite.go:79: engine: HyperCrux 0.2.0 on SQLite
+    suite.go:79: engine: HyperCrux 0.1.0 on SQLite
 === RUN   TestConformance/OpenAndReopen
 === RUN   TestConformance/OpenNeedsAFile
 === RUN   TestConformance/PutAndGetRoundTrip
@@ -165,10 +169,10 @@ ok  	github.com/hypercrux/hypercrux/beta/conformance/cmdtest	1.679s
 === RUN   TestConformance/GoroutinesShareADB
 === RUN   TestConformance/OneConnection
 === RUN   TestConformance/KilledWritersNeverLeaveAMess
-    process.go:259: 200 SIGKILLs at random moments in 50.139s: 26161 transactions committed; after every kill every record, the link count and every link the round could have changed matched the last committed transaction, and at the end every link did (22426 records, 41117 links)
+    process.go:259: 200 SIGKILLs at random moments in 49.987s: 27483 transactions committed; after every kill every record, the link count and every link the round could have changed matched the last committed transaction, and at the end every link did (23559 records, 43194 links)
 === RUN   TestConformance/ProcessesShareAFile
-    process.go:364: 4 processes wrote 300 transactions each to one file in 903ms while reading it; every record and link arrived and Check passed
---- PASS: TestConformance (52.37s)
+    process.go:364: 4 processes wrote 300 transactions each to one file in 1.245s while reading it; every record and link arrived and Check passed
+--- PASS: TestConformance (52.28s)
     --- PASS: TestConformance/OpenAndReopen (0.01s)
     --- PASS: TestConformance/OpenNeedsAFile (0.00s)
     --- PASS: TestConformance/PutAndGetRoundTrip (0.01s)
@@ -176,36 +180,36 @@ ok  	github.com/hypercrux/hypercrux/beta/conformance/cmdtest	1.679s
     --- PASS: TestConformance/KeyAndFieldRules (0.01s)
     --- PASS: TestConformance/MoreFieldTypes (0.01s)
     --- PASS: TestConformance/GetAndDeleteMissing (0.01s)
-    --- PASS: TestConformance/Scan (0.02s)
+    --- PASS: TestConformance/Scan (0.01s)
     --- PASS: TestConformance/NewFieldsShowAtOnce (0.01s)
     --- PASS: TestConformance/LinksFollowTheirRecords (0.02s)
-    --- PASS: TestConformance/Walk (0.03s)
+    --- PASS: TestConformance/Walk (0.01s)
     --- PASS: TestConformance/RulesForLongKeysAndLinkTypes (0.01s)
-    --- PASS: TestConformance/TableNamesLikeHyperCruxsOwn (0.04s)
+    --- PASS: TestConformance/TableNamesLikeHyperCruxsOwn (0.03s)
     --- PASS: TestConformance/DropTable (0.02s)
     --- PASS: TestConformance/Vectors (0.02s)
-    --- PASS: TestConformance/NearestIsExact (0.31s)
-    --- PASS: TestConformance/WalkInSQL (0.01s)
+    --- PASS: TestConformance/NearestIsExact (0.25s)
+    --- PASS: TestConformance/WalkInSQL (0.02s)
     --- PASS: TestConformance/OneStatementCrossesAllFour (0.02s)
     --- PASS: TestConformance/VectorAsQueryArgument (0.01s)
     --- PASS: TestConformance/PlainSQLFollowsTheRules (0.02s)
     --- PASS: TestConformance/UpdateIsAllOrNothing (0.02s)
-    --- PASS: TestConformance/GoroutinesShareADB (0.64s)
+    --- PASS: TestConformance/GoroutinesShareADB (0.47s)
     --- PASS: TestConformance/OneConnection (0.01s)
-    --- PASS: TestConformance/KilledWritersNeverLeaveAMess (50.16s)
-    --- PASS: TestConformance/ProcessesShareAFile (0.93s)
+    --- PASS: TestConformance/KilledWritersNeverLeaveAMess (50.01s)
+    --- PASS: TestConformance/ProcessesShareAFile (1.27s)
 PASS
-ok  	github.com/hypercrux/hypercrux/beta/conformance/zerox	52.377s
+ok  	github.com/hypercrux/hypercrux/beta/conformance/zerox	52.291s
 === RUN   TestEveryCommand
---- PASS: TestEveryCommand (0.10s)
+--- PASS: TestEveryCommand (0.16s)
 === RUN   TestExportAndImport
---- PASS: TestExportAndImport (0.05s)
+--- PASS: TestExportAndImport (0.06s)
 === RUN   TestOtherSQLiteFilesAreLeftAlone
 --- PASS: TestOtherSQLiteFilesAreLeftAlone (0.01s)
 === RUN   TestCheckReportsProblems
---- PASS: TestCheckReportsProblems (0.02s)
+--- PASS: TestCheckReportsProblems (0.03s)
 PASS
-ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	0.178s
+ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	0.260s
 ?   	github.com/hypercrux/hypercrux/examples/go	[no test files]
 === RUN   TestRealForms
 --- PASS: TestRealForms (0.00s)
@@ -240,7 +244,7 @@ ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	0.178s
 === RUN   FuzzReader/seed#17
 === RUN   FuzzReader/seed#18
 === RUN   FuzzReader/seed#19
---- PASS: FuzzReader (0.00s)
+--- PASS: FuzzReader (0.01s)
     --- PASS: FuzzReader/seed#0 (0.00s)
     --- PASS: FuzzReader/seed#1 (0.00s)
     --- PASS: FuzzReader/seed#2 (0.00s)
@@ -267,11 +271,13 @@ ok  	github.com/hypercrux/hypercrux/cmd/hypercrux	0.178s
 === RUN   FuzzLine/seed#2
 === RUN   FuzzLine/seed#3
 === RUN   FuzzLine/seed#4
+=== RUN   FuzzLine/5b2be00bf531bc73
 --- PASS: FuzzLine (0.00s)
     --- PASS: FuzzLine/seed#0 (0.00s)
     --- PASS: FuzzLine/seed#1 (0.00s)
     --- PASS: FuzzLine/seed#2 (0.00s)
     --- PASS: FuzzLine/seed#3 (0.00s)
     --- PASS: FuzzLine/seed#4 (0.00s)
+    --- PASS: FuzzLine/5b2be00bf531bc73 (0.00s)
 PASS
-ok  	github.com/hypercrux/hypercrux/internal/export	0.321s
+ok  	github.com/hypercrux/hypercrux/internal/export	0.317s

@@ -27,8 +27,8 @@ import (
 const Version = 1
 
 // Table is a record table: its name, its vector size (0 when the table has
-// none recorded), and its fields, which are its columns after the key, in
-// order. The vector's column, vec, is among the fields where it falls.
+// none recorded), and its fields, which are its columns other than the key,
+// in order. The vector's column, vec, is among the fields where it falls.
 type Table struct {
 	Name   string
 	Dims   int

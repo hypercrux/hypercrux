@@ -5,6 +5,7 @@ package hypercrux
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"math"
@@ -237,6 +238,10 @@ func TestExportKeepsWhatTablesRemember(t *testing.T) {
 	must[any](t)(a.Exec(`CREATE TABLE typed (key TEXT PRIMARY KEY, d DATETIME, b BOOLEAN, i INTEGER, r REAL, t TEXT, n NUMERIC)`))
 	must[any](t)(a.Exec(`INSERT INTO typed VALUES ('typed:1', '2026-10-07 12:00:00', 1, '42', 2, 3, '1.5'), ('typed:2', 1700000000, 0, 'x', -0.0, x'00', NULL)`))
 	ok(t, a.Adopt("typed"))
+	// Generated columns come out as plain fields holding their values.
+	must[any](t)(a.Exec(`CREATE TABLE gen (key TEXT PRIMARY KEY, a, b GENERATED ALWAYS AS (a * 2) STORED, c AS (a || 'x'), d)`))
+	must[any](t)(a.Exec(`INSERT INTO gen (key, a, d) VALUES ('gen:1', 5, 'y')`))
+	ok(t, a.Adopt("gen"))
 
 	out := exportOf(t, a)
 	for _, want := range []string{
@@ -244,9 +249,11 @@ func TestExportKeepsWhatTablesRemember(t *testing.T) {
 		`{"table":"empty","dims":null,"fields":["a"]}`,
 		`{"table":"sized","dims":3,"fields":["vec"]}`,
 		`{"key":"docs:1","fields":{"zeta":1,"alpha":2,"vec":[1,2]}}`,
+		`{"table":"gen","dims":null,"fields":["a","b","c","d"]}`,
+		`{"key":"gen:1","fields":{"a":5,"b":10,"c":"5x","d":"y"}}`,
 		`{"key":"typed:1","fields":{"d":"2026-10-07 12:00:00","b":1,"i":42,"r":2.0,"t":"3","n":1.5}}`,
 		`{"key":"typed:2","fields":{"d":1700000000,"b":0,"i":"x","r":0.0,"t":{"base64":"AA=="}}}`,
-		`{"end":{"tables":4,"records":4,"links":0}}`,
+		`{"end":{"tables":5,"records":5,"links":0}}`,
 	} {
 		if !strings.Contains(string(out), want+"\n") {
 			t.Errorf("the export lacks %s:\n%s", want, out)
@@ -280,6 +287,7 @@ func TestExportRefusesWhatPutWouldNot(t *testing.T) {
 		{"bad field name", `CREATE TABLE odd (key TEXT PRIMARY KEY, "first name" TEXT)`, `field name "first name"`},
 		{"NaN in a vector", `UPDATE docs SET vec = x'0000c07f0000803f' WHERE key = 'docs:1'`, "check finds problems"},
 		{"missing trigger", `DROP TRIGGER "hc.docs.delete"`, "check finds problems"},
+		{"vector size out of range", `UPDATE hc_tables SET dims = 70000 WHERE name = 'docs'`, "vector size of 70000"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			db, _ := openTemp(t)
@@ -368,6 +376,11 @@ func TestImportRefuses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "already holds record tables") {
 		t.Fatalf("a second import: %v", err)
 	}
+	broken, _ := openTemp(t)
+	must[any](t)(broken.Exec(`DROP TRIGGER hc_links_insert`))
+	if err := broken.Import(strings.NewReader(good)); err == nil || !strings.Contains(err.Error(), "so nothing was imported") {
+		t.Fatalf("an import into a file without its link trigger: %v", err)
+	}
 	db2, _ := openTemp(t)
 	must[any](t)(db2.Exec(`CREATE TABLE DOCS (a)`))
 	if err := db2.Import(strings.NewReader(good)); err == nil || !strings.Contains(err.Error(), "already has a table, view or index called docs") {
@@ -420,4 +433,36 @@ func TestExportReadsOneMoment(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// A file whose text is stored as UTF-16 orders keys differently from UTF-8,
+// so export and import refuse it rather than write something out of order.
+func TestExportAndImportWantUTF8(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "utf16.db")
+	plain, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.Exec(`PRAGMA encoding = 'UTF-16le'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plain.Exec(`CREATE TABLE app (x)`); err != nil {
+		t.Fatal(err)
+	}
+	plain.Close()
+	db := must[*DB](t)(Open(path))
+	defer db.Close()
+	ok(t, db.Put("docs:a", Fields{"n": 1}))
+	ok(t, db.Put("docs:\u0101", Fields{"n": 2}))
+	var buf bytes.Buffer
+	err = db.Export(&buf)
+	wantErr(t, err, ErrInvalid)
+	if !strings.Contains(err.Error(), "stores its text as UTF-16le") {
+		t.Fatalf("export of a UTF-16 file: %v", err)
+	}
+	ok(t, db.Drop("docs"))
+	err = db.Import(strings.NewReader(`{"hypercrux":"export","version":1}` + "\n" + `{"end":{"tables":0,"records":0,"links":0}}` + "\n"))
+	if err == nil || !strings.Contains(err.Error(), "so nothing was imported") {
+		t.Fatalf("import into a UTF-16 file: %v", err)
+	}
 }

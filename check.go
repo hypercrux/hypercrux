@@ -6,6 +6,7 @@ package hypercrux
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"math"
 	"strings"
@@ -71,7 +72,13 @@ func (db *DB) snapshot(fn func(conn querier) error) error {
 	if _, err := conn.Exec(`BEGIN DEFERRED`); err != nil {
 		return err
 	}
-	defer conn.Exec(`ROLLBACK`)
+	defer func() {
+		// A connection that can't end its transaction mustn't go back to
+		// the pool still inside it.
+		if _, err := conn.Exec(`ROLLBACK`); err != nil {
+			c.Raw(func(any) error { return driver.ErrBadConn })
+		}
+	}()
 	return fn(conn)
 }
 
@@ -186,6 +193,9 @@ func check(conn querier, integrity bool) (Report, error) {
 		if err := checkTable(t.name); err != nil {
 			problem("hc_tables lists %q, which isn't a valid table name", t.name)
 			continue
+		}
+		if t.dims != nil && (*t.dims < 1 || *t.dims > MaxDims) {
+			problem("hc_tables gives %s a vector size of %d, where it's 1 to %d or NULL", t.name, *t.dims, MaxDims)
 		}
 		ti, err := readTableInfo(conn, t.name)
 		if err != nil {

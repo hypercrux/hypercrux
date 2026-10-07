@@ -1,0 +1,55 @@
+# The export format's reader under Go's fuzzer for a minute, then its line parser against encoding/json for a minute
+# recorded 2026-10-07 13:40 UTC with go1.24.7 linux/amd64, SQLite 3.53.4
+# Linux 6.18.44-fc-v77, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs
+# command: go test -run ^$ -fuzz FuzzReader -fuzztime 60s ./internal/export; go test -run ^$ -fuzz FuzzLine -fuzztime 60s ./internal/export
+
+fuzz: elapsed: 0s, gathering baseline coverage: 0/83 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 83/83 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 12125 (4042/sec), new interesting: 0 (total: 83)
+fuzz: elapsed: 6s, execs: 115142 (34302/sec), new interesting: 1 (total: 84)
+fuzz: elapsed: 9s, execs: 115142 (0/sec), new interesting: 1 (total: 84)
+fuzz: elapsed: 12s, execs: 115142 (0/sec), new interesting: 1 (total: 84)
+fuzz: elapsed: 15s, execs: 261328 (48763/sec), new interesting: 1 (total: 84)
+fuzz: elapsed: 18s, execs: 586017 (108166/sec), new interesting: 3 (total: 86)
+fuzz: elapsed: 21s, execs: 715536 (43200/sec), new interesting: 6 (total: 89)
+fuzz: elapsed: 24s, execs: 815584 (33346/sec), new interesting: 10 (total: 93)
+fuzz: elapsed: 27s, execs: 902638 (29018/sec), new interesting: 14 (total: 97)
+fuzz: elapsed: 30s, execs: 902638 (0/sec), new interesting: 14 (total: 97)
+fuzz: elapsed: 33s, execs: 902638 (0/sec), new interesting: 14 (total: 97)
+fuzz: elapsed: 36s, execs: 1053838 (50429/sec), new interesting: 15 (total: 98)
+fuzz: elapsed: 39s, execs: 1105911 (17358/sec), new interesting: 15 (total: 98)
+fuzz: elapsed: 42s, execs: 1174862 (22976/sec), new interesting: 16 (total: 99)
+fuzz: elapsed: 45s, execs: 1228988 (18046/sec), new interesting: 18 (total: 101)
+fuzz: elapsed: 48s, execs: 1277605 (16208/sec), new interesting: 18 (total: 101)
+fuzz: elapsed: 51s, execs: 1667618 (129973/sec), new interesting: 23 (total: 106)
+fuzz: elapsed: 54s, execs: 1778416 (36871/sec), new interesting: 29 (total: 112)
+fuzz: elapsed: 57s, execs: 1778416 (0/sec), new interesting: 29 (total: 112)
+fuzz: elapsed: 1m0s, execs: 1873672 (31769/sec), new interesting: 29 (total: 112)
+fuzz: elapsed: 1m1s, execs: 1873672 (0/sec), new interesting: 29 (total: 112)
+PASS
+ok  	github.com/hypercrux/hypercrux/internal/export	61.028s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/265 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 265/265 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 116394 (38786/sec), new interesting: 1 (total: 266)
+fuzz: elapsed: 6s, execs: 200788 (28134/sec), new interesting: 3 (total: 268)
+fuzz: elapsed: 9s, execs: 271134 (23438/sec), new interesting: 4 (total: 269)
+fuzz: elapsed: 12s, execs: 342689 (23864/sec), new interesting: 5 (total: 270)
+fuzz: elapsed: 15s, execs: 410720 (22665/sec), new interesting: 5 (total: 270)
+fuzz: elapsed: 18s, execs: 472237 (20517/sec), new interesting: 7 (total: 272)
+fuzz: elapsed: 21s, execs: 541635 (23134/sec), new interesting: 7 (total: 272)
+fuzz: elapsed: 24s, execs: 614989 (24451/sec), new interesting: 9 (total: 274)
+fuzz: elapsed: 27s, execs: 684870 (23292/sec), new interesting: 10 (total: 275)
+fuzz: elapsed: 30s, execs: 755954 (23696/sec), new interesting: 11 (total: 276)
+fuzz: elapsed: 33s, execs: 816089 (20046/sec), new interesting: 11 (total: 276)
+fuzz: elapsed: 36s, execs: 883942 (22616/sec), new interesting: 11 (total: 276)
+fuzz: elapsed: 39s, execs: 950543 (22198/sec), new interesting: 11 (total: 276)
+fuzz: elapsed: 42s, execs: 1011112 (20192/sec), new interesting: 11 (total: 276)
+fuzz: elapsed: 45s, execs: 1083682 (24190/sec), new interesting: 12 (total: 277)
+fuzz: elapsed: 48s, execs: 1151984 (22769/sec), new interesting: 12 (total: 277)
+fuzz: elapsed: 51s, execs: 1220246 (22751/sec), new interesting: 13 (total: 278)
+fuzz: elapsed: 54s, execs: 1286991 (22237/sec), new interesting: 13 (total: 278)
+fuzz: elapsed: 57s, execs: 1359859 (24301/sec), new interesting: 13 (total: 278)
+fuzz: elapsed: 1m0s, execs: 1402187 (14111/sec), new interesting: 13 (total: 278)
+fuzz: elapsed: 1m1s, execs: 1402187 (0/sec), new interesting: 13 (total: 278)
+PASS
+ok  	github.com/hypercrux/hypercrux/internal/export	61.030s
