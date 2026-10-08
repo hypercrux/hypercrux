@@ -42,7 +42,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   and `TableOf` work through the file, and `Check` counts. `Query`,
   `QueryRow`, `Exec` and `SQL()` go through the Beta's database/sql driver,
   which parses each statement and takes its arguments, and `SQL().Begin`
-  returns an error; running SQL waits for G4. The helpers that hold no
+  returns an error; running SQL waits for G4. Each read through a `DB`
+  follows what other processes commit, and reloads the file after a
+  compaction or a backup moved into place. The helpers that hold no
   state work already, and the rest are stubs that name the task that makes
   them work.
 - `internal/errs/`: the error values every layer returns, each of one kind
@@ -82,7 +84,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   log when the writer has gone. The holder of the write lock compacts the
   database from a snapshot of the copy into `NAME.compact`, which is synced
   and renamed over the database, while writers wait it out, and the next
-  holder removes one a crash left.
+  holder removes one a crash left. A process that finds another file at the
+  path reads it from its start with `Reload`, once its old copy has gone and
+  a garbage collection has run.
 - `internal/procs/`: the many-process harness. It runs writer and reader
   processes on one database, copies of the test binary, kills them with
   SIGKILL at random moments and starts new ones in their place. Then it
@@ -90,12 +94,15 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   file holds every commit a writer saw succeed, with a commit under way at a
   kill there whole or not at all. Its tests run a toy log with a planted
   bug, and the real log with readers that open the file afresh and with
-  followers. Runs can leave gaps with no writer, and wait for counts of a
-  workload's own.
+  followers. Runs can leave gaps with no writer, wait for counts of a
+  workload's own, and move backups into place at random moments, checking
+  each era of the log against its own file.
 - `internal/query/`: SQL. So far the operator iterator, `Rows`, the parser,
   with the tree it gives and the printer that gives a tree back as SQL, and
   the evaluator, which works out expressions and conditions as SQLite does,
-  with `Arg` for arguments.
+  with `Arg` for arguments and the dates on 'now' with SQLite's arithmetic,
+  and the operators, which read the store through `store.Reader` and hand
+  rows on through `Rows`, with the aggregates.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.

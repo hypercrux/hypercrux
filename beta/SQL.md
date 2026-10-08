@@ -364,6 +364,14 @@ above. `*` over a join or over json_each is outside the subset, and so are
 - Aggregates can't nest. They can't go in WHERE, LIMIT or OFFSET, or in a
   query whose result columns have none: those are errors, as in SQLite.
 - ORDER BY, LIMIT and OFFSET apply to the one row.
+- Every aggregate the result columns and ORDER BY name is worked out over
+  every row that passes WHERE, even where the expression around it doesn't
+  need its value, so `0 AND sum(abs(x))` raises abs()'s error. An aggregate
+  query's ORDER BY isn't worked out apart from its aggregates, since it
+  sorts one row.
+- The aggregates finish before LIMIT and OFFSET apply to the one row, so
+  sum()'s "integer overflow" shows under `LIMIT 1 OFFSET 1` too, and the
+  result columns of the row OFFSET skips aren't worked out.
 - `DISTINCT` inside an aggregate, `group_concat()`, `GROUP BY` and `HAVING`
   are outside the subset.
 
@@ -391,12 +399,16 @@ numbers, then text, then bytes, as "Comparing" describes. `NULLS FIRST`,
 ### LIMIT and OFFSET
 
 `LIMIT n` keeps the first n rows, and `OFFSET m` skips m rows before them.
-Both are worked out once, and can't use fields or aggregates. Each must give
-a whole number: an integer, a real without a fraction that fits in 64 bits,
-or text that reads as one of those, with spaces at either end. Anything else,
-NULL included, is an error, "datatype mismatch". A negative LIMIT means no
-limit, and a negative OFFSET means 0. OFFSET needs a LIMIT. SQLite's
-`LIMIT m, n` is outside the subset.
+Both are worked out once, LIMIT first, before anything else in the
+statement, and can't use fields or aggregates. Each must give a whole
+number: an integer, a real without a fraction strictly between the
+smallest and the largest integers, or text that reads as one of those,
+with spaces at either end. Anything else, NULL and bytes included, is an
+error, "datatype mismatch", and so is `LIMIT -9223372036854775808.0`. A
+negative LIMIT means no limit, and a negative OFFSET means 0. A LIMIT of 0
+gives no rows, and nothing more of the statement is worked out, its OFFSET
+included, so `LIMIT 0 OFFSET NULL` is no error. OFFSET needs a LIMIT.
+SQLite's `LIMIT m, n` is outside the subset.
 
 ### The one-record subquery
 
@@ -479,17 +491,35 @@ It comes in three forms:
 - The first argument is the literal 'now', in any case.
 - Each modifier is a text literal: a plus or minus sign, a whole number, one
   or more spaces, and `day`, `days`, `month`, `months`, `year` or `years`, in
-  any case. For example '+1 day', '-13 months' and '+4 years'.
+  any case. For example '+1 day', '-13 months' and '+4 years'. The number
+  may have any count of digits, zeros in front included. A space is any of
+  the six bytes SQLite reads as one there: the space, tab, line feed,
+  vertical tab, form feed and carriage return. Nothing comes before the
+  sign or after the unit, so ' +1 day' and '+1 day ' are outside the
+  subset.
 - Days move the moment by whole days. Months and years move the month or
   the year and keep the day, and a day past the end of its month runs on
   into the next, as SQLite does it: from 31 January, '+1 month' gives 2 or
-  3 March. Where SQLite gives NULL, the Beta does too.
+  3 March. Where SQLite gives NULL, the Beta does too: for a number of
+  5,373,485 days or more, 176,546 months or more, or 14,713 years or more;
+  for a month or a year that moves the year outside -4713 to 9999, or that
+  comes while the moment is outside SQLite's range; and for a moment
+  outside that range at the end. The range runs from noon on 24 November
+  4714 BC to the end of 9999. A run of days may leave it and come back, so
+  on 31 December 9999 `date('now', '+1 day', '-1 day')` is that day.
+- A year before year 1 is written with a minus sign and four digits, after
+  a year 0, as SQLite counts them: `date('now', '-1000000 days')` gave
+  `-0712-11-09` on 7 October 2026.
 - 'now' is read once for each statement, so every row of a query sees the
-  same moment.
+  same moment. It counts whole milliseconds, in UTC, as SQLite's clock
+  does, and `datetime()` cuts off the fraction of the seconds.
 - Other first arguments, such as a stored date, other modifiers, and the
   other date functions (`time()`, `julianday()`, `strftime()`,
   `unixepoch()`) are outside the subset. So are `date()` and `datetime()`
   without arguments.
+- A date outside the subset is refused before anything runs, wherever it is
+  in the statement, even where SQLite wouldn't work it out, as in
+  `0 AND date('2026-10-07')`.
 
 SQLite's routines are `parseModifier`, `computeJD`, `computeYMD`, `dateFunc`
 and `datetimeFunc` in its date code. `dates.jsonl` holds 608 cases on fixed
@@ -708,7 +738,7 @@ is read like this:
 | CAST to INTEGER, and integer arguments such as `substr()`'s positions | the longest start, after leading spaces, that reads as an integer, clamped to 64 bits, and 0 when nothing reads | `sqlite3Atoi64` |
 | CAST to REAL, truth, and real arguments such as `abs()`'s and `round()`'s | the longest start that reads as a number, as a real, and 0.0 when nothing reads | `sqlite3AtoF` |
 | CAST to NUMERIC | the longest start that reads as a number. An integer when it's written as one that fits, or when its value is whole and less than 2^51 in size, and a real otherwise | `sqlite3VdbeMemNumerify` |
-| `sum()`, `total()` and `avg()` | text that reads as a number, all of it, counts as that number. Other text counts as a real, read as for CAST to REAL | `sumStep` |
+| `sum()`, `total()` and `avg()` | text that reads as a number, all of it, counts as that number. Other text counts as a real, read as for CAST to REAL, and so do bytes, so `sum(x'35')` is 5.0 | `sumStep` |
 
 Only about the first 19 significant digits count, as SQLite reads a number,
 so `3500000000000000.2500001` is 3500000000000000.0, where Go's
@@ -809,8 +839,17 @@ the smallest integer, or `distance()` of two vectors of different sizes.
   the top of a WHERE are worked out in turn as written, without the rule
   for literals above, so `WHERE E AND 0` raises E's error, where
   `SELECT E AND 0` gives 0.
-- ORDER BY terms are worked out for every row that passes WHERE, before
-  LIMIT.
+- Without ORDER BY, the rows OFFSET skips are worked out as far as WHERE,
+  and their result columns aren't. Once LIMIT's rows are out, no more rows
+  are read.
+- With ORDER BY, every row that passes WHERE has its terms worked out,
+  before LIMIT. Without a LIMIT, its result columns are worked out too.
+  With one, SQLite's sorter keeps the best LIMIT plus OFFSET rows so far,
+  and a row's result columns are worked out only when the sorter keeps it
+  as it comes: when fewer than that many have come, or when it comes before
+  the last of them. A row that ties the last comes after it. A term that's
+  a result column, by its alias or its number, is worked out for every row,
+  as a term.
 
 ## Functions
 
@@ -855,6 +894,14 @@ built into SQLite's code generator.
 
 `count()` without an argument, which SQLite takes for `count(*)`, is
 outside the subset.
+
+Once the integers leave 64 bits, `sum()` goes on as a real, and a value
+that isn't an integer after that clears its error: the sum of
+9223372036854775807, 1 and 0.5 is 9223372036854775808.0, and that of
+9223372036854775807, 1 and -1 is an error. A sum, total or average that
+would be NaN, from infinities of both signs such as '1e999' and '-1e999',
+is NULL, `total()` included. Reals add up from 0.0, so the sum of -0.0
+alone is 0.0, where `min()` and `max()` give -0.0 back.
 
 NULL values don't count in any of them, apart from `count(*)`. "Text as
 numbers" says how text counts in `sum()`, `total()` and `avg()`. SQLite's

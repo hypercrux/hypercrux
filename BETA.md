@@ -335,7 +335,9 @@ hold commits back, and a read always sees one consistent point in the log. A
 process's reads and its own writer share one read position. While an Update
 in the process holds the write lock's mutex, a read doesn't read on, since
 the Update does: between its tries at the lock while it waits, and to the
-end of the log once it holds it, when no other process can commit.
+end of the log once it holds it, when no other process can commit. Nor does
+a read reload while an Update holds the mutex: the Update's Lock moves to
+the new file itself, and the read reads the copy as it is.
 
 ### Compaction
 
@@ -380,9 +382,11 @@ else ever removes it. A crash after the rename leaves the new file whole.
 A process that finds a different file at the path reloads from it. It drops
 its old copy and runs a garbage collection before reading the new file, so
 memory doesn't double, and reads in that process wait meanwhile, about as
-long as opening takes. The same happens when someone moves a backup into
-place. Linux keeps a replaced file alive for as long as someone has it open,
-so a read already under way finishes on the old file.
+long as opening takes. A read under way when the reload starts finishes on
+the old copy first, and the old copy goes once it has. The same happens when
+someone moves a backup into place. Linux keeps a replaced file alive for as
+long as someone has it open, so a read already under way finishes on the old
+file.
 
 Writers wait while a compaction runs, including the one whose commit set it
 off. It takes about as long as writing and syncing the live data once, and
