@@ -331,7 +331,11 @@ Inside a process, reads share a lock on the in-memory copy. Applying a batch
 takes the lock alone and applies the whole batch or none of it, using an
 undo list like `Update`'s. Go's read-write lock lets a waiting writer in
 ahead of readers that arrive after it, so a steady stream of reads can't
-hold commits back, and a read always sees one consistent point in the log.
+hold commits back, and a read always sees one consistent point in the log. A
+process's reads and its own writer share one read position. While an Update
+in the process holds the write lock's mutex, a read doesn't read on, since
+the Update does: between its tries at the lock while it waits, and to the
+end of the log once it holds it, when no other process can commit.
 
 ### Compaction
 

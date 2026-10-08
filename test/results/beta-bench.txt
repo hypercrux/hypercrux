@@ -1,27 +1,27 @@
 # 0.1's benchmarks on 0.x and on the Beta, side by side on the same data, three runs each, and opening a database on both. Put and Link are one committed transaction each, synced to disk. Nearest compares every vector (exact search) and returns the closest 10
-# recorded 2026-10-08 08:11 UTC with go1.24.7 linux/amd64, SQLite 3.53.4, at commit 0eee18b
-# Linux 6.18.44-fc-v80, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs, load average 0.28 0.99 1.16 at the start
+# recorded 2026-10-08 10:29 UTC with go1.24.7 linux/amd64, SQLite 3.53.4, at commit 3da3541
+# Linux 6.18.44-fc-v80, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs, load average 0.22 1.00 1.23 at the start
 # command: go test -run ^$ -bench . -benchtime 3s -count 3 -timeout 60m -v ./beta/bench
 
 Time per operation, the middle of three runs of each benchmark on each engine,
 with the Beta's targets from BETA.md.
-The run took 5 minutes 27 seconds.
+The run took 8 minutes 2 seconds.
 
 Benchmark                           0.x      Beta          The Beta's target
-Nearest_1k_384dims                  2.83 ms  waits for G2
-Nearest_10k_384dims                 29.1 ms  waits for G2
-Nearest_100k_384dims                292 ms   waits for G2  65 ms
-Nearest_100k_384dims_tenthFiltered  89.5 ms  waits for G4  12 ms
-Nearest_10k_1536dims                85.3 ms  waits for G2  26 ms
-Walk_100k_depth1                    33.1 µs  waits for G2  3 µs
-Walk_100k_depth2                    103 µs   waits for G2
-Walk_100k_depth3                    378 µs   waits for G2  40 µs
-Put                                 221 µs   208 µs        no slower than 0.x
-Put_384dims                         281 µs   272 µs
-PutBatch_384dims                    40.1 µs  15.5 µs       5 µs
-Get                                 13.9 µs  858 ns        3 µs
-Link                                267 µs   waits for G2
-Open_100k_384dims                   504 µs   588 ms [1]    250 ms
+Nearest_1k_384dims                  2.76 ms  224 µs
+Nearest_10k_384dims                 27.7 ms  2.08 ms
+Nearest_100k_384dims                261 ms   33.7 ms       65 ms
+Nearest_100k_384dims_tenthFiltered  85.2 ms  waits for G4  12 ms
+Nearest_10k_1536dims                87.5 ms  8.45 ms       26 ms
+Walk_100k_depth1                    33.9 µs  1.49 µs       3 µs
+Walk_100k_depth2                    89.9 µs  7.77 µs
+Walk_100k_depth3                    403 µs   42.2 µs       40 µs
+Put                                 235 µs   188 µs        no slower than 0.x
+Put_384dims                         252 µs   242 µs
+PutBatch_384dims                    34.3 µs  13.6 µs       5 µs
+Get                                 11.4 µs  774 ns        3 µs
+Link                                230 µs   193 µs
+Open_100k_384dims                   431 µs   535 ms [1]    250 ms
 
 [1] Beta: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
 
@@ -31,129 +31,136 @@ pkg: github.com/hypercrux/hypercrux/beta/bench
 cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
 BenchmarkNearest_1k_384dims
 BenchmarkNearest_1k_384dims/0.x
-BenchmarkNearest_1k_384dims/0.x-2               	    1150	   2900040 ns/op
-BenchmarkNearest_1k_384dims/0.x-2               	    1250	   2830176 ns/op
-BenchmarkNearest_1k_384dims/0.x-2               	    1510	   2704045 ns/op
+BenchmarkNearest_1k_384dims/0.x-2               	    1273	   2762258 ns/op
+BenchmarkNearest_1k_384dims/0.x-2               	    1332	   2570252 ns/op
+BenchmarkNearest_1k_384dims/0.x-2               	    1335	   2893860 ns/op
 BenchmarkNearest_1k_384dims/Beta
-    bench_test.go:29: waits for task G2, which brings Nearest
---- SKIP: BenchmarkNearest_1k_384dims/Beta
+BenchmarkNearest_1k_384dims/Beta-2              	   14224	    224312 ns/op
+BenchmarkNearest_1k_384dims/Beta-2              	   15968	    259953 ns/op
+BenchmarkNearest_1k_384dims/Beta-2              	   14912	    218011 ns/op
 BenchmarkNearest_10k_384dims
 BenchmarkNearest_10k_384dims/0.x
-BenchmarkNearest_10k_384dims/0.x-2              	     127	  27848305 ns/op
-BenchmarkNearest_10k_384dims/0.x-2              	     126	  29056471 ns/op
-BenchmarkNearest_10k_384dims/0.x-2              	     121	  29281001 ns/op
+BenchmarkNearest_10k_384dims/0.x-2              	     122	  27863557 ns/op
+BenchmarkNearest_10k_384dims/0.x-2              	     127	  27057666 ns/op
+BenchmarkNearest_10k_384dims/0.x-2              	     140	  27652068 ns/op
 BenchmarkNearest_10k_384dims/Beta
-    bench_test.go:29: waits for task G2, which brings Nearest
---- SKIP: BenchmarkNearest_10k_384dims/Beta
+BenchmarkNearest_10k_384dims/Beta-2             	    1585	   2309469 ns/op
+BenchmarkNearest_10k_384dims/Beta-2             	    1748	   2072503 ns/op
+BenchmarkNearest_10k_384dims/Beta-2             	    1747	   2083298 ns/op
 BenchmarkNearest_100k_384dims
 BenchmarkNearest_100k_384dims/0.x
-BenchmarkNearest_100k_384dims/0.x-2             	      10	 301767212 ns/op
-BenchmarkNearest_100k_384dims/0.x-2             	      13	 291845086 ns/op
-BenchmarkNearest_100k_384dims/0.x-2             	      13	 290479015 ns/op
+BenchmarkNearest_100k_384dims/0.x-2             	      14	 261441097 ns/op
+BenchmarkNearest_100k_384dims/0.x-2             	      14	 256490408 ns/op
+BenchmarkNearest_100k_384dims/0.x-2             	      12	 265765107 ns/op
 BenchmarkNearest_100k_384dims/Beta
-    bench_test.go:29: waits for task G2, which brings Nearest
---- SKIP: BenchmarkNearest_100k_384dims/Beta
+BenchmarkNearest_100k_384dims/Beta-2            	     100	  34806418 ns/op
+BenchmarkNearest_100k_384dims/Beta-2            	      92	  33669678 ns/op
+BenchmarkNearest_100k_384dims/Beta-2            	     100	  33618788 ns/op
 BenchmarkNearest_100k_384dims_tenthFiltered
 BenchmarkNearest_100k_384dims_tenthFiltered/0.x
-BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      36	  89491600 ns/op
-BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      44	  89337145 ns/op
-BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      37	  95949773 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      40	  82454893 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      45	  85180820 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      43	  87280332 ns/op
 BenchmarkNearest_100k_384dims_tenthFiltered/Beta
     bench_test.go:29: waits for task G4, which brings Nearest with a filter
 --- SKIP: BenchmarkNearest_100k_384dims_tenthFiltered/Beta
 BenchmarkNearest_10k_1536dims
 BenchmarkNearest_10k_1536dims/0.x
-BenchmarkNearest_10k_1536dims/0.x-2                       	      44	  89331648 ns/op
-BenchmarkNearest_10k_1536dims/0.x-2                       	      40	  84964789 ns/op
-BenchmarkNearest_10k_1536dims/0.x-2                       	      45	  85292403 ns/op
+BenchmarkNearest_10k_1536dims/0.x-2                       	      39	  86873209 ns/op
+BenchmarkNearest_10k_1536dims/0.x-2                       	      38	  94817956 ns/op
+BenchmarkNearest_10k_1536dims/0.x-2                       	      39	  87459969 ns/op
 BenchmarkNearest_10k_1536dims/Beta
-    bench_test.go:29: waits for task G2, which brings Nearest
---- SKIP: BenchmarkNearest_10k_1536dims/Beta
+BenchmarkNearest_10k_1536dims/Beta-2                      	     416	   8446909 ns/op
+BenchmarkNearest_10k_1536dims/Beta-2                      	     458	   8424802 ns/op
+BenchmarkNearest_10k_1536dims/Beta-2                      	     354	   8791760 ns/op
 BenchmarkWalk_100k_depth1
 BenchmarkWalk_100k_depth1/0.x
-BenchmarkWalk_100k_depth1/0.x-2                           	  111488	     35406 ns/op	         5.000 records/walk
-BenchmarkWalk_100k_depth1/0.x-2                           	  104672	     30742 ns/op	         5.000 records/walk
-BenchmarkWalk_100k_depth1/0.x-2                           	   95870	     33125 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/0.x-2                           	   95714	     33930 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/0.x-2                           	  139365	     26956 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/0.x-2                           	  127660	     34491 ns/op	         5.000 records/walk
 BenchmarkWalk_100k_depth1/Beta
-    bench_test.go:29: waits for task G2, which brings Link and Walk
---- SKIP: BenchmarkWalk_100k_depth1/Beta
+BenchmarkWalk_100k_depth1/Beta-2                          	 2291728	      1493 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/Beta-2                          	 2329101	      1479 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/Beta-2                          	 2329184	      1532 ns/op	         5.000 records/walk
 BenchmarkWalk_100k_depth2
 BenchmarkWalk_100k_depth2/0.x
-BenchmarkWalk_100k_depth2/0.x-2                           	   38796	    102635 ns/op	        30.00 records/walk
-BenchmarkWalk_100k_depth2/0.x-2                           	   40633	    105135 ns/op	        30.00 records/walk
-BenchmarkWalk_100k_depth2/0.x-2                           	   39370	     90935 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2/0.x-2                           	   41638	     92852 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2/0.x-2                           	   41763	     83309 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2/0.x-2                           	   40674	     89907 ns/op	        30.00 records/walk
 BenchmarkWalk_100k_depth2/Beta
-    bench_test.go:29: waits for task G2, which brings Link and Walk
---- SKIP: BenchmarkWalk_100k_depth2/Beta
+BenchmarkWalk_100k_depth2/Beta-2                          	  653684	      7528 ns/op	        29.99 records/walk
+BenchmarkWalk_100k_depth2/Beta-2                          	  550342	      7774 ns/op	        29.99 records/walk
+BenchmarkWalk_100k_depth2/Beta-2                          	  712370	      7863 ns/op	        29.99 records/walk
 BenchmarkWalk_100k_depth3
 BenchmarkWalk_100k_depth3/0.x
-BenchmarkWalk_100k_depth3/0.x-2                           	    9637	    391052 ns/op	       154.9 records/walk
-BenchmarkWalk_100k_depth3/0.x-2                           	    8872	    377971 ns/op	       154.9 records/walk
-BenchmarkWalk_100k_depth3/0.x-2                           	   10000	    376866 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/0.x-2                           	    7608	    405056 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/0.x-2                           	    8685	    402549 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/0.x-2                           	    8985	    390359 ns/op	       154.9 records/walk
 BenchmarkWalk_100k_depth3/Beta
-    bench_test.go:29: waits for task G2, which brings Link and Walk
---- SKIP: BenchmarkWalk_100k_depth3/Beta
+BenchmarkWalk_100k_depth3/Beta-2                          	   96937	     42478 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/Beta-2                          	  114361	     42197 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/Beta-2                          	  111708	     40369 ns/op	       154.9 records/walk
 BenchmarkPut
 BenchmarkPut/0.x
-BenchmarkPut/0.x-2                                        	   15492	    212814 ns/op
-BenchmarkPut/0.x-2                                        	   16833	    238007 ns/op
-BenchmarkPut/0.x-2                                        	   14740	    221313 ns/op
+BenchmarkPut/0.x-2                                        	   15747	    235566 ns/op
+BenchmarkPut/0.x-2                                        	   14330	    234796 ns/op
+BenchmarkPut/0.x-2                                        	   15835	    220773 ns/op
 BenchmarkPut/Beta
-BenchmarkPut/Beta-2                                       	   17938	    209810 ns/op
-BenchmarkPut/Beta-2                                       	   19340	    207723 ns/op
-BenchmarkPut/Beta-2                                       	   19113	    200771 ns/op
+BenchmarkPut/Beta-2                                       	   20978	    188478 ns/op
+BenchmarkPut/Beta-2                                       	   21475	    200370 ns/op
+BenchmarkPut/Beta-2                                       	   20287	    178842 ns/op
 BenchmarkPut_384dims
 BenchmarkPut_384dims/0.x
-BenchmarkPut_384dims/0.x-2                                	   12997	    291978 ns/op
-BenchmarkPut_384dims/0.x-2                                	   12152	    266380 ns/op
-BenchmarkPut_384dims/0.x-2                                	   13454	    280699 ns/op
+BenchmarkPut_384dims/0.x-2                                	   14036	    275476 ns/op
+BenchmarkPut_384dims/0.x-2                                	   13177	    252300 ns/op
+BenchmarkPut_384dims/0.x-2                                	   14313	    238424 ns/op
 BenchmarkPut_384dims/Beta
-BenchmarkPut_384dims/Beta-2                               	   15723	    284994 ns/op
-BenchmarkPut_384dims/Beta-2                               	   13490	    247265 ns/op
-BenchmarkPut_384dims/Beta-2                               	   15084	    272007 ns/op
+BenchmarkPut_384dims/Beta-2                               	   17221	    213477 ns/op
+BenchmarkPut_384dims/Beta-2                               	   13272	    253908 ns/op
+BenchmarkPut_384dims/Beta-2                               	   14658	    242190 ns/op
 BenchmarkPutBatch_384dims
 BenchmarkPutBatch_384dims/0.x
-BenchmarkPutBatch_384dims/0.x-2                           	   90226	     37542 ns/op
-BenchmarkPutBatch_384dims/0.x-2                           	   84814	     40099 ns/op
-BenchmarkPutBatch_384dims/0.x-2                           	   83995	     41546 ns/op
+BenchmarkPutBatch_384dims/0.x-2                           	   90350	     39244 ns/op
+BenchmarkPutBatch_384dims/0.x-2                           	  101139	     33211 ns/op
+BenchmarkPutBatch_384dims/0.x-2                           	   99928	     34332 ns/op
 BenchmarkPutBatch_384dims/Beta
-BenchmarkPutBatch_384dims/Beta-2                          	  244930	     15622 ns/op
-BenchmarkPutBatch_384dims/Beta-2                          	  316212	     15100 ns/op
-BenchmarkPutBatch_384dims/Beta-2                          	  287797	     15542 ns/op
+BenchmarkPutBatch_384dims/Beta-2                          	  228598	     13511 ns/op
+BenchmarkPutBatch_384dims/Beta-2                          	  357301	     13627 ns/op
+BenchmarkPutBatch_384dims/Beta-2                          	  295280	     14101 ns/op
 BenchmarkGet
 BenchmarkGet/0.x
-BenchmarkGet/0.x-2                                        	  219800	     14302 ns/op
-BenchmarkGet/0.x-2                                        	  233451	     13667 ns/op
-BenchmarkGet/0.x-2                                        	  252679	     13917 ns/op
+BenchmarkGet/0.x-2                                        	  275533	     11440 ns/op
+BenchmarkGet/0.x-2                                        	  341049	     12316 ns/op
+BenchmarkGet/0.x-2                                        	  322369	     11303 ns/op
 BenchmarkGet/Beta
-BenchmarkGet/Beta-2                                       	 4234509	       857.5 ns/op
-BenchmarkGet/Beta-2                                       	 3884515	       888.2 ns/op
-BenchmarkGet/Beta-2                                       	 4197205	       850.1 ns/op
+BenchmarkGet/Beta-2                                       	 4333960	       773.6 ns/op
+BenchmarkGet/Beta-2                                       	 4263070	       770.2 ns/op
+BenchmarkGet/Beta-2                                       	 4772220	       920.1 ns/op
 BenchmarkLink
 BenchmarkLink/0.x
-BenchmarkLink/0.x-2                                       	   14979	    280848 ns/op
-BenchmarkLink/0.x-2                                       	   14966	    259815 ns/op
-BenchmarkLink/0.x-2                                       	   13771	    266826 ns/op
+BenchmarkLink/0.x-2                                       	   15126	    230233 ns/op
+BenchmarkLink/0.x-2                                       	   16310	    225446 ns/op
+BenchmarkLink/0.x-2                                       	   16083	    238900 ns/op
 BenchmarkLink/Beta
-    bench_test.go:29: waits for task G2, which brings Link
---- SKIP: BenchmarkLink/Beta
+BenchmarkLink/Beta-2                                      	   18896	    183493 ns/op
+BenchmarkLink/Beta-2                                      	   19222	    217910 ns/op
+BenchmarkLink/Beta-2                                      	   19408	    193366 ns/op
 BenchmarkOpen_100k_384dims
 BenchmarkOpen_100k_384dims/0.x
-BenchmarkOpen_100k_384dims/0.x-2                          	    8138	    482277 ns/op
-BenchmarkOpen_100k_384dims/0.x-2                          	    8148	    506642 ns/op
-BenchmarkOpen_100k_384dims/0.x-2                          	    7118	    503753 ns/op
+BenchmarkOpen_100k_384dims/0.x-2                          	    6824	    450772 ns/op
+BenchmarkOpen_100k_384dims/0.x-2                          	    9058	    431122 ns/op
+BenchmarkOpen_100k_384dims/0.x-2                          	    8210	    409536 ns/op
 BenchmarkOpen_100k_384dims/Beta
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-BenchmarkOpen_100k_384dims/Beta-2                         	       6	 592110023 ns/op
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-BenchmarkOpen_100k_384dims/Beta-2                         	       6	 586050373 ns/op
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:234: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-BenchmarkOpen_100k_384dims/Beta-2                         	       6	 587612107 ns/op
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+BenchmarkOpen_100k_384dims/Beta-2                         	       6	 534870494 ns/op
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+BenchmarkOpen_100k_384dims/Beta-2                         	       7	 555146772 ns/op
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+BenchmarkOpen_100k_384dims/Beta-2                         	       6	 527179300 ns/op
 PASS
-ok  	github.com/hypercrux/hypercrux/beta/bench	327.117s
+ok  	github.com/hypercrux/hypercrux/beta/bench	481.678s

@@ -52,6 +52,12 @@ own, `EXPLAIN`, `PRAGMA`, `CREATE`, `DROP`, `ALTER`, `REPLACE`, `BEGIN`,
 through `Update`, and tables and fields come from `Put`. `Compact` does
 `VACUUM`'s job.
 
+The Beta keeps SQLite's limits: 2,000 result columns, ORDER BY terms and
+fields in a SET, 1,000 arguments to a function, 32,766 `?` marks, and
+expressions 1,000 tall, as SQLite counts them through subqueries. It refuses
+expressions nested more than 250 deep, well inside SQLite's own parser
+limit.
+
 `Exec` runs any statement, and drops a SELECT's rows. `Query` and `QueryRow`
 run any statement too, and a write gives them no columns and no rows, as in
 0.x. `RowsAffected` gives the count of changed rows of an INSERT, UPDATE or
@@ -67,6 +73,12 @@ comment runs from `--` to the end of the line, or from `/*` to `*/`, and a
 `/*` without an end runs to the end of the text. Comments count as spaces,
 with one exception, under "What a result column is called". So `--1` is a
 comment, and two minus signs need a space between them: `- -1`.
+
+The text ends at its first NUL byte, as SQLite reads it as a C string. A
+vertical tab may be in a run of spaces after its first character, and can't
+start one, as in SQLite: `SELECT 1\v+ 2` is an unrecognized token. A UTF-8
+byte order mark at the start of a token is a space, and a `/*` that ends
+the text is a slash and a star.
 
 ### Keywords
 
@@ -91,6 +103,14 @@ anywhere else, as in SQLite: ASC, BY, DESC, INNER, LIKE and OFFSET. So a
 field called `desc` can be read as `SELECT desc FROM docs`. LIKE and INNER
 can't be a bare alias, since right after an expression LIKE is the operator,
 and right after a source INNER starts a join.
+
+A bare alias, after a result column or a source, can't be CROSS, FULL,
+INNER, LEFT, NATURAL, OUTER, RIGHT or INDEXED, which SQLite reads as part
+of a join or of INDEXED BY. After an operand SQLite reads GLOB, REGEXP and
+MATCH as operators, which are outside the subset. `with`, TRUE and FALSE
+can't be bare names in an expression: SQLite reads WITH after a parenthesis
+as the start of a subquery, and TRUE and FALSE as 1 and 0. Write them in
+double quotes.
 
 Function names, `walk` and `json_each` are names.
 
@@ -400,7 +420,9 @@ statement. They follow IN's rules under "Values".
 table's records, as a WHERE over the table would take it, with its `?` marks
 filled from `args`. A `where` that holds only spaces keeps every record with a
 vector. 0.x runs the filter inside a SELECT, so its errors are of kind
-"error", and the Beta's are too.
+"error", and the Beta's are too. A `where` with a NUL byte in it is
+incomplete input, as in 0.x, which puts it in parentheses at the end of a
+query.
 
 ## Walks
 
@@ -463,7 +485,8 @@ It comes in three forms:
   same moment.
 - Other first arguments, such as a stored date, other modifiers, and the
   other date functions (`time()`, `julianday()`, `strftime()`,
-  `unixepoch()`) are outside the subset.
+  `unixepoch()`) are outside the subset. So are `date()` and `datetime()`
+  without arguments.
 
 SQLite's routines are `parseModifier`, `computeJD`, `computeYMD`, `dateFunc`
 and `datetimeFunc` in its date code. `dates.jsonl` holds 608 cases on fixed
@@ -800,6 +823,9 @@ built into SQLite's code generator.
 | `avg(x)` | NULL when there are no rows or every x is NULL. Otherwise the sum as a real, divided by the number of values |
 | `min(x)`, `max(x)` | the smallest or largest x that isn't NULL, in the order of "Comparing", or NULL when there's none. On a tie, the earliest row's value |
 
+`count()` without an argument, which SQLite takes for `count(*)`, is
+outside the subset.
+
 NULL values don't count in any of them, apart from `count(*)`. "Text as
 numbers" says how text counts in `sum()`, `total()` and `avg()`. SQLite's
 routines are `countStep`, `sumStep`, `sumFinalize`, `totalFinalize`,
@@ -935,7 +961,13 @@ On purpose, and outside the corpus:
 - A `Put` that fails inside an `Update` that goes on to commit leaves the
   table as it was. 0.x keeps the new fields the `Put` named, since it adds
   them before it checks the vector's size, so `SELECT *` can show a column
-  there that the Beta's table hasn't got.
+  there that the Beta's table hasn't got. So a later `Put` that names such a
+  field in another case spells it its own way in the Beta, and the failed
+  `Put`'s way in 0.x, which `Get` and `Scan` show.
+- `walk()` with fewer than 2 arguments or more than 4 is a wrong number of
+  arguments, of kind error, found before anything runs. 0.x finds it as
+  `walk()` runs, so in a write it's invalid there, and a statement that
+  never reaches the call gives no error.
 
 ## The named tests
 

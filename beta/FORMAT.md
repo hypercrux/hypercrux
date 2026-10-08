@@ -330,9 +330,13 @@ the remains of one a crash cut short, or damage.
   lock without waiting, and if it gets it, the writer is gone, so it checks
   the end of the log, as below. And when a whole marker names the batch it
   stopped at, but the batch fails its checks, it waits for the write lock,
-  reads the batch again, and reports damage if it still fails. A file
-  shorter than the point it has applied is damage too, or a copy over the
-  live database.
+  reads the batch again, and reports damage if it still fails. It does the
+  same when a whole marker after a batch that counts names another batch,
+  or the same one with another checksum. Before it waits, it reads the
+  batch once more, head first, since a read that brought in the batch and
+  its marker together can have caught the batch as its writer finished it.
+  A file shorter than the point it has applied is damage too, or a copy
+  over the live database.
 
 **Looking past the end of the log.** A reader searches from the end of the
 log to the end of the file for the marker magic number, at every offset. A

@@ -31,16 +31,17 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `difftest/`: the differential harness. It runs random sequences of steps
   on two engines and compares every answer and then the whole database. A
   sequence they disagree on is shrunk and saved in `difftest/testdata`,
-  where it replays as a test. For now it runs 0.x against itself, and
-  against copies of 0.x with one thing each done wrong, which it has to
-  catch.
+  where it replays as a test. It runs 0.x against itself, 0.x against the
+  Beta without SQL until G4, and copies of 0.x with one thing each done
+  wrong, which it has to catch.
 - `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
   reading, checking and writing the log.
 - `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
-  0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete` and `TableOf`
-  work through the file, and `Check` counts. The helpers that hold no state
-  work already, and the rest are stubs that name the task that makes them
-  work.
+  0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
+  `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` without a filter
+  and `TableOf` work through the file, and `Check` counts. The helpers that
+  hold no state work already, and the rest are stubs that name the task
+  that makes them work.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/crash/`: the crash-point driver. It runs a workload of commits
@@ -72,15 +73,22 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   reports after a read holding the lock, cutting nothing. Damaged files for
   each kind are in its `testdata/damaged`. A commit that fails is cut back
   out of the file before the lock goes, and when that fails too, the handle
-  keeps the lock until it's closed.
+  keeps the lock until it's closed. A process that keeps the database open
+  follows other processes' commits with `Follow`: one stat, then each new
+  batch's head, its marker and the rest, and the check of the end of the
+  log when the writer has gone.
 - `internal/procs/`: the many-process harness. It runs writer and reader
   processes on one database, copies of the test binary, kills them with
   SIGKILL at random moments and starts new ones in their place. Then it
   checks that every reader saw every commit once and in order, and that the
   file holds every commit a writer saw succeed, with a commit under way at a
   kill there whole or not at all. Its tests run a toy log with a planted
-  bug, and the real log with readers that open the file afresh.
-- `internal/query/`: SQL. For now, the operator iterator, `Rows`.
+  bug, and the real log with readers that open the file afresh and with
+  followers. Runs can leave gaps with no writer, and wait for counts of a
+  workload's own.
+- `internal/query/`: SQL. So far the operator iterator, `Rows`, and the
+  parser, with the tree it gives and the printer that gives a tree back as
+  SQL.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
@@ -163,4 +171,6 @@ task that plants a bug.
   take a table past 1,999 fields, give `ErrInvalid`. 0.x refuses both too,
   with a plain error.
 - **A write that fails** changes nothing, even inside an `Update` that goes
-  on to commit. 0.x keeps the new fields a failed `Put` named.
+  on to commit. 0.x keeps the new fields a failed `Put` named. So a later
+  `Put` that names such a field in another case spells it its own way in
+  the Beta, and the failed `Put`'s way in 0.x, which `Get` and `Scan` show.

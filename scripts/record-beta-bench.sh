@@ -44,6 +44,9 @@ trap 'rm -f "$raw" "$status" "$table" "$log"' EXIT
 cmd="go test -run ^$ -bench . $flags -timeout 60m -v ./beta/bench"
 when=$(date -u '+%Y-%m-%d %H:%M UTC')
 load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo '?')
+# Read before anything is written, since writing the results file makes the
+# tree dirty once that file is committed.
+commit=$(git describe --always --dirty 2>/dev/null || echo '?')
 {
 	set +e # in this subshell only, so the status gets written
 	$cmd 2>&1
@@ -59,7 +62,7 @@ if ! HYPERCRUX_BENCH_OUTPUT="$raw" HYPERCRUX_BENCH_TABLE="$table" go test -count
 fi
 {
 	echo "# $what"
-	echo "# recorded $when with $(go version | cut -d' ' -f3-), SQLite $(go run ./cmd/hypercrux version | sed 's/.*SQLite //'), at commit $(git describe --always --dirty 2>/dev/null || echo '?')"
+	echo "# recorded $when with $(go version | cut -d' ' -f3-), SQLite $(go run ./cmd/hypercrux version | sed 's/.*SQLite //'), at commit $commit"
 	echo "# $(uname -sr), $(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ //'), $(nproc 2>/dev/null || echo '?') CPUs, load average $load at the start"
 	echo "# command: $cmd"
 	echo
