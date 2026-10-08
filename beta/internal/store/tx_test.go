@@ -27,11 +27,14 @@ import (
 // statements taken back to a mark as SQL's are, and of commits whose write
 // to the log fails. Inside them go random puts, deletes, drops and creates,
 // many of which fail and must leave the transaction as it was, and reads
-// through the transaction, which must see its changes. Every answer must
-// agree with the model's. After each transaction the store must hold what
-// the model holds, and so must a replica that applies each committed change
-// list. Readers run alongside the whole time, and every read must see a
-// state that a commit left. CI runs it under the race detector too.
+// through the transaction, which must see its changes: gets, scans, and a
+// cursor kept open across the transaction's later steps and the statements
+// it takes back, which must give no more once the transaction ends. Every
+// answer must agree with the model's. After each transaction the store
+// must hold what the model holds, and so must a replica that applies each
+// committed change list. Readers run alongside the whole time, getting and
+// scanning everything, and every read must see a state that a commit left.
+// CI runs it under the race detector too.
 func TestTransactions(t *testing.T) {
 	seeds, txs := 12, 300
 	if testing.Short() {
@@ -83,7 +86,9 @@ func runTransactions(t *testing.T, seed uint64, n int) {
 	// than it says.
 	for _, o := range []string{"put ok", "put invalid", "delete ok", "delete invalid", "delete not found", "drop ok",
 		"drop invalid", "drop not found", "create ok", "create invalid", "get ok", "get invalid", "get not found",
-		"statement rolled back", "read before the first change", "commit", "commit failed", "rollback"} {
+		"scan ok", "scan invalid", "live scan", "live scan moved", "live scan ended", "live scan at the end",
+		"live scan across a statement rolled back", "statement rolled back", "read before the first change", "commit",
+		"commit failed", "rollback"} {
 		if outcomes[o] < max(1, n/150) {
 			t.Errorf("%q came up %d times in %d transactions: %v", o, outcomes[o], n, outcomes)
 		}
@@ -106,7 +111,18 @@ func runTransaction(t *testing.T, g *gen, s, replica *Store, committed *model, s
 	// readers wait for it to end before they can stop.
 	defer tx.Rollback()
 	work := committed.clone()
-	changed := false // the transaction has made a change, so it holds the copy's lock
+	changed := false   // the transaction has made a change, so it holds the copy's lock
+	var live *liveScan // a cursor through the transaction, open across its steps
+	defer func() {
+		// Once the transaction has ended, the cursor gives no more. A check
+		// that fails leaves it open, and then there's nothing to check.
+		if live != nil && tx.done {
+			if rec, more := live.c.Next(); more {
+				t.Errorf("%s gave %s after the transaction ended", live.desc, rec.Key)
+			}
+			outcomes["live scan at the end"]++
+		}
+	}()
 	for st := g.r.IntN(5); st >= 0; st-- {
 		// A statement of one to three steps, as SQL's writes make them.
 		mark := tx.Mark()
@@ -114,8 +130,12 @@ func runTransaction(t *testing.T, g *gen, s, replica *Store, committed *model, s
 		g.m = stmt
 		failed := false
 		for steps := 1 + g.r.IntN(3); steps > 0; steps-- {
-			if g.one(5) {
-				txGet(t, g, tx, stmt, outcomes)
+			if live != nil && g.one(2) && !live.pull(t, tx, stmt, outcomes) {
+				outcomes["live scan ended"]++
+				live = nil
+			}
+			if g.one(3) {
+				txRead(t, g, tx, stmt, &live, outcomes)
 				continue
 			}
 			err := txWrite(t, g, s, tx, stmt, outcomes)
@@ -128,6 +148,9 @@ func runTransaction(t *testing.T, g *gen, s, replica *Store, committed *model, s
 		if failed && g.one(2) || g.one(8) {
 			tx.RollbackTo(mark)
 			outcomes["statement rolled back"]++
+			if live != nil {
+				outcomes["live scan across a statement rolled back"]++
+			}
 			if len(tx.changes) != mark.changes {
 				t.Fatalf("RollbackTo left %d changes, where the mark had %d", len(tx.changes), mark.changes)
 			}
@@ -245,6 +268,53 @@ func txWrite(t *testing.T, g *gen, s *Store, tx *Tx, m *model, outcomes map[stri
 	return err
 }
 
+// txRead makes one random read through the transaction, which must see the
+// transaction's own changes: half the time a get, otherwise a scan, or the
+// opening of the live cursor when there's none. The steps that follow pull
+// records from that one.
+func txRead(t *testing.T, g *gen, tx *Tx, m *model, live **liveScan, outcomes map[string]int) {
+	t.Helper()
+	switch g.r.IntN(4) {
+	case 0, 1:
+		txGet(t, g, tx, m, outcomes)
+	case 2:
+		prefix, after, bad := g.scanArgs()
+		desc := fmt.Sprintf("scan %q %q through the transaction", prefix, after)
+		c, err := tx.Scan(prefix, after)
+		want := ""
+		if bad {
+			want = "invalid"
+		}
+		if got := kindOf(err); got != want {
+			t.Fatalf("%s: got %q (%v), the model says %q", desc, got, err, want)
+		}
+		if err == nil {
+			stop := -1
+			if g.one(4) {
+				stop = g.r.IntN(4)
+			}
+			checkScan(t, tx, m, c, desc, m.scan(prefix, after), stop)
+		}
+		outcomes["scan "+cmp.Or(want, "ok")]++
+	default:
+		if *live != nil {
+			txGet(t, g, tx, m, outcomes)
+			return
+		}
+		prefix := pick(g, modelTables) + ":"
+		after := ""
+		if g.one(3) {
+			after = prefix + pick(g, idStarts)
+		}
+		c, err := tx.Scan(prefix, after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		*live = &liveScan{c: c, desc: fmt.Sprintf("the live scan %q %q through the transaction", prefix, after), prefix: prefix, after: after}
+		outcomes["live scan"]++
+	}
+}
+
 // txGet reads a random key through the transaction, which must see the
 // transaction's own changes.
 func txGet(t *testing.T, g *gen, tx *Tx, m *model, outcomes map[string]int) {
@@ -311,7 +381,9 @@ func applyTo(t *testing.T, replica *Store, changes []format.Change) {
 }
 
 // readAlongside reads the whole store, over and over, until stop closes.
-// Each read must see a state that a commit left.
+// Each read must see a state that a commit left. Inside it, every record
+// must come through Get, and each table's records through a scan of the
+// whole table, in byte order of key.
 func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 	res := readResult{states: map[string]bool{}}
 	for ; ; res.reads++ {
@@ -326,9 +398,27 @@ func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 		var d string
 		err := s.Read(func(r Reader) error {
 			d = dump(s)
-			for key := range s.records {
+			counts := map[string]int{}
+			for key, rec := range s.records {
 				if _, err := r.Get(key); err != nil {
 					return err
+				}
+				counts[rec.table.name]++
+			}
+			for name := range s.tables {
+				c, err := r.Scan(name+":", "")
+				if err != nil {
+					return err
+				}
+				n, last := 0, ""
+				for rec, more := c.Next(); more; rec, more = c.Next() {
+					if n > 0 && rec.Key <= last || s.records[rec.Key] == nil || s.records[rec.Key].table != s.tables[name] {
+						return fmt.Errorf("a scan of %s gave %s after %q", name, rec.Key, last)
+					}
+					n, last = n+1, rec.Key
+				}
+				if n != counts[name] {
+					return fmt.Errorf("a scan of %s gave %d records, of the %d it holds", name, n, counts[name])
 				}
 			}
 			return nil

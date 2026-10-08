@@ -383,8 +383,9 @@ func checkSnapshot(t *testing.T, m *model, snap []format.Change) {
 
 // sameStores checks that got holds what want holds. Through the read API,
 // every table and key the workload can name must give the same answer from
-// both, and so must the snapshot. Then the whole of both must match, so
-// nothing the read API can't see yet differs either.
+// both, and so must a scan of each table and the snapshot. Then the whole
+// of both must match, each table's keys included, so nothing the read API
+// can't see yet differs either.
 func sameStores(t *testing.T, name string, want, got *Store) {
 	t.Helper()
 	tables := append(append(slices.Clone(txTables), badTables...), "nosuch")
@@ -411,6 +412,13 @@ func sameStores(t *testing.T, name string, want, got *Store) {
 					return fmt.Errorf("Get(%q) gives %+v, %v, where it should give %+v, %v", key, gr, gerr, wr, werr)
 				}
 			}
+			for _, tbl := range tables {
+				ws, werr := scanAll(w, tbl+":")
+				gs, gerr := scanAll(g, tbl+":")
+				if errText(werr) != errText(gerr) || !slices.EqualFunc(ws, gs, sameRecord) {
+					return fmt.Errorf("a scan of %s gives %+v, %v, where it should give %+v, %v", tbl, gs, gerr, ws, werr)
+				}
+			}
 			if ws, gs := collect(w), collect(g); !slices.EqualFunc(ws, gs, equalChange) {
 				return fmt.Errorf("the snapshot is\n%v\nwhere it should be\n%v", gs, ws)
 			}
@@ -430,6 +438,19 @@ func errText(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// scanAll returns every record a scan of prefix gives, in order.
+func scanAll(r Reader, prefix string) ([]Record, error) {
+	c, err := r.Scan(prefix, "")
+	if err != nil {
+		return nil, err
+	}
+	var out []Record
+	for rec, more := c.Next(); more; rec, more = c.Next() {
+		out = append(out, rec)
+	}
+	return out, nil
 }
 
 // sameRecord compares two records bit for bit, the vectors' values

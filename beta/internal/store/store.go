@@ -16,11 +16,11 @@ import (
 )
 
 // Store is the in-memory copy of a database. So far it holds the records
-// with their fields, and each table's field list and vector size (S1).
-// Its writes give the change lists the log writes, it takes the batches the
-// log reads whole or not at all, and its Snapshot gives the copy as a
-// compacted part (S3). Each table's keys in order come with S4, the links
-// with S5 and the vector arrays with V1.
+// with their fields, and each table's field list and vector size (S1), and
+// each table's keys in byte order, which Scan reads (S4). Its writes give
+// the change lists the log writes, it takes the batches the log reads whole
+// or not at all, and its Snapshot gives the copy as a compacted part (S3).
+// The links come with S5 and the vector arrays with V1.
 //
 // Many goroutines share a Store (S2). Reads go through Read, under the
 // copy's lock held shared, and writes through a transaction from Begin,
@@ -54,6 +54,10 @@ type Store struct {
 
 	records map[string]*record // the hash table, from key to record
 	tables  map[string]*table  // by name
+	// epoch moves on with every change to which tables there are and to
+	// which keys each table holds, undone changes included, so a cursor
+	// knows when to find its place again. Nothing else changes it.
+	epoch uint64
 }
 
 var _ Reader = (*Store)(nil)
@@ -78,8 +82,10 @@ type table struct {
 	// size is the vector size: 0 until the table's first vector, then that
 	// vector's length until the table is dropped.
 	size int
-	// S4 keeps the table's keys in byte order here, and V1 its vector
-	// array.
+	// keys are the keys of the table's records in byte order, each with its
+	// record (S4). A drop leaves them as they are, so the table goes whole.
+	keys keyOrder
+	// V1 keeps the table's vector array here.
 }
 
 // newTable adds an empty table called name, which the store hasn't got.
@@ -87,6 +93,7 @@ func (s *Store) newTable(name string) *table {
 	s.changing(undo{op: undoNoTable, name: name})
 	t := &table{name: name, index: map[string]int{}, vec: -1}
 	s.tables[name] = t
+	s.epoch++
 	return t
 }
 
@@ -173,9 +180,6 @@ func (r *record) read() Record {
 func notYet(method, task string) error {
 	return fmt.Errorf("store: %s comes with task %s: %w", method, task, errors.ErrUnsupported)
 }
-
-// Scan comes with S4.
-func (s *Store) Scan(prefix, after string) (Cursor, error) { return nil, notYet("Scan", "S4") }
 
 // Neighbours comes with S5.
 func (s *Store) Neighbours(key string, dir Direction, typ string) ([]Link, error) {

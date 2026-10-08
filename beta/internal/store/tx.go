@@ -155,13 +155,13 @@ func (s *Store) changing(u undo) {
 // even when a panic cut its change short. A rollback walks the list newest
 // first, so each entry finds the store as its own change left it.
 //
-// S4, S5 and V1 add kinds for each table's keys, the links both ways and
-// the vector arrays.
+// S4 added the kinds for each table's keys. S5 and V1 add kinds for the
+// links both ways and the vector arrays.
 type undo struct {
 	op     undoOp
 	name   string       // undoNoTable: the table's name; undoNoRecord: the key
-	table  *table       // undoHadTable, undoFields, undoSize
-	record *record      // undoHadRecord, undoRecord
+	table  *table       // undoHadTable, undoFields, undoSize, undoNoKey, undoHadKey
+	record *record      // undoHadRecord, undoRecord, undoNoKey, undoHadKey
 	n      int          // undoFields: how many fields the table had; undoSize: its size
 	fields []FieldValue // undoRecord: the record's fields
 	vec    []float32    // undoRecord: the record's vector
@@ -177,15 +177,31 @@ const (
 	undoNoRecord                    // no record had the key name
 	undoHadRecord                   // record was in the store, whole
 	undoRecord                      // record held fields and vec
+	undoNoKey                       // table's keys didn't hold record's key
+	undoHadKey                      // table's keys held record's key, with record
 )
 
-// back puts back the state one entry records.
+// back puts back the state one entry records. Each table's keys are put
+// back by key, so a block that split or joined since needn't be put back as
+// it was: only which keys the table holds counts.
 func (s *Store) back(u undo) {
 	switch u.op {
 	case undoNoTable:
 		delete(s.tables, u.name)
+		s.epoch++
 	case undoHadTable:
 		s.tables[u.table.name] = u.table
+		s.epoch++
+	case undoNoKey:
+		if plant != "store/order-not-undone" {
+			u.table.keys.remove(u.record.key)
+		}
+		s.epoch++
+	case undoHadKey:
+		if plant != "store/order-not-undone" {
+			u.table.keys.insert(u.record)
+		}
+		s.epoch++
 	case undoFields:
 		t := u.table
 		for _, name := range t.fields[u.n:] {
@@ -404,12 +420,16 @@ func (tx *Tx) Get(key string) (Record, error) {
 	return tx.s.Get(key)
 }
 
-// Scan is Store.Scan inside the transaction.
+// Scan is Store.Scan inside the transaction, with the transaction's changes
+// in it. The Cursor carries on through the transaction's later changes,
+// statements taken back included: each record it gives is the first after
+// the last one it gave, among the records the table holds at that moment.
+// Once the transaction has ended, it gives no more.
 func (tx *Tx) Scan(prefix, after string) (Cursor, error) {
 	if err := tx.open(); err != nil {
 		return nil, err
 	}
-	return tx.s.Scan(prefix, after)
+	return tx.s.scan(tx, prefix, after)
 }
 
 // Neighbours is Store.Neighbours inside the transaction.

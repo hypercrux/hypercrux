@@ -111,6 +111,19 @@ func (m *model) drop(name string, bad bool) string {
 	return ""
 }
 
+// scan returns the keys a scan gives: every key that starts with prefix
+// and comes after after, sorted.
+func (m *model) scan(prefix, after string) []string {
+	var keys []string
+	for key := range m.records {
+		if strings.HasPrefix(key, prefix) && key > after {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func kindOf(err error) string {
 	switch {
 	case err == nil:
@@ -139,6 +152,12 @@ var (
 	badValues = []value.Value{value.Text("\xff"), value.Real(math.NaN()), value.Real(math.Inf(1)), value.Real(math.Inf(-1)),
 		value.Vector([]float32{1})}
 	awkwardFloats = []float32{float32(math.Copysign(0, -1)), math.Float32frombits(1), math.MaxFloat32 / 4, 0.1, 1}
+	// A scan's prefix is a table's name, a colon, and one of idStarts,
+	// which hold the starts of modelIDs, a byte that starts é alone, and
+	// ones no key has. afters are what a scan can start after besides keys.
+	idStarts    = []string{"", "", "", "1", "5", "a", "a ", "x", "x:", "\xc3", "é", "\xff", "zz"}
+	afters      = []string{"a", "docs", "docs;", "people:", "t_1:\xff", "zzz", "docs:\x00", "\xff"}
+	badPrefixes = []string{"", "docs", "nocolon", "Docs:", "hc_x:", "sqlite_x:1", ":", ":1", "a-b:", "1docs:"}
 )
 
 type gen struct {
@@ -226,10 +245,93 @@ func (g *gen) put() (string, []format.Field, bool) {
 	return key, fields, bad
 }
 
-// TestTheModel runs random puts, gets, deletes and drops on the store and
-// on the model, and checks that they agree on every answer, that a write
-// that fails changes nothing, and that every write's changes, applied to
-// a second store, give a copy of the first.
+// scanArgs returns a scan's prefix and after, and whether the prefix breaks
+// the rules. after is "" half the time, and otherwise a key, which may be
+// in another table or break the rules itself, a string inside the prefix,
+// the prefix itself, or something no key is.
+func (g *gen) scanArgs() (prefix, after string, bad bool) {
+	if g.one(12) {
+		prefix, bad = pick(g, badPrefixes), true
+	} else {
+		prefix = pick(g, modelTables) + ":" + pick(g, idStarts)
+	}
+	switch g.r.IntN(8) {
+	case 4:
+		after, _ = g.key()
+	case 5:
+		after = prefix + pick(g, idStarts)
+	case 6:
+		after = prefix
+	case 7:
+		after = pick(g, afters)
+	}
+	return prefix, after, bad
+}
+
+// checkScan pulls records from a cursor and checks them against want, the
+// keys the model's scan gives, in order, and each record against the
+// model's. It stops after stop records, or at the end when stop is -1, and
+// then a cursor that has given false must keep giving it.
+func checkScan(t *testing.T, r Reader, m *model, c Cursor, desc string, want []string, stop int) {
+	t.Helper()
+	for i := 0; i != stop; i++ {
+		rec, more := c.Next()
+		if !more {
+			if i != len(want) {
+				t.Fatalf("%s gave %d records, where the model gives %q", desc, i, want)
+			}
+			if rec, again := c.Next(); again {
+				t.Fatalf("%s gave false, then %s", desc, rec.Key)
+			}
+			return
+		}
+		if i >= len(want) || rec.Key != want[i] {
+			t.Fatalf("%s gave %s as record %d, where the model gives %q", desc, rec.Key, i, want)
+		}
+		compareRecord(t, r, m, rec)
+	}
+}
+
+// liveScan is a cursor kept open while other steps change the store. Each
+// record it gives must be the first in the model as the model is then that
+// starts with its prefix and comes after the last one it gave.
+type liveScan struct {
+	c      Cursor
+	desc   string
+	prefix string
+	after  string // the last key it gave, or the after it began with
+	given  int
+}
+
+// pull takes one record from the cursor and checks it, and reports false
+// once the cursor has no more. It counts the pulls where the cursor has to
+// find its place again, since the store has changed under it.
+func (l *liveScan) pull(t *testing.T, r Reader, m *model, outcomes map[string]int) bool {
+	t.Helper()
+	if c := l.c.(*cursor); c.epoch != c.s.epoch && !c.done {
+		outcomes["live scan moved"]++
+	}
+	want := m.scan(l.prefix, l.after)
+	rec, more := l.c.Next()
+	if more != (len(want) > 0) || more && rec.Key != want[0] {
+		t.Fatalf("%s, after %d records, the last %q, gave %q, %v, where the model gives %q", l.desc, l.given, l.after, rec.Key, more, want)
+	}
+	if !more {
+		return false
+	}
+	compareRecord(t, r, m, rec)
+	l.after = rec.Key
+	l.given++
+	return true
+}
+
+// TestTheModel runs random puts, gets, scans, deletes and drops on the
+// store and on the model, and checks that they agree on every answer, that
+// a write that fails changes nothing, and that every write's changes,
+// applied to a second store, give a copy of the first. A scan is pulled to
+// its end or stopped part of the way. Now and then a cursor stays open over
+// the steps that follow, and gives a record every few steps, which must be
+// the next in the model as the steps between have left it.
 func TestTheModel(t *testing.T) {
 	seeds, steps := 20, 4000
 	if testing.Short() {
@@ -246,12 +348,25 @@ func runModel(t *testing.T, seed uint64, steps int) {
 	g := &gen{r: rand.New(rand.NewPCG(seed, 0x51)), m: m}
 	var changes []format.Change
 	outcomes := map[string]int{}
+	var live, ended *liveScan // a cursor open over the steps, and the last one that ended
 	for step := 0; step < steps; step++ {
+		if live != nil && g.one(3) && !live.pull(t, s, m, outcomes) {
+			outcomes["live scan ended"]++
+			live, ended = nil, live
+		}
+		if ended != nil && g.one(5) {
+			// A cursor that has given false keeps giving it, whatever the
+			// steps since have put after its place.
+			if rec, more := ended.c.Next(); more {
+				t.Fatalf("step %d: %s gave false, and then %s", step, ended.desc, rec.Key)
+			}
+			outcomes["ended scan still ended"]++
+		}
 		before := len(changes)
 		var desc, want, got string
 		var err error
 		switch w := g.r.IntN(100); {
-		case w < 55:
+		case w < 50:
 			key, fields, bad := g.put()
 			given := slices.Clone(fields)
 			desc = fmt.Sprintf("put %q %v", key, fields)
@@ -264,7 +379,7 @@ func runModel(t *testing.T, seed uint64, steps int) {
 			if err == nil {
 				checkPutChanges(t, s, changes[before:], key, existed)
 			}
-		case w < 75:
+		case w < 65:
 			key, bad := g.key()
 			desc = "get " + key
 			r, err := s.Get(key)
@@ -278,6 +393,28 @@ func runModel(t *testing.T, seed uint64, steps int) {
 			if err == nil && want == "" {
 				compareRecord(t, s, m, r)
 			}
+		case w < 75:
+			prefix, after, bad := g.scanArgs()
+			desc = fmt.Sprintf("scan %q %q", prefix, after)
+			var c Cursor
+			c, err = s.Scan(prefix, after)
+			want, got = "", kindOf(err)
+			if bad {
+				want = "invalid"
+			}
+			if err != nil || want != "" {
+				break
+			}
+			if live == nil && g.one(4) {
+				live = &liveScan{c: c, desc: "the live " + desc, prefix: prefix, after: after}
+				outcomes["live scan"]++
+				break
+			}
+			stop := -1
+			if g.one(4) {
+				stop = g.r.IntN(4)
+			}
+			checkScan(t, s, m, c, desc, m.scan(prefix, after), stop)
 		case w < 95:
 			key, bad := g.key()
 			desc = "delete " + key
@@ -321,8 +458,10 @@ func runModel(t *testing.T, seed uint64, steps int) {
 	checkInvariants(t, replica)
 	// Every kind of step has to come up, working and failing, or the test
 	// tests less than it says.
-	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "delete ok",
-		"delete invalid", "delete not found", "drop ok", "drop invalid", "drop not found"} {
+	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "scan ok", "scan invalid",
+		"live scan", "live scan moved", "live scan ended", "ended scan still ended", "delete ok", "delete invalid",
+		"delete not found", "drop ok", "drop invalid",
+		"drop not found"} {
 		if outcomes[o] < steps/1000 {
 			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
 		}
@@ -421,10 +560,19 @@ func compareAll(t *testing.T, s *Store, m *model) {
 // checkInvariants checks what the store's layout promises: each table's
 // index and vector field agree with its list, and each record's fields
 // are in order of place, without nulls or the vector, inside its table's
-// list, and its vector has the table's size.
+// list, and its vector has the table's size. Each table's keys hold its
+// records' keys, and only those, in blocks as checkOrder checks them.
 func checkInvariants(t *testing.T, s *Store) {
 	t.Helper()
+	held := 0 // keys in the tables' orders
 	for name, tb := range s.tables {
+		checkOrder(t, name, &tb.keys)
+		for r := range tb.keys.records {
+			if r.table != tb || s.records[r.key] != r {
+				t.Fatalf("table %s's keys hold %s, which the hash table has as %v", name, r.key, s.records[r.key])
+			}
+		}
+		held += tb.keys.n
 		if tb.name != name || len(tb.index) != len(tb.fields) {
 			t.Fatalf("table %s is %+v", name, tb)
 		}
@@ -455,10 +603,41 @@ func checkInvariants(t *testing.T, s *Store) {
 			t.Fatalf("record %s has a vector of %d values, in a table of size %d", key, len(r.vec), tb.size)
 		}
 	}
+	if held != len(s.records) {
+		t.Fatalf("the tables' keys hold %d keys, and the hash table %d records", held, len(s.records))
+	}
+}
+
+// checkOrder checks the layout of one table's keys: blocks of 1 to
+// blockMax keys, in byte order across the blocks, each with the record
+// whose key it is, n counting them, and nothing left past a block's length.
+func checkOrder(t *testing.T, name string, o *keyOrder) {
+	t.Helper()
+	count, last := 0, ""
+	for bi, b := range o.blocks {
+		if len(b) == 0 || cap(b) > blockMax {
+			t.Fatalf("table %s's block %d holds %d keys, with room for %d", name, bi, len(b), cap(b))
+		}
+		for _, e := range b {
+			if count > 0 && e.key <= last || e.r == nil || e.r.key != e.key {
+				t.Fatalf("table %s's block %d holds %q after %q, with the record %v", name, bi, e.key, last, e.r)
+			}
+			last = e.key
+			count++
+		}
+		for _, e := range b[len(b):cap(b)] {
+			if e != (entry{}) {
+				t.Fatalf("table %s's block %d keeps %q past its length", name, bi, e.key)
+			}
+		}
+	}
+	if count != o.n || o.blocks != nil && len(o.blocks) == 0 {
+		t.Fatalf("table %s's keys count %d, and hold %d in %d blocks", name, o.n, count, len(o.blocks))
+	}
 }
 
 // dump writes out the whole store in order, so two stores can be compared
-// as text.
+// as text. Each table's line ends with its keys, in the order it keeps them.
 func dump(s *Store) string {
 	var b strings.Builder
 	names := make([]string, 0, len(s.tables))
@@ -468,7 +647,11 @@ func dump(s *Store) string {
 	sort.Strings(names)
 	for _, name := range names {
 		tb := s.tables[name]
-		fmt.Fprintf(&b, "table %s %q vec %d size %d\n", name, tb.fields, tb.vec, tb.size)
+		var keys []string
+		for r := range tb.keys.records {
+			keys = append(keys, r.key)
+		}
+		fmt.Fprintf(&b, "table %s %q vec %d size %d keys %q\n", name, tb.fields, tb.vec, tb.size, keys)
 	}
 	keys := make([]string, 0, len(s.records))
 	for key := range s.records {

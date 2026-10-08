@@ -31,7 +31,8 @@ import (
 // transaction's own Put, Delete, Drop and Apply, in tx.go, run the same
 // code with the copy's lock and the undo list (S2). Every change to the
 // store goes through one of the small functions that call changing first:
-// newTable, add and setSize in store.go, and put, remove and drop here.
+// newTable, add and setSize in store.go, and put, unhash, list, unlist and
+// drop here.
 // changes.go says what the change lists hold, and applies a whole batch
 // from the log on top of apply (S3).
 
@@ -330,7 +331,8 @@ func (s *Store) put(t *table, key string, fields []format.Field, vec []float32) 
 	if r == nil {
 		r = &record{key: strings.Clone(key), table: t}
 		s.changing(undo{op: undoNoRecord, name: r.key})
-		s.records[r.key] = r // S4 adds the key to its table's order here
+		s.records[r.key] = r
+		s.list(r)
 	} else {
 		// A new record goes whole when its put is undone, so only a
 		// record that was there needs its fields and vector kept.
@@ -393,12 +395,34 @@ func (s *Store) delete(key string) error {
 	return nil
 }
 
-// remove takes a record out of the store. S4 takes its key out of its
-// table's order here, S5 its links both ways, and V1 frees its slot, each
-// with undo entries of their own, or with more in this one.
+// remove takes a record out of the store, for a delete: out of the hash
+// table, and its key out of its table's keys. S5 takes its links out both
+// ways here, and V1 frees its slot, each with undo entries of their own.
 func (s *Store) remove(r *record) {
+	s.unhash(r)
+	if plant != "store/delete-keeps-key" {
+		s.unlist(r)
+	}
+}
+
+// unhash takes a record out of the hash table.
+func (s *Store) unhash(r *record) {
 	s.changing(undo{op: undoHadRecord, record: r})
 	delete(s.records, r.key)
+}
+
+// list adds a new record's key to its table's keys.
+func (s *Store) list(r *record) {
+	s.changing(undo{op: undoNoKey, table: r.table, record: r})
+	r.table.keys.insert(r)
+	s.epoch++
+}
+
+// unlist takes a record's key out of its table's keys.
+func (s *Store) unlist(r *record) {
+	s.changing(undo{op: undoHadKey, table: r.table, record: r})
+	r.table.keys.remove(r.key)
+	s.epoch++
 }
 
 func (s *Store) drop(name string) error {
@@ -409,17 +433,19 @@ func (s *Store) drop(name string) error {
 	if t == nil {
 		return fmt.Errorf("%w: no record table %s", errs.ErrNotFound, name)
 	}
-	// Until S4 keeps each table's keys, finding a table's records takes a
-	// look at every record.
-	for _, r := range s.records {
-		if r.table == t && plant != "store/drop-keeps-records" {
-			s.remove(r)
+	// The table's own keys give its records, which leave the hash table.
+	// The keys stay as they are, with the table, and the table and its
+	// records keep everything they hold, so undoing the drop is putting
+	// them back in the maps. S5 takes each record's links out both ways
+	// here.
+	if plant != "store/drop-keeps-records" {
+		for r := range t.keys.records {
+			s.unhash(r)
 		}
 	}
-	// The table and its records keep everything they hold, so undoing the
-	// drop is putting them back in the maps.
 	s.changing(undo{op: undoHadTable, table: t})
 	delete(s.tables, name)
+	s.epoch++
 	return nil
 }
 

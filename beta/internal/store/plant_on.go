@@ -45,13 +45,27 @@ import "os"
 //     out.
 //   - store/snapshot-size-left-out: a CreateTable in the snapshot gives the
 //     vector size 0.
+//   - store/order-not-undone: a rollback leaves each table's keys as the
+//     transaction left them.
+//   - store/delete-keeps-key: a delete leaves the record's key among its
+//     table's keys.
+//   - store/join-out-of-order: two blocks of a table's keys that join put
+//     the later block's keys first.
+//   - store/after-included: Scan gives the record whose key is after, as
+//     well as the ones that come after it.
+//   - store/cursor-keeps-its-place: a cursor carries on from its old place
+//     in the blocks after a change, without finding its place again.
+//   - store/prefix-table-unchecked: Scan takes a prefix whose table name
+//     breaks the rules, such as Docs:, and gives no records.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "store/nulls-kept", "store/drop-keeps-records", "store/spelt-as-given", "store/size-unchecked",
 		"store/undo-oldest-first", "store/changes-kept", "store/readers-not-held", "store/readers-in-early",
 		"store/inside-unchecked", "store/batch-half-applied", "store/unused-fields-taken",
 		"store/applied-slices-shared", "store/snapshot-in-map-order", "store/snapshot-fields-unsorted",
-		"store/snapshot-no-vectors", "store/snapshot-size-left-out":
+		"store/snapshot-no-vectors", "store/snapshot-size-left-out", "store/order-not-undone",
+		"store/delete-keeps-key", "store/join-out-of-order", "store/after-included",
+		"store/cursor-keeps-its-place", "store/prefix-table-unchecked":
 		return p
 	}
 	return ""

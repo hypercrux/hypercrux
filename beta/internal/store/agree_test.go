@@ -22,13 +22,14 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
-// TestTheStoreAgrees0x runs the same random puts, gets, deletes and drops,
-// with Go values, on 0.x and on the store, through putGo as the public
-// package will. After each step both must give the same error, with the
-// same message, or the same record, and each table the same fields in the
-// order 0.x's SELECT * gives its columns. Only the message for a field
-// named twice in two spellings may differ, since 0.x reports whichever of
-// the two its map gave first.
+// TestTheStoreAgrees0x runs the same random puts, gets, scans, deletes and
+// drops, with Go values, on 0.x and on the store, through putGo and scanGo
+// as the public package will. After each step both must give the same
+// error, with the same message, or the same record, or the same records in
+// the same order, and each table the same fields in the order 0.x's SELECT
+// * gives its columns. Only the message for a field named twice in two
+// spellings may differ, since 0.x reports whichever of the two its map gave
+// first.
 func TestTheStoreAgrees0x(t *testing.T) {
 	db, err := hc.Open(filepath.Join(t.TempDir(), "agree.db"))
 	if err != nil {
@@ -95,7 +96,7 @@ func TestTheStoreAgrees0x(t *testing.T) {
 		clash := false
 		var touched string
 		switch w := r.IntN(100); {
-		case w < 60:
+		case w < 55:
 			k := key()
 			tbl, _, _ := strings.Cut(k, ":")
 			f := fields{}
@@ -122,7 +123,7 @@ func TestTheStoreAgrees0x(t *testing.T) {
 				}
 			}
 			touched = k
-		case w < 75:
+		case w < 68:
 			k := key()
 			desc = "get " + k
 			want, e1 := db.Get(k)
@@ -138,7 +139,32 @@ func TestTheStoreAgrees0x(t *testing.T) {
 					t.Fatalf("step %d: %s: the store gives %#v, and 0.x %#v", step, desc, got, want)
 				}
 			}
-		case w < 95:
+		case w < 80:
+			prefix := pick(tables) + ":"
+			if r.IntN(3) == 0 {
+				prefix += pick([]string{"1", "4", "a", "a ", "\xc3", "é", "x"})
+			}
+			if r.IntN(15) == 0 {
+				prefix = pick([]string{"docs", "", "Docs:", "hc_x:", ":", "t-1:"})
+			}
+			after, limit := "", 0
+			if r.IntN(3) == 0 {
+				after = key()
+			}
+			if r.IntN(2) == 0 {
+				limit = r.IntN(4)
+			}
+			if r.IntN(25) == 0 {
+				limit = -1
+			}
+			desc = fmt.Sprintf("scan %q %q %d", prefix, after, limit)
+			want, e1 := db.Scan(prefix, after, limit)
+			got, e2 := scanGo(s, prefix, after, limit)
+			zeroxErr, err = e1, e2
+			if e1 == nil && e2 == nil && !reflect.DeepEqual(got, fromZerox(want)) {
+				t.Fatalf("step %d: %s: the store gives %q, and 0.x %q:\n%v\n%v", step, desc, keysOf(got), keysOf(fromZerox(want)), got, want)
+			}
+		case w < 96:
 			k := key()
 			desc = "delete " + k
 			zeroxErr = db.Delete(k)
@@ -169,8 +195,8 @@ func TestTheStoreAgrees0x(t *testing.T) {
 	for _, tbl := range tables {
 		agreeOnTable(t, db, s, tbl)
 	}
-	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "delete ok",
-		"delete not found", "drop ok", "drop invalid", "drop not found"} {
+	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "scan ok", "scan invalid",
+		"delete ok", "delete not found", "drop ok", "drop invalid", "drop not found"} {
 		if outcomes[o] < steps/500 {
 			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
 		}

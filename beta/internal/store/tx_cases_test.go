@@ -765,9 +765,10 @@ func TestCommit(t *testing.T) {
 }
 
 // TestATransactionThatHasEnded: once Commit or Rollback has ended a
-// transaction, its methods fail with ErrClosed, and Rollback and RollbackTo
-// do nothing. While it's open, the reads that later tasks write say so, and
-// its snapshot holds its changes.
+// transaction, its methods fail with ErrClosed, a cursor it gave gives no
+// more records, and Rollback and RollbackTo do nothing. While it's open,
+// the reads that later tasks write say so, and its snapshot holds its
+// changes.
 func TestATransactionThatHasEnded(t *testing.T) {
 	s := newStoreN(t)
 	tx := begin(t, s)
@@ -795,11 +796,18 @@ func TestATransactionThatHasEnded(t *testing.T) {
 			ok(t, setN(tx, 3))
 			m = tx.Mark()
 		}
+		cur, err := tx.Scan("docs:", "")
+		ok(t, err)
 		end()
+		if rec, more := cur.Next(); more {
+			t.Errorf("a cursor gave %v after its transaction ended", rec.Key)
+		}
 		closed := append(readsToCome(tx),
 			tx.Put("docs:1", nil), tx.Delete("docs:1"), tx.Drop("docs"), tx.Apply(format.Change{Op: format.Delete, Key: "docs:1"}),
 			tx.Commit(nil))
-		_, err := tx.Get("docs:1")
+		_, err = tx.Get("docs:1")
+		closed = append(closed, err)
+		_, err = tx.Scan("docs:", "")
 		closed = append(closed, err)
 		for j, err := range closed {
 			if !errors.Is(err, errs.ErrClosed) {
@@ -826,11 +834,10 @@ func TestATransactionThatHasEnded(t *testing.T) {
 
 // readsToCome makes the transaction's reads that later tasks write.
 func readsToCome(tx *Tx) []error {
-	_, scan := tx.Scan("docs:", "")
 	_, neighbours := tx.Neighbours("docs:1", Out, "")
 	_, walk := tx.Walk("docs:1", Out, "", 1)
 	_, nearest := tx.Nearest("docs", []float32{1}, 1, nil)
-	return []error{scan, neighbours, walk, nearest}
+	return []error{neighbours, walk, nearest}
 }
 
 // TestDirectWritesWaitTheirTurn: the store's own writes, which have it to

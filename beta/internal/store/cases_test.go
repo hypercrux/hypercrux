@@ -744,9 +744,7 @@ func TestTheStoreKeepsItsOwnStrings(t *testing.T) {
 // so.
 func TestWhatComesLater(t *testing.T) {
 	s := store.New()
-	_, err := s.Scan("docs:", "")
-	wantErr(t, err, errors.ErrUnsupported)
-	_, err = s.Neighbours("docs:1", store.Out, "")
+	_, err := s.Neighbours("docs:1", store.Out, "")
 	wantErr(t, err, errors.ErrUnsupported)
 	_, err = s.Walk("docs:1", store.Out, "", 1)
 	wantErr(t, err, errors.ErrUnsupported)
