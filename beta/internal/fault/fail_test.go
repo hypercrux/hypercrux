@@ -191,12 +191,9 @@ func TestRuleTimes(t *testing.T) {
 
 	d = fault.New(1)
 	d.Add(fault.Rule{Op: fault.WriteAt, N: 2, Times: 5, Cut: true})
-	f, err := d.FS().Create("/f", 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := mustCreate(t, d.FS(), "/f", 0o600)
 	mustWrite(t, f, []byte("x"), 0)
-	_, err = f.WriteAt([]byte("x"), 1)
+	_, err := f.WriteAt([]byte("x"), 1)
 	mustCut(t, err)
 	f, err = d.FS().Open("/f")
 	if err != nil {
@@ -359,10 +356,7 @@ func TestFailedSync(t *testing.T) {
 			for _, later := range []bool{false, true} {
 				d := fault.New(seed)
 				sys := d.FS()
-				f, err := sys.Create("/f", 0o600)
-				if err != nil {
-					t.Fatal(err)
-				}
+				f := mustCreate(t, sys, "/f", 0o600)
 				mustWrite(t, f, synced, 0)
 				if err := f.Sync(); err != nil {
 					t.Fatal(err)

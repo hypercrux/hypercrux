@@ -19,11 +19,12 @@ const dev = 1
 // cache, which reads see, and the drive, which keeps what the last sync
 // put there. The bytes past the end of either are zeros.
 type inode struct {
-	ino      uint64
-	dir      bool
-	mode     fs.FileMode
-	uid, gid int
-	nlink    int // the names it has: 1, or 0 once it's removed or replaced
+	ino        uint64
+	dir        bool
+	mode       fs.FileMode
+	uid, gid   int // the owner and group, as the calls see them
+	suid, sgid int // the owner and group, as the drive holds them
+	nlink      int // the names it has: 1, or 0 once it's removed or replaced
 
 	cache   []byte  // what reads see
 	disk    []byte  // what the drive holds, which can run past the size

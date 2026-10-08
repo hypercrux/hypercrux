@@ -45,9 +45,36 @@ var ErrCut = errors.New("fault: the power was cut")
 // size a Truncate makes, stay pending until the file's next Sync puts them
 // on the drive, with the size.
 //
-// Cut, or a Rule with Cut set, cuts the power, and each file's pending
-// changes are settled:
+// Names are cached the same way, after ext4 with its default journal
+// (data=ordered). Create, Rename, RenameNoReplace and Remove change the
+// names every process sees at once, and Chown changes a file's owner, but
+// a change is sure to be on the drive only once a SyncDir has put it there:
 //
+//   - SyncDir puts on the drive every change made so far in its folder,
+//     and the changes those lean on: a rename between two folders takes
+//     the earlier changes in the other folder with it. That's Linux's
+//     promise for fsync on a folder. ext4 keeps more, since that fsync
+//     commits its whole journal, and the model doesn't count on it.
+//   - A file's Sync does nothing for its name or its owner, as Linux
+//     promises nothing for them with fdatasync.
+//   - A Chown is a change in the folder that holds its file's name, so the
+//     SyncDir that makes the name last makes the owner last too. The
+//     permissions Create sets are part of the creation.
+//   - A rename is kept or lost whole, as ext4's journal keeps it.
+//
+// Cut, or a Rule with Cut set, cuts the power. The changes to names and
+// owners the drive doesn't hold yet are settled first, and then each
+// file's pending data:
+//
+//   - The drive keeps the changes in call order up to a point, and loses
+//     the rest, as ext4 commits its journal in order and a cut can fall
+//     between any two commits. So a later change never lasts while an
+//     earlier one is lost, unless a SyncDir put the later one on the drive
+//     first. A third of the time every change is kept, a third of the time
+//     every one is lost, and otherwise the point falls anywhere among them.
+//   - A file left without a name is gone, with its data. A file whose
+//     removal is lost, or the rename that replaced it, is back, with its
+//     data as the cut leaves it.
 //   - Each sector a pending change touched is kept, lost or torn on its
 //     own, as a drive can write the sectors in its cache in any order.
 //     Kept, it holds what reads saw. Lost, it holds what the drive held.
@@ -66,18 +93,19 @@ var ErrCut = errors.New("fault: the power was cut")
 //     that Sync, a third of the time each. Past what the drive held, a file
 //     reads as zeros.
 //   - A cut in a WriteAt or a Truncate comes once the call has reached the
-//     cache, so its change is pending at the cut. In any other call, the
-//     cut comes first.
+//     cache, so its change is pending at the cut. So does a cut in a
+//     Create, a Rename, a RenameNoReplace, a Remove or a Chown, so the
+//     change can last though the call never returned. In any other call,
+//     the cut comes first.
 //
 // After the cut, every call through an FS from before it, or on a file
 // opened through one, fails with ErrCut, and every flock is gone. FS then
-// gives the machine started again, where reads see what the drive holds.
-// Names stay as they were: a file created, renamed or removed stays so
-// through a cut whether or not its folder was synced, and so do its
-// permissions and its owner. T2 makes names depend on SyncDir.
+// gives the machine started again, where reads see what the drive holds,
+// and so do names.
 //
 // A Rule makes a call fail at its nth use. A failed call changes nothing,
-// apart from these:
+// so a failed SyncDir puts nothing on the drive and leaves its folder's
+// changes to be kept or lost at a cut. There are four exceptions:
 //
 //   - A failed WriteAt writes the first n bytes it was given, where n, the
 //     count it returns, is anything from 0 to one less than all of them.
@@ -102,33 +130,39 @@ var ErrCut = errors.New("fault: the power was cut")
 // go of it, and so does a cut.
 //
 // Paths are absolute, and a relative one is taken from "/". A Disk starts
-// with the folder "/" alone, and Mkdir makes more.
+// with the folder "/" alone, and Mkdir makes more, which are on the drive
+// at once.
 type Disk struct {
-	mu     sync.Mutex
-	rng    *rand.Rand
-	boot   int               // how many times the power has been cut
-	names  map[string]*inode // every file and folder, by its path
-	ino    uint64            // the last inode number given out
-	rules  []*rule
-	calls  map[callKey]int
-	failed int
+	mu      sync.Mutex
+	rng     *rand.Rand
+	boot    int               // how many times the power has been cut
+	names   map[string]*inode // every file and folder by its path, as the calls see them
+	stored  map[string]*inode // the same, as the drive holds them
+	journal []change          // the changes to names and owners the drive may not hold, in call order
+	ino     uint64            // the last inode number given out
+	rules   []*rule
+	calls   map[callKey]int
+	failed  int
 }
 
 // New returns a disk holding the empty folder "/", whose choices the seed
 // decides.
 func New(seed uint64) *Disk {
 	d := &Disk{
-		rng:   rand.New(rand.NewPCG(seed, 0x6661756c74)),
-		names: map[string]*inode{},
-		calls: map[callKey]int{},
+		rng:    rand.New(rand.NewPCG(seed, 0x6661756c74)),
+		names:  map[string]*inode{},
+		stored: map[string]*inode{},
+		calls:  map[callKey]int{},
 	}
-	d.names["/"] = d.newInode(true, 0o755)
+	root := d.newInode(true, 0o755)
+	d.names["/"], d.stored["/"] = root, root
 	return d
 }
 
 func (d *Disk) newInode(dir bool, perm fs.FileMode) *inode {
 	d.ino++
 	n := &inode{ino: d.ino, dir: dir, mode: perm.Perm(), uid: os.Getuid(), gid: os.Getgid(), nlink: 1}
+	n.suid, n.sgid = n.uid, n.gid
 	if dir {
 		n.mode |= fs.ModeDir
 		n.nlink = 2
@@ -148,7 +182,9 @@ func (d *Disk) FS() fsys.FS {
 
 // Mkdir makes the folder dir, with any folders above it that are missing,
 // as os.MkdirAll does. It's for setting a test up, so it isn't a call any
-// rule sees or Calls counts.
+// rule sees or Calls counts, and each folder it makes is on the drive at
+// once, as if the folder above it were synced straight after: whatever
+// else was pending there goes on the drive with it.
 func (d *Disk) Mkdir(dir string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -163,7 +199,10 @@ func (d *Disk) Mkdir(dir string) error {
 		}
 		at += "/" + part
 		if n := d.names[at]; n == nil {
-			d.names[at] = d.newInode(true, 0o755)
+			n = d.newInode(true, 0o755)
+			d.names[at] = n
+			d.note(change{dirs: []string{path.Dir(at)}, names: []entry{{at, n}}})
+			d.syncDir(path.Dir(at))
 		} else if !n.dir {
 			return &fs.PathError{Op: "mkdir", Path: dir, Err: syscall.ENOTDIR}
 		}
@@ -237,12 +276,14 @@ func (d *Disk) Calls(op Op, path string) int {
 	return d.calls[callKey{op, path}]
 }
 
-// cut cuts the power, with d.mu held: each file's pending changes are
-// settled, in the order of inode numbers so the seed decides the same way
-// each time, and every process so far is dead. A file without a name is
-// gone, since nothing can open it once its process has died.
+// cut cuts the power, with d.mu held: the changes to names are settled,
+// then each file's pending changes, in the order of inode numbers so the
+// seed decides the same way each time, and every process so far is dead.
+// A file without a name is gone, since nothing can open it once its
+// process has died.
 func (d *Disk) cut() {
 	d.boot++
+	d.settleNames()
 	files := make([]*inode, 0, len(d.names))
 	for _, n := range d.names {
 		if !n.dir {

@@ -29,3 +29,9 @@ store/snapshot-in-map-order ./beta/internal/store
 store/snapshot-fields-unsorted ./beta/internal/store
 store/snapshot-no-vectors ./beta/internal/store
 store/snapshot-size-left-out ./beta/internal/store
+fault/names-always-kept ./beta/internal/fault
+fault/names-out-of-order ./beta/internal/fault
+fault/sync-keeps-name ./beta/internal/fault
+fault/one-sync-for-all ./beta/internal/fault
+fault/cut-before-names ./beta/internal/fault
+fault/chown-lasts ./beta/internal/fault

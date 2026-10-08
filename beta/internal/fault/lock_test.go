@@ -19,7 +19,8 @@ import (
 // them or two; the open that holds it can take it again; it stays with the
 // file through a rename and a removal, and a new file at the old path has
 // one of its own; Unlock from an open that doesn't hold it changes
-// nothing; Close lets go of it, and so does a cut.
+// nothing; Close lets go of it, and so does a cut, once the names are
+// synced so the file is still there.
 func TestFlockAcrossOpens(t *testing.T) {
 	d := fault.New(1)
 	one, two := d.FS(), d.FS()
@@ -82,6 +83,9 @@ func TestFlockAcrossOpens(t *testing.T) {
 	unlock(c)
 	lock(moved, true)
 
+	if err := one.SyncDir("/"); err != nil {
+		t.Fatal(err)
+	}
 	d.Cut()
 	sys := d.FS()
 	again := open(sys, "/db")

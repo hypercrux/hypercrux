@@ -23,10 +23,27 @@ import "os"
 //   - fault/second-open-locks: TryLock takes the flock from another open
 //     file that holds it.
 //   - fault/nth-plus-one: a rule picks the call after its nth.
+//
+// T2's are about names:
+//
+//   - fault/names-always-kept: a cut keeps every change to names, synced
+//     or not, as T1's disk did.
+//   - fault/names-out-of-order: a cut keeps or loses each change to names
+//     on its own, by a coin, so a later one can last while an earlier one
+//     in its folder is lost, which ext4's journal never allows.
+//   - fault/sync-keeps-name: a file's Sync puts its folder's changes on the
+//     drive, as ext4's fdatasync often does without promising it.
+//   - fault/one-sync-for-all: a SyncDir puts every folder's changes on the
+//     drive, as ext4 does without Linux promising it.
+//   - fault/cut-before-names: a cut in a call that changes names comes
+//     before the change, so the change never lasts.
+//   - fault/chown-lasts: a Chown is on the drive at once.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "fault/cut-keeps-everything", "fault/torn-with-zeros", "fault/clean-pages-written",
-		"fault/second-open-locks", "fault/nth-plus-one":
+		"fault/second-open-locks", "fault/nth-plus-one",
+		"fault/names-always-kept", "fault/names-out-of-order", "fault/sync-keeps-name",
+		"fault/one-sync-for-all", "fault/cut-before-names", "fault/chown-lasts":
 		return p
 	}
 	return ""

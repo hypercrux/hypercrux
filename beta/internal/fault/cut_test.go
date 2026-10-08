@@ -21,15 +21,21 @@ import (
 
 // The oracle knows what the model promises about each byte of a file, and
 // nothing more: what reads see, and which bytes a cut must leave as they
-// are. It's written apart from the disk, from Disk's comment alone.
+// are. It's written apart from the disk, from Disk's comment alone. It
+// knows whether a file's name is on the drive too, since a cut can take a
+// file away with its name.
 type oracle struct {
 	files map[string]*ofile
+	maybe map[string]bool // files the power was cut in the creation of
+	gone  int             // files a cut took away with their names
+	found int             // files found after a cut in their creation
 }
 
 type ofile struct {
 	data   []byte // what reads see
 	state  []byte // what's promised about each byte
 	lo, hi int    // the smallest and largest sizes since the last good sync
+	named  bool   // a SyncDir, or a cut, has put its name on the drive
 }
 
 // What's promised about a byte.
@@ -39,7 +45,7 @@ const (
 	tainted         // changed before a sync that failed, and not since: no sync promises it any more
 )
 
-func newOracle() *oracle { return &oracle{files: map[string]*ofile{}} }
+func newOracle() *oracle { return &oracle{files: map[string]*ofile{}, maybe: map[string]bool{}} }
 
 func (f *ofile) write(off int, p []byte) {
 	end := off + len(p)
@@ -89,19 +95,36 @@ func (f *ofile) failSync() {
 
 // check reads every file after a cut, through sys, and holds it to what
 // was promised: a size it had since its last good sync, and every byte that
-// sync promised. A file whose creation the cut came in mustn't be there.
-// Then what was read is what's promised from now on, since it's what the
-// drive holds.
+// sync promised. A file whose name no SyncDir put on the drive may be gone,
+// and then the oracle forgets it. A file whose creation the cut came in
+// may be there, empty. Then what was read is what's promised from now on,
+// since it's what the drive holds.
 func (o *oracle) check(t testing.TB, sys fsys.FS, names []string, where string) {
 	t.Helper()
 	for _, name := range names {
 		f := o.files[name]
-		if f == nil {
-			if _, err := sys.Stat(name); !errors.Is(err, fs.ErrNotExist) {
-				t.Fatalf("%s: %s, which was never made, gives %v", where, name, err)
-			}
+		_, err := sys.Stat(name)
+		there := err == nil
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("%s: %s gives %v", where, name, err)
+		}
+		switch {
+		case f == nil && there && o.maybe[name]:
+			f = &ofile{}
+			o.files[name] = f
+			o.found++
+		case f == nil && there:
+			t.Fatalf("%s: %s, which was never made, is there", where, name)
+		case f == nil:
+			continue
+		case !there && f.named:
+			t.Fatalf("%s: %s, whose name was synced, is gone", where, name)
+		case !there:
+			o.files[name] = nil
+			o.gone++
 			continue
 		}
+		f.named = true
 		got := readAll(t, sys, name)
 		if len(got) < f.lo || len(got) > f.hi {
 			t.Fatalf("%s: %s is %d bytes long after the cut, and since its last good sync it was from %d to %d",
@@ -115,6 +138,27 @@ func (o *oracle) check(t testing.TB, sys fsys.FS, names []string, where string) 
 		f.data, f.state = bytes.Clone(got), make([]byte, len(got))
 		f.lo, f.hi = len(got), len(got)
 	}
+	clear(o.maybe)
+}
+
+// synced marks every file's name as on the drive, after a SyncDir of "/",
+// where they all are.
+func (o *oracle) synced() {
+	for _, f := range o.files {
+		if f != nil {
+			f.named = true
+		}
+	}
+}
+
+// unnamed reports whether a file's name is waiting for a SyncDir.
+func (o *oracle) unnamed() bool {
+	for _, f := range o.files {
+		if f != nil && !f.named {
+			return true
+		}
+	}
+	return false
 }
 
 var names = []string{"/a", "/b", "/c"}
@@ -130,6 +174,7 @@ type step struct {
 
 const (
 	doCreate    = iota
+	doSyncDir   // SyncDir of "/", which follows each creation
 	doWrite     // WriteAt
 	doTruncate  // Truncate
 	doSync      // Sync, which works
@@ -163,8 +208,15 @@ func (w *world) do(s step) bool {
 	switch s.do {
 	case doCreate:
 		w.files[s.file], err = w.sys.Create(name, 0o644)
-		if err == nil {
+		switch {
+		case err == nil:
 			w.o.files[name] = &ofile{}
+		case errors.Is(err, fault.ErrCut):
+			w.o.maybe[name] = true
+		}
+	case doSyncDir:
+		if err = w.sys.SyncDir("/"); err == nil {
+			w.o.synced()
 		}
 	case doWrite:
 		_, err = f.WriteAt(s.data, s.off)
@@ -250,8 +302,13 @@ func (w *world) restart(where string) {
 }
 
 // next picks a step at random for the files as the oracle has them. Only
-// with all set does it pick failed writes and cuts.
+// with all set does it pick failed writes and cuts. A creation is followed
+// by a SyncDir, as the engine syncs its folder, chosen without drawing from
+// r, so the other steps are the ones T1 picked.
 func (w *world) next(r *rand.Rand, all bool) step {
+	if w.o.unnamed() {
+		return step{do: doSyncDir}
+	}
 	for {
 		s := step{file: r.IntN(len(names))}
 		of := w.o.files[names[s.file]]
@@ -301,7 +358,7 @@ func (w *world) next(r *rand.Rand, all bool) step {
 }
 
 // workload returns a fixed list of steps, each one call, starting with the
-// three files' creation.
+// three files' creation, each followed by a SyncDir.
 func workload(seed uint64, n int) []step {
 	r := rand.New(rand.NewPCG(seed, 0x7431))
 	w := &world{o: newOracle()}
@@ -311,6 +368,8 @@ func workload(seed uint64, n int) []step {
 		switch s.do {
 		case doCreate:
 			w.o.files[names[s.file]] = &ofile{}
+		case doSyncDir:
+			w.o.synced()
 		case doWrite:
 			w.o.files[names[s.file]].write(int(s.off), s.data)
 		case doTruncate:
@@ -327,13 +386,15 @@ func workload(seed uint64, n int) []step {
 // again with it cut after the last, with several seeds each time. After
 // every cut each file must have a size it had since its last good sync,
 // and every byte that sync put on the drive, with nothing written over it
-// since, must read back as it was.
+// since, must read back as it was. Since T2, each file's creation is
+// followed by a SyncDir, and a cut before the SyncDir returns may take the
+// file away.
 func TestSyncedDataSurvivesEveryCut(t *testing.T) {
 	workloads, seeds := 8, 6
 	if testing.Short() {
 		workloads, seeds = 3, 2
 	}
-	cuts := 0
+	cuts, gone, found := 0, 0, 0
 	for wl := range workloads {
 		steps := workload(uint64(wl), 90)
 		for i := 1; i <= len(steps)+1; i++ {
@@ -362,10 +423,15 @@ func TestSyncedDataSurvivesEveryCut(t *testing.T) {
 				}
 				w.restart(fmt.Sprintf("workload %d, cut in call %d, seed %d", wl, i, seed))
 				cuts++
+				gone, found = gone+w.o.gone, found+w.o.found
 			}
 		}
 	}
-	t.Logf("%d cuts, and synced data survived every one", cuts)
+	if !testing.Short() && (gone == 0 || found == 0) {
+		t.Errorf("no cut took a file away with its name (%d), or left one it came in the creation of (%d)", gone, found)
+	}
+	t.Logf("%d cuts, and synced data survived every one; %d files went with their names, and %d were found after a cut in their creation",
+		cuts, gone, found)
 }
 
 // TestSyncedDataSurvivesLongRuns takes a disk through thousands of random
@@ -377,7 +443,7 @@ func TestSyncedDataSurvivesLongRuns(t *testing.T) {
 	if testing.Short() {
 		runs, steps = 2, 2000
 	}
-	total, failed := 0, 0
+	total, failed, gone := 0, 0, 0
 	for run := range runs {
 		r := rand.New(rand.NewPCG(uint64(run), 0x6c6f6e67))
 		d := fault.New(uint64(run))
@@ -392,9 +458,10 @@ func TestSyncedDataSurvivesLongRuns(t *testing.T) {
 		if cuts < steps/100 {
 			t.Errorf("run %d: %d cuts in %d steps", run, cuts, steps)
 		}
-		total, failed = total+cuts, failed+d.Failed()
+		total, failed, gone = total+cuts, failed+d.Failed(), gone+w.o.gone
 	}
-	t.Logf("%d runs of %d steps: %d cuts and %d failed calls, and synced data survived every cut", runs, steps, total, failed)
+	t.Logf("%d runs of %d steps: %d cuts and %d failed calls, and synced data survived every cut; %d files went with their names",
+		runs, steps, total, failed, gone)
 }
 
 // TestUnsyncedDataLostOrTorn writes over a synced file and past its end,
@@ -408,10 +475,7 @@ func TestUnsyncedDataLostOrTorn(t *testing.T) {
 	for seed := range uint64(600) {
 		d := fault.New(seed)
 		sys := d.FS()
-		f, err := sys.Create("/f", 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
+		f := mustCreate(t, sys, "/f", 0o644)
 		r := rand.New(rand.NewPCG(seed, 1))
 		synced := randomBytes(r, 3000)
 		mustWrite(t, f, synced, 0)
@@ -509,10 +573,7 @@ func TestCutInAWrite(t *testing.T) {
 	for seed := range uint64(300) {
 		d := fault.New(seed)
 		sys := d.FS()
-		f, err := sys.Create("/f", 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
+		f := mustCreate(t, sys, "/f", 0o644)
 		r := rand.New(rand.NewPCG(seed, 2))
 		synced := randomBytes(r, 1000)
 		mustWrite(t, f, synced, 0)
@@ -548,10 +609,7 @@ func TestCutInATruncate(t *testing.T) {
 	for seed := range uint64(200) {
 		d := fault.New(seed)
 		sys := d.FS()
-		f, err := sys.Create("/f", 0o644)
-		if err != nil {
-			t.Fatal(err)
-		}
+		f := mustCreate(t, sys, "/f", 0o644)
 		synced := randomBytes(rand.New(rand.NewPCG(seed, 3)), 3000)
 		mustWrite(t, f, synced, 0)
 		if err := f.Sync(); err != nil {
@@ -580,15 +638,12 @@ func TestCutInATruncate(t *testing.T) {
 
 // TestCutKillsTheProcess checks what a cut does to the processes running
 // then: every call through their FS, or on files they opened, fails with
-// ErrCut and never reaches the disk; their flocks are gone; names stay.
-// FS gives the machine started again.
+// ErrCut and never reaches the disk; their flocks are gone; synced names
+// stay. FS gives the machine started again.
 func TestCutKillsTheProcess(t *testing.T) {
 	d := fault.New(1)
 	sys := d.FS()
-	f, err := sys.Create("/f", 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
+	f := mustCreate(t, sys, "/f", 0o600)
 	if ok, err := f.TryLock(); !ok || err != nil {
 		t.Fatal(ok, err)
 	}
@@ -597,7 +652,7 @@ func TestCutKillsTheProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.Add(fault.Rule{Op: fault.Stat, N: 1, Cut: true})
-	_, err = sys.Stat("/f")
+	_, err := sys.Stat("/f")
 	mustCut(t, err)
 	if pathOf(err) != "/f" {
 		t.Errorf("the cut call's error names %q", pathOf(err))

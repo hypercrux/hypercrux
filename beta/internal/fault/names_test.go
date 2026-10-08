@@ -19,7 +19,7 @@ import (
 )
 
 // TestNames checks the calls on names against what Linux does, as fsys.FS
-// describes it, and that names last through a cut here.
+// describes it, and that synced names last through a cut.
 func TestNames(t *testing.T) {
 	d := fault.New(1)
 	sys := d.FS()
@@ -140,8 +140,8 @@ func TestNames(t *testing.T) {
 	is(sys.Remove("/other"), fs.ErrNotExist)
 	is(sys.Remove("/x"), syscall.EISDIR)
 
-	// Names last through a cut, synced or not, and a file with no name is
-	// gone.
+	// Names last through a cut once their folders are synced, and so do
+	// owners, and a file with no name is gone.
 	h, err := sys.Create("/kept", 0o600)
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +154,8 @@ func TestNames(t *testing.T) {
 	}
 	is(sys.Rename("/x/a", "/x/moved"), nil)
 	is(sys.Remove("/x/b"), nil)
+	is(sys.SyncDir("/x"), nil)
+	is(sys.SyncDir("/"), nil)
 	before, err := sys.List("/x")
 	if err != nil {
 		t.Fatal(err)

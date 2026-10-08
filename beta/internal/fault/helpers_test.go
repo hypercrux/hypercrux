@@ -12,11 +12,26 @@ import (
 	"io/fs"
 	"math/rand/v2"
 	"os"
+	"path"
 	"testing"
 
 	"github.com/hypercrux/hypercrux/beta/internal/fault"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 )
+
+// mustCreate makes a file at name and syncs its folder, so its name lasts
+// every cut from then on, as the names of the engine's files do.
+func mustCreate(t testing.TB, sys fsys.FS, name string, perm fs.FileMode) fsys.File {
+	t.Helper()
+	f, err := sys.Create(name, perm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sys.SyncDir(path.Dir(name)); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
 
 // readAll reads the whole file at name through sys, by its size.
 func readAll(t testing.TB, sys fsys.FS, name string) []byte {

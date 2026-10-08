@@ -36,23 +36,36 @@ func norm(p string) string {
 	return clean(p)
 }
 
-// start begins a call on names, with d.mu held. It counts the call, and
-// returns the error to give instead of making it: when the process is
-// dead, when a rule fails the call, and when a rule cuts the power, which
-// it does first.
-func (p *proc) start(op Op, paths ...string) error {
+// begin begins a call on names, with d.mu held, and says what happens to
+// it, as file.start does for a call on a file. It counts the call. For
+// anything but goAhead it returns the error the call gives, wrapped:
+// ErrCut when the process is dead or a rule cuts the power in the call,
+// or a rule's error.
+func (p *proc) begin(op Op, paths ...string) (verdict, error) {
 	d := p.d
 	if p.boot != d.boot {
-		return wrap(op, ErrCut, paths...)
+		return refuse, wrap(op, ErrCut, paths...)
 	}
-	switch v, err := d.enter(op, paths...); v {
+	v, err := d.enter(op, paths...)
+	switch v {
 	case failIt:
-		return wrap(op, err, paths...)
+		return v, wrap(op, err, paths...)
 	case cutIt:
-		d.cut()
-		return wrap(op, ErrCut, paths...)
+		return v, wrap(op, ErrCut, paths...)
 	}
-	return nil
+	return v, nil
+}
+
+// start begins a call on names that changes none, or a SyncDir, with d.mu
+// held. It counts the call, and returns the error to give instead of
+// making it: when the process is dead, when a rule fails the call, and
+// when a rule cuts the power, which it does first.
+func (p *proc) start(op Op, paths ...string) error {
+	v, err := p.begin(op, paths...)
+	if v == cutIt {
+		p.d.cut()
+	}
+	return err
 }
 
 func (p *proc) Open(name string) (fsys.File, error) {
@@ -72,62 +85,102 @@ func (p *proc) Open(name string) (fsys.File, error) {
 	return &file{d: p.d, boot: p.boot, path: name, n: n}, nil
 }
 
+// Create, Rename, RenameNoReplace and Remove each make their change and put
+// it in the journal, where it stays until a SyncDir puts it on the drive or
+// a cut settles it. When a rule cuts the power in one of them, the cut
+// comes once the change is made, so the change is pending at the cut.
+
 func (p *proc) Create(name string, perm fs.FileMode) (fsys.File, error) {
 	d := p.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	name = norm(name)
-	if err := p.start(Create, name); err != nil {
+	v, err := p.begin(Create, name)
+	if v == refuse || v == failIt || d.early(v) {
 		return nil, err
 	}
+	n, bad := d.create(name, perm)
+	switch {
+	case v == cutIt:
+		d.cut()
+		return nil, err
+	case bad != nil:
+		return nil, wrap(Create, bad, name)
+	}
+	return &file{d: d, boot: p.boot, path: name, n: n}, nil
+}
+
+// create makes a file at name, with d.mu held, or returns the error Linux
+// gives.
+func (d *Disk) create(name string, perm fs.FileMode) (*inode, error) {
 	if d.names[name] != nil {
-		return nil, wrap(Create, syscall.EEXIST, name)
+		return nil, syscall.EEXIST
 	}
 	if err := d.room(name); err != nil {
-		return nil, wrap(Create, err, name)
+		return nil, err
 	}
 	n := d.newInode(false, perm)
 	d.names[name] = n
-	return &file{d: d, boot: p.boot, path: name, n: n}, nil
+	d.note(change{dirs: []string{path.Dir(name)}, names: []entry{{name, n}}})
+	return n, nil
 }
 
 func (p *proc) Rename(from, to string) error { return p.rename(Rename, from, to) }
 
 func (p *proc) RenameNoReplace(from, to string) error { return p.rename(RenameNoReplace, from, to) }
 
-// rename moves a file's name. It moves files only: a folder gives EISDIR,
-// since the engine never renames one.
 func (p *proc) rename(op Op, from, to string) error {
 	d := p.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	from, to = norm(from), norm(to)
-	if err := p.start(op, from, to); err != nil {
+	v, err := p.begin(op, from, to)
+	if v == refuse || v == failIt || d.early(v) {
 		return err
 	}
+	bad := d.move(op, from, to)
+	switch {
+	case v == cutIt:
+		d.cut()
+		return err
+	case bad != nil:
+		return wrap(op, bad, from, to)
+	}
+	return nil
+}
+
+// move moves a file's name from from to to, with d.mu held, or returns the
+// error Linux gives. It moves files only: a folder gives EISDIR, since the
+// engine never renames one. A file already at to loses its name.
+func (d *Disk) move(op Op, from, to string) error {
 	src, err := d.find(from)
 	if err != nil {
-		return wrap(op, err, from, to)
+		return err
 	}
 	dst := d.names[to]
 	switch {
 	case src.dir:
-		return wrap(op, syscall.EISDIR, from, to)
+		return syscall.EISDIR
 	case op == RenameNoReplace && dst != nil:
-		return wrap(op, syscall.EEXIST, from, to)
+		return syscall.EEXIST
 	case dst == src:
 		return nil
 	case dst != nil && dst.dir:
-		return wrap(op, syscall.EISDIR, from, to)
+		return syscall.EISDIR
 	}
 	if err := d.room(to); err != nil {
-		return wrap(op, err, from, to)
+		return err
 	}
 	if dst != nil {
 		dst.nlink = 0
 	}
 	d.names[to] = src
 	delete(d.names, from)
+	dirs := []string{path.Dir(from)}
+	if dir := path.Dir(to); dir != dirs[0] {
+		dirs = append(dirs, dir)
+	}
+	d.note(change{dirs: dirs, names: []entry{{from, nil}, {to, src}}})
 	return nil
 }
 
@@ -136,23 +189,40 @@ func (p *proc) Remove(name string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	name = norm(name)
-	if err := p.start(Remove, name); err != nil {
+	v, err := p.begin(Remove, name)
+	if v == refuse || v == failIt || d.early(v) {
 		return err
 	}
+	bad := d.unlink(name)
+	switch {
+	case v == cutIt:
+		d.cut()
+		return err
+	case bad != nil:
+		return wrap(Remove, bad, name)
+	}
+	return nil
+}
+
+// unlink removes the name name, with d.mu held, or returns the error Linux
+// gives.
+func (d *Disk) unlink(name string) error {
 	n, err := d.find(name)
 	if err == nil && n.dir {
 		err = syscall.EISDIR
 	}
 	if err != nil {
-		return wrap(Remove, err, name)
+		return err
 	}
 	n.nlink = 0
 	delete(d.names, name)
+	d.note(change{dirs: []string{path.Dir(name)}, names: []entry{{name, nil}}})
 	return nil
 }
 
-// SyncDir checks the folder is there. Names always last here, so there's
-// nothing more for it to do until T2.
+// SyncDir puts every change in the folder on the drive, with the changes
+// they lean on, as Disk's comment says. A cut in it comes first, so it
+// puts nothing there.
 func (p *proc) SyncDir(dir string) error {
 	d := p.d
 	d.mu.Lock()
@@ -168,6 +238,7 @@ func (p *proc) SyncDir(dir string) error {
 	if err != nil {
 		return wrap(SyncDir, err, dir)
 	}
+	d.syncDir(dir)
 	return nil
 }
 
@@ -343,6 +414,11 @@ func (f *file) Sync() error {
 		return err
 	}
 	f.n.sync()
+	if plant == "fault/sync-keeps-name" {
+		for _, dir := range d.dirsOf(f.n) {
+			d.syncDir(dir)
+		}
+	}
 	return nil
 }
 
@@ -389,23 +465,32 @@ func (f *file) Stat() (fsys.Info, error) {
 }
 
 // Chown sets the owner and the group, leaving either as it is for -1, as
-// fchown does.
+// fchown does. The change goes in the journal as a change in the folder
+// that holds the file's name, or in none when the file has no name. A cut
+// in it comes once the change is made.
 func (f *file) Chown(uid, gid int) error {
 	d := f.d
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	switch v, err := f.start(Chown); v {
-	case refuse, failIt:
-		return err
-	case cutIt:
-		d.cut()
+	v, err := f.start(Chown)
+	if v == refuse || v == failIt || d.early(v) {
 		return err
 	}
+	n := f.n
 	if uid != -1 {
-		f.n.uid = uid
+		n.uid = uid
 	}
 	if gid != -1 {
-		f.n.gid = gid
+		n.gid = gid
+	}
+	if plant == "fault/chown-lasts" {
+		n.suid, n.sgid = n.uid, n.gid
+	} else {
+		d.note(change{dirs: d.dirsOf(n), owner: n, uid: n.uid, gid: n.gid})
+	}
+	if v == cutIt {
+		d.cut()
+		return err
 	}
 	return nil
 }
