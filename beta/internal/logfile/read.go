@@ -21,7 +21,7 @@ import (
 // before the read, where the read stops. An empty file holds no database
 // yet, and load notes that and reads nothing more.
 func (l *Log) load() (int64, error) {
-	l.empty, l.hdr, l.seq, l.end = false, format.Header{}, 0, 0
+	l.empty, l.hdr, l.seq, l.end, l.retry = false, format.Header{}, 0, 0, 0
 	st, err := l.f.Stat()
 	if err != nil {
 		return 0, err

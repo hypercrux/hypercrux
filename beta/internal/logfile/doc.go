@@ -19,8 +19,11 @@
 // that keeps the database open follows what other processes commit: one
 // stat of the path, then each new batch's head, its marker and the rest,
 // and the check of the end of the log when the writer has gone
-// (follow.go). It reaches the file only through fsys, so the crash tests
-// can put a fault layer under it.
+// (follow.go). The holder of the write lock compacts the database from a
+// snapshot of the copy: the live data goes into NAME.compact, which is
+// synced and renamed over the database, and writers wait while it runs,
+// in this process and in others (compact.go). It reaches the file only
+// through fsys, so the crash tests can put a fault layer under it.
 //
 // Tasks F2 to F9 build it. log.go says where each later task fits in. Like
 // the rest of beta/, it builds only on Linux.

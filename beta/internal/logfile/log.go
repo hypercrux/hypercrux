@@ -32,14 +32,15 @@ import (
 // log for the next check. F6's following of other processes is in
 // follow.go: Follow reads on holding the write lock's mutex, which it never
 // waits for, and without flock, and when it finds the writer gone, it takes
-// flock and checks the end of the log.
+// flock and checks the end of the log. F8's compaction is in compact.go:
+// Compact writes the live data into NAME.compact and renames it over the
+// database, holding the lock, Due says when one is due, a waiter for the
+// lock waits past its deadline while a compaction runs (takeMutex and
+// flock), and the holder of the lock removes a leftover NAME.compact once
+// the inode check has passed (lockFile, and checkLocked).
 //
 //   - F7, the file rules: in Open, before anything else.
-//   - F8, compaction: after a commit, holding the lock, and in flock, which
-//     waits past the deadline while NAME.compact is locked.
-//   - F9, reloading: in reopen, between the reset and the read, and in
-//     lockFile, where a leftover NAME.compact goes once the inode check
-//     has passed.
+//   - F9, reloading: in reopen, between the reset and the read.
 
 // DefaultWait is how long Lock waits for the write lock, as 0.x does.
 const DefaultWait = 10 * time.Second
@@ -85,7 +86,9 @@ type Options struct {
 	// Wait is how long Lock waits for the write lock, the mutex and flock
 	// together, and how long Open and Follow wait for it when they have to
 	// read the file again holding it, to confirm what looks like damage. 0
-	// means DefaultWait. The tests set a shorter one.
+	// means DefaultWait. The tests set a shorter one. A wait goes on past it
+	// while a compaction runs, until Wait after the compaction ends
+	// (compact.go).
 	Wait time.Duration
 
 	// ID, when it isn't all zeros, is the database ID that a database this
@@ -130,6 +133,14 @@ type Log struct {
 	// cost of one stat that there's nothing to read.
 	seen atomic.Pointer[spot]
 
+	// busy is when a wait for the write lock may end at the earliest, in
+	// Unix nanoseconds, since a compaction was under way: Options.Wait after
+	// the mutex's holder last found NAME.compact locked while it waited for
+	// flock, or after this Log's own compaction ended, and the largest value
+	// there is while that runs. A wait for the mutex reads it without the
+	// mutex (until, in compact.go).
+	busy atomic.Int64
+
 	// mu is the mutex in front of flock, the write lock's first half. It's
 	// a channel holding one token at most, so a wait for it can time out.
 	// Its holder owns every field below. Open owns them until it returns.
@@ -151,6 +162,8 @@ type Log struct {
 	tidied bool   // leftover .new- files have been looked for
 	closed bool   // Close has been called
 	batch  []byte // a commit's batch and marker, built in the same buffer each time
+	retry  int64  // after a compaction that failed, the end of the log the next waits for (Due), or 0
+	part   int    // the size of a compacted part's batches, when a test sets it; 0 means partSize
 }
 
 // Open opens the database at path, or creates it when nothing's there, as
@@ -241,25 +254,30 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 // Lock takes the write lock: the mutex inside the process, then flock on
 // the database file, waiting up to Options.Wait for the two together.
 // When the lock doesn't come free in time, it fails with an error that
-// wraps errs.ErrLockTimeout. While it waits for flock, holding the mutex,
-// it reads on between its tries, as Follow would, handing the Target what
-// other processes commit meanwhile, since Follow reads nothing while the
-// mutex is held (follow.go).
+// wraps errs.ErrLockTimeout. While a compaction runs, in this process or
+// another, the wait goes on past that, until Options.Wait after the
+// compaction ends (compact.go). While it waits for flock, holding the
+// mutex, it reads on between its tries, as Follow would, handing the Target
+// what other processes commit meanwhile, since Follow reads nothing while
+// the mutex is held (follow.go).
 //
 // Holding both, it checks by device and inode number that the file it
 // locked is still the one at the path. When another file has taken the
 // path, a compaction's or a backup moved into place, Lock lets go of the
 // old file, calls the Target's Reset, reads the new file from its start,
 // and takes the lock there instead: the commit starts again on the new
-// file. An empty file at the path becomes a database now, as FORMAT.md's
-// "Creating a database" says. Then Lock checks that what this Log has read
-// is still in the file, as FORMAT.md's "Writing" asks, reads on to the end
-// of the log, handing each new marked batch to the Target, and checks the
-// end of the log, as Open does when it gets the lock: it looks past the end
-// of the log for damage, then a batch a writer left without its marker when
-// it died is written again, synced, marked and handed to the Target, before
-// the caller's transaction runs, and what a crash left half written is cut
-// off. The first Lock of each Log also removes leftover .new- files.
+// file. Once the file it locked is the one at the path, it removes a
+// leftover NAME.compact, which a compaction left when its process died,
+// unless it's locked. An empty file at the path becomes a database now, as
+// FORMAT.md's "Creating a database" says. Then Lock checks that what this
+// Log has read is still in the file, as FORMAT.md's "Writing" asks, reads
+// on to the end of the log, handing each new marked batch to the Target,
+// and checks the end of the log, as Open does when it gets the lock: it
+// looks past the end of the log for damage, then a batch a writer left
+// without its marker when it died is written again, synced, marked and
+// handed to the Target, before the caller's transaction runs, and what a
+// crash left half written is cut off. The first Lock of each Log also
+// removes leftover .new- files.
 //
 // Damage the check finds is a *errs.Damage, and nothing is changed. When a
 // write, a sync or a cut fails in the check, Lock fails, and the end of the
@@ -271,8 +289,9 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 // caller holds nothing, and a later Lock tries again, unless the error
 // wraps errs.ErrStuck: then this Log keeps the lock until Close, and every
 // Lock gives the same error at once. That happens when a commit failed and
-// couldn't be cut back out of the file (failed), and when an empty file was
-// made a database and the folder's sync failed after the rename (adopt).
+// couldn't be cut back out of the file (failed), when an empty file was made
+// a database and the folder's sync failed after the rename (adopt), and when
+// the folder's sync failed after a compaction's rename (Compact).
 func (l *Log) Lock() error {
 	deadline := time.Now().Add(l.wait)
 	if err := l.takeMutex(deadline); err != nil {
@@ -304,7 +323,9 @@ func (l *Log) letGo() {
 	<-l.mu
 }
 
-// takeMutex waits for the mutex until deadline at most.
+// takeMutex waits for the mutex until deadline, or for longer while the
+// mutex's holder compacts, or waits for flock while another process
+// compacts, until Options.Wait after the compaction ends (until).
 func (l *Log) takeMutex(deadline time.Time) error {
 	select {
 	case l.mu <- struct{}{}:
@@ -313,11 +334,17 @@ func (l *Log) takeMutex(deadline time.Time) error {
 	}
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
-	select {
-	case l.mu <- struct{}{}:
-		return nil
-	case <-timer.C:
-		return l.timeout()
+	for {
+		select {
+		case l.mu <- struct{}{}:
+			return nil
+		case <-timer.C:
+		}
+		left := time.Until(l.until(deadline))
+		if left <= 0 {
+			return l.timeout()
+		}
+		timer.Reset(min(left, l.wait)) // while a compaction runs here, looks again after each wait
 	}
 }
 
@@ -335,6 +362,9 @@ func (l *Log) lockFile(deadline time.Time) error {
 		if err := l.flock(deadline, l.waiting()); err != nil {
 			return err
 		}
+		if plant == "logfile/compact-leftover-before-inode-check" {
+			l.removeCompact()
+		}
 		info, same, err := l.atPath()
 		if err != nil {
 			l.f.Unlock()
@@ -348,8 +378,12 @@ func (l *Log) lockFile(deadline time.Time) error {
 			l.f = nil
 			continue
 		}
-		// F9 goes here: now that the file locked is the one at the path,
-		// a leftover NAME.compact is removed.
+		// Now that the file locked is the one at the path, nobody else holds
+		// the write lock, so a NAME.compact that isn't locked is a leftover
+		// (compact.go).
+		if plant != "logfile/compact-leftover-before-inode-check" {
+			l.removeCompact()
+		}
 		if l.empty {
 			if err := l.fill(info); err != nil {
 				return err
@@ -381,7 +415,12 @@ func (l *Log) lockFile(deadline time.Time) error {
 
 // flock takes flock on l.f, trying again after a pause until deadline.
 // After each pause, before it tries again, it calls between, when that
-// isn't nil.
+// isn't nil. A compaction under way holds the lock for as long as it takes
+// to write and sync the live data, so each time flock finds the lock held,
+// it looks for one, and while NAME.compact is locked, the wait goes on past
+// deadline, until Options.Wait after it was last found locked (until). That
+// covers the moments after the compaction's rename too, while the folder is
+// synced and the locks let go.
 func (l *Log) flock(deadline time.Time, between func()) error {
 	pause := time.Millisecond
 	for {
@@ -392,9 +431,10 @@ func (l *Log) flock(deadline time.Time, between func()) error {
 		if ok {
 			return nil
 		}
-		// F8 goes here: a writer that finds NAME.compact locked waits past
-		// the deadline, until the compaction ends.
-		left := time.Until(deadline)
+		if l.compacting() {
+			l.hold(time.Now().Add(l.wait))
+		}
+		left := time.Until(l.until(deadline))
 		if left <= 0 || plant == "logfile/one-try" {
 			return l.timeout()
 		}
@@ -517,9 +557,9 @@ func (l *Log) Append(changes []format.Change) error {
 	l.seq = seq
 	l.end = at + int64(len(b))
 	copy(l.last[:], marker)
-	// F8 goes here, or in the public package after Append: when the file
-	// holds about twice the live data, a compaction, still holding the
-	// lock.
+	// When Due says so after the commit, the public package compacts, still
+	// holding the lock, from a read of the copy once the copy's transaction
+	// has ended (compact.go).
 	return nil
 }
 

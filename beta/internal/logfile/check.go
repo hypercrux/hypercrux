@@ -57,7 +57,8 @@ import (
 // cheap test (followOn). Nor does tryCheck check anything when the file is
 // empty, since the first Lock makes a database of it, or when nothing is at
 // the path, since the next Lock reads what's there. When another file has
-// taken the path, its error wraps ErrReplaced.
+// taken the path, its error wraps ErrReplaced. Holding the lock, it removes
+// a leftover NAME.compact too, as Lock does (checkLocked).
 func (l *Log) tryCheck() (bool, error) {
 	if l.empty {
 		return false, nil
@@ -75,7 +76,8 @@ func (l *Log) tryCheck() (bool, error) {
 
 // checkLocked is the work of tryCheck and confirm once flock is held. When
 // another file has taken the path, what was read is no longer the
-// database, and its error wraps ErrReplaced.
+// database, and its error wraps ErrReplaced. Once the file locked is the one
+// at the path, a leftover NAME.compact goes, as in Lock (compact.go).
 func (l *Log) checkLocked() error {
 	info, same, err := l.atPath()
 	switch {
@@ -86,6 +88,7 @@ func (l *Log) checkLocked() error {
 	case !same:
 		return l.replaced()
 	}
+	l.removeCompact()
 	if err := l.checkRead(info); err != nil {
 		return err
 	}

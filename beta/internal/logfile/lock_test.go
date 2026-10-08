@@ -54,6 +54,10 @@ var (
 //     stuck. It prints "stuck" once Lock refuses too, then waits for a line
 //     on its standard input, closes the Log, prints "closed", and keeps
 //     running until its standard input closes.
+//   - wait: opens the database with the wait HYPERCRUX_LOGFILE_WAIT, prints
+//     "ready", and waits for a line on its standard input. Then it commits
+//     a batch creating the table "waited", and prints "committed after"
+//     and how long Lock took, or "failed after" that and the error.
 func helper(role, path string) int {
 	fail := func(err error) int {
 		fmt.Fprintln(os.Stderr, "helper:", role+":", err)
@@ -143,6 +147,34 @@ func helper(role, path string) int {
 		}
 		fmt.Println("closed")
 		io.Copy(io.Discard, in)
+	case "wait":
+		wait, err := time.ParseDuration(os.Getenv("HYPERCRUX_LOGFILE_WAIT"))
+		if err != nil {
+			return fail(err)
+		}
+		l, err := Open(fsys.OS{}, path, &recorder{}, Options{Wait: wait})
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Println("ready")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+		began := time.Now()
+		err = l.Lock()
+		took := time.Since(began).Round(time.Millisecond)
+		if err == nil {
+			err = l.Append(table("waited"))
+			if e := l.Unlock(); err == nil {
+				err = e
+			}
+		}
+		if err != nil {
+			fmt.Printf("failed after %v: %v\n", took, err)
+		} else {
+			fmt.Printf("committed after %v\n", took)
+		}
+		if err := l.Close(); err != nil {
+			return fail(err)
+		}
 	default:
 		return fail(errors.New("no such role"))
 	}

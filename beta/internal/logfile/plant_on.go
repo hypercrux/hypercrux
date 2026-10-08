@@ -113,6 +113,35 @@ import (
 //   - logfile/lock-waits-blind: a Lock that waits for flock reads nothing
 //     meanwhile, so while it waits, the reads in its process, which find
 //     the mutex held, miss every commit other processes make.
+//
+// F8's, in compaction:
+//
+//   - logfile/compact-rename-before-sync: the compacted file is renamed over
+//     the database and the folder synced before the file is, so a power cut
+//     can leave at the path a file whose bytes never reached the drive.
+//   - logfile/compact-no-folder-sync: the folder isn't synced after the
+//     rename, so a power cut can take the rename back, and with it every
+//     commit made to the compacted file since.
+//   - logfile/compact-folder-sync-ignored: a failed folder sync after the
+//     rename is taken for a good one, so the Log goes on committing to a
+//     file a power cut can still take away, and lets other writers do so.
+//   - logfile/compact-lets-go-early: the old file's lock goes once the
+//     compacted file is written, before its sync and the rename, so a
+//     writer waiting for it commits to the old file, and the rename then
+//     replaces that commit.
+//   - logfile/compact-wait-ignored: a writer waiting for the lock gives up at
+//     its usual deadline while a compaction runs.
+//   - logfile/compact-left-behind: a compaction that fails before the switch
+//     leaves NAME.compact beside the database.
+//   - logfile/compact-one-batch: the compacted part goes in one batch, the
+//     links with the records, however large it is, so a large database
+//     takes a batch as large as itself in memory.
+//   - logfile/compact-locked-removed: the holder of the write lock removes a
+//     NAME.compact that's locked, so a compaction under way loses its file.
+//   - logfile/compact-leftover-before-inode-check: Lock removes a leftover
+//     NAME.compact before it checks that the file it locked is the one at
+//     the path, so a writer holding the lock of a file that another has
+//     replaced can remove the file of a compaction under way.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -121,7 +150,10 @@ var plant = func() string {
 		"logfile/failed-left-uncut", "logfile/cut-unsynced", "logfile/cut-without-marker", "logfile/stuck-lets-go", "logfile/check-cuts-what-failed",
 		"logfile/follow-before-marker", "logfile/follow-keeps-unmarked", "logfile/follow-without-mutex", "logfile/follow-never-tries",
 		"logfile/follow-shrink-unseen", "logfile/follow-path-unchecked", "logfile/follow-no-confirm", "logfile/follow-read-once",
-		"logfile/follow-stuck-checks", "logfile/lock-waits-blind":
+		"logfile/follow-stuck-checks", "logfile/lock-waits-blind",
+		"logfile/compact-rename-before-sync", "logfile/compact-no-folder-sync", "logfile/compact-folder-sync-ignored",
+		"logfile/compact-lets-go-early", "logfile/compact-wait-ignored", "logfile/compact-left-behind", "logfile/compact-one-batch",
+		"logfile/compact-locked-removed", "logfile/compact-leftover-before-inode-check":
 		return p
 	}
 	return ""

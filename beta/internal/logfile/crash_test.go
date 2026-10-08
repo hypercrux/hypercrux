@@ -18,6 +18,7 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/fault"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
+	"github.com/hypercrux/hypercrux/beta/internal/store"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
@@ -424,5 +425,234 @@ func TestACrashPointReplays(t *testing.T) {
 	}
 	if differ == 0 {
 		t.Error("with random IDs, every pair of runs left the same file")
+	}
+}
+
+// The compaction's crash tests (F8). Setup makes commits on a new database
+// with compactOps, through the copy, as the public package makes them, so
+// the file holds dead data. Run opens the database, makes the commit that
+// sets the compaction off, and compacts under the same lock from a read of
+// the copy, as the public package will once Due says so. Then it makes more
+// commits, which go into the compacted file. The compacted part's batches
+// are small, so it takes several, and the points fall in each of its writes.
+// A state is the copy's snapshot as text (dump), which is the same however a
+// file holds the live data.
+
+// noModel is the model for a run outside the driver, which tells nobody.
+type noModel struct{}
+
+func (noModel) Begin(string) {}
+func (noModel) Done()        {}
+
+// compactWorkload makes setup commits in Setup, and in Run the commit that
+// sets the compaction off, the compaction when compact is set, and after
+// commits more. With leftover set, Setup leaves a NAME.compact beside the
+// database too, as a compaction leaves one when a crash cuts it short: part
+// of a file, synced, with its name, so no cut can take it.
+func compactWorkload(setup, after int, compact, leftover bool) crash.Workload {
+	return crash.Workload{
+		Path: crashPath,
+		Setup: func(sys fsys.FS) (string, error) {
+			d, err := openDB(sys, crashPath, crashOptions)
+			if err != nil {
+				return "", err
+			}
+			defer d.l.Close()
+			for i := 1; i <= setup; i++ {
+				if err := d.commit(func(tx *store.Tx) error { return compactOps(tx, i) }); err != nil {
+					return "", err
+				}
+			}
+			if leftover {
+				f, err := sys.Create(crashPath+".compact", 0o644)
+				if err != nil {
+					return "", err
+				}
+				defer f.Close()
+				if _, err := f.WriteAt(bytes.Repeat([]byte("left"), 300), format.HeaderSize); err != nil {
+					return "", err
+				}
+				if err := f.Sync(); err != nil {
+					return "", err
+				}
+				if err := sys.SyncDir("/db"); err != nil {
+					return "", err
+				}
+			}
+			return d.state(), nil
+		},
+		Run: func(sys fsys.FS, cm *crash.Model) error {
+			var m model = noModel{}
+			if cm != nil {
+				m = cm
+			}
+			d, err := openDB(sys, crashPath, crashOptions)
+			if err != nil {
+				d, err = openDB(sys, crashPath, crashOptions) // a failure in Open's check leaves the end of the log for the next
+			}
+			if err != nil {
+				return err
+			}
+			defer d.l.Close()
+			d.l.part = 200
+			for i := setup + 1; i <= setup+1+after; i++ {
+				d.crashCommit(m, i, compact && i == setup+1)
+			}
+			return nil
+		},
+		Reopen: compactReopen,
+	}
+}
+
+// crashCommit makes commit i on d, telling m about it, and then, when
+// compact is set, a compaction, holding the lock still. It carries on after
+// a commit or a compaction that fails, as a program carries on after an
+// Update that returned an error. The commit's state is the copy's with its
+// changes made. A commit that fails takes its changes back out of the copy
+// (Commit), and is cut back out of the file, or leaves the Log stuck, so the
+// next commit's state is built without it.
+func (d *db) crashCommit(m model, i int, compact bool) {
+	if err := d.l.Lock(); err != nil {
+		return // nothing was written: a call failed, or the Log is stuck
+	}
+	defer d.l.Unlock()
+	tx, err := d.c.s.Begin()
+	if err != nil {
+		return
+	}
+	defer tx.Rollback()
+	if err := compactOps(tx, i); err != nil {
+		return
+	}
+	m.Begin(dump(tx))
+	if err := tx.Commit(d.l.Append); err != nil {
+		return
+	}
+	m.Done()
+	if compact {
+		d.compactLocked() // the commit before it has succeeded, whatever this does
+	}
+}
+
+// compactReopen opens the database at crashPath as a process started after
+// a crash would, and returns its state. Open's check of the end of the log
+// holds the write lock, once it has checked that the file it locked is the
+// one at the path, so a NAME.compact that a crash left is gone by the time
+// Open returns, and it's a failure if it isn't.
+func compactReopen(sys fsys.FS) (string, error) {
+	d, err := openDB(sys, crashPath, crashOptions)
+	if err != nil {
+		return "", err
+	}
+	state := d.state()
+	if err := d.l.Close(); err != nil {
+		return "", err
+	}
+	if _, err := sys.Stat(crashPath + ".compact"); !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("NAME.compact is still beside the database once it's open (%v)", err)
+	}
+	return state, nil
+}
+
+// runCounted runs w once with nothing done to it, on a new disk, and returns
+// how many calls its Run makes, of every kind and of the kinds T3's driver
+// cuts in by default, and the generation of the file it leaves.
+func runCounted(t *testing.T, w crash.Workload) (calls, cuts int, gen uint64) {
+	t.Helper()
+	disk := fault.New(0)
+	if err := disk.Mkdir("/db"); err != nil {
+		t.Fatal(err)
+	}
+	sys := disk.FS()
+	if _, err := w.Setup(sys); err != nil {
+		t.Fatal(err)
+	}
+	cutIn := []fault.Op{fault.WriteAt, fault.Truncate, fault.Create, fault.Rename, fault.RenameNoReplace, fault.Remove, fault.SyncDir}
+	count := func() (int, int) {
+		n := 0
+		for _, op := range cutIn {
+			n += disk.Calls(op, "")
+		}
+		return disk.Calls(fault.Any, ""), n
+	}
+	a, c := count()
+	if err := w.Run(sys, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, e := count()
+	f, err := sys.Open(crashPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	head := make([]byte, format.HeaderSize)
+	if _, err := f.ReadAt(head, 0); err != nil {
+		t.Fatal(err)
+	}
+	h, err := format.DecodeHeader(head, 1<<30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b - a, e - c, h.Gen
+}
+
+// TestCompactionPassesEveryPoint is F8's closing test: T3's driver on a
+// compaction, with a cut at every write, in every call that changes names
+// and after the last call, a failure at every call, once and on a disk that
+// dies, and copies taken from every call on, as cp would take them, whole or
+// 100 bytes at a time. After each, the database opens at the last commit
+// that succeeded or one begun after it, with no NAME.compact beside it, and
+// after a power cut it opens there or later. The compaction itself changes
+// no state, so whatever happens to it, the database holds the commit before
+// it, or a commit after it once the switch has lasted. A failed compaction
+// leaves the Log on the old file, and the commits after it go there; a
+// failed folder sync after the rename leaves it stuck, and the commits after
+// it fail. The cuts and the failures come again with a NAME.compact that a
+// crash left, which the workload's Open removes before the compaction makes
+// its own.
+func TestCompactionPassesEveryPoint(t *testing.T) {
+	t.Parallel()
+	setup, after := 12, 2
+	cuts, fails, copies := 128, 24, 4
+	if testing.Short() {
+		cuts, fails, copies = 8, 4, 1
+	}
+	w := compactWorkload(setup, after, true, false)
+	left := compactWorkload(setup, after, true, true)
+	calls, cutCalls, gen := runCounted(t, w)
+	plain, plainCuts, plainGen := runCounted(t, compactWorkload(setup, after, false, false))
+	if gen != 2 || plainGen != 1 {
+		t.Fatalf("the workload leaves a file of generation %d, and %d without its compaction", gen, plainGen)
+	}
+	t.Logf("a run makes %d calls, %d of them the compaction's; %d calls a cut comes in, %d of them the compaction's", calls, calls-plain, cutCalls, cutCalls-plainCuts)
+	for i, c := range []struct {
+		name string
+		w    crash.Workload
+		o    crash.Options
+	}{
+		{"a cut at every write", w, crash.Options{Kinds: crash.Cuts, Seeds: cuts}},
+		{"a failure at every call", w, crash.Options{Kinds: crash.Failures, Seeds: fails}},
+		{"a failure at every call on a disk that dies", w, crash.Options{Kinds: crash.Failures, Seeds: fails, Times: -1}},
+		{"copies", w, crash.Options{Kinds: crash.Copies, Seeds: copies}},
+		{"copies read 100 bytes at a time", w, crash.Options{Kinds: crash.Copies, Seeds: copies, Chunk: 100}},
+		{"a leftover, and a cut at every write", left, crash.Options{Kinds: crash.Cuts, Seeds: cuts / 4}},
+		{"a leftover, and a failure at every call", left, crash.Options{Kinds: crash.Failures, Seeds: fails / 4}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.o.Seed = uint64(1000 * i)
+			rep, err := crash.Run(c.w, c.o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Log(rep)
+			switch {
+			case rep.Last == 0:
+				t.Error("no open found the last commit that succeeded")
+			case c.o.Kinds == crash.Failures && c.o.Times == 0 && rep.Later != 0:
+				t.Errorf("%d opens found a commit begun after the last that succeeded, where every failed commit is cut back out of the file", rep.Later)
+			case c.o.Kinds == crash.Cuts && rep.Later == 0:
+				t.Error("no open found a commit begun after the last that succeeded")
+			}
+		})
 	}
 }

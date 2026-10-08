@@ -103,3 +103,12 @@ query/aggregate-in-where ./beta/internal/query
 query/record-key-takes-or ./beta/internal/query
 query/is-not-printed-bare ./beta/internal/query
 query/slash-star-comment ./beta/internal/query
+logfile/compact-rename-before-sync ./beta/internal/logfile
+logfile/compact-no-folder-sync ./beta/internal/logfile
+logfile/compact-folder-sync-ignored ./beta/internal/logfile
+logfile/compact-lets-go-early ./beta/internal/logfile
+logfile/compact-wait-ignored ./beta/internal/logfile
+logfile/compact-left-behind ./beta/internal/logfile
+logfile/compact-one-batch ./beta/internal/logfile
+logfile/compact-locked-removed ./beta/internal/logfile
+logfile/compact-leftover-before-inode-check ./beta/internal/logfile
