@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
+	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
 // Vector is a record's vector, such as an embedding of its text. It's the
@@ -82,7 +83,7 @@ type Hit struct {
 }
 
 // MaxK is the most results Nearest returns.
-const MaxK = 10000
+const MaxK = store.MaxK
 
 // Nearest returns the k records in table whose vectors are closest to q,
 // closest first, by cosine distance, with ties in key order. The search is
@@ -92,19 +93,54 @@ const MaxK = 10000
 // no vectors yet gives no hits, and one that doesn't exist gives
 // ErrNotFound.
 func (db *DB) Nearest(table string, q Vector, k int, where string, args ...any) ([]Hit, error) {
-	return nil, notYet("DB.Nearest", nearestTask(where))
+	if filtered(where) {
+		return nil, notYet("DB.Nearest", "G4")
+	}
+	var hits []Hit
+	err := db.read(func(r store.Reader) error {
+		var err error
+		hits, err = nearest(r, table, q, k)
+		return err
+	})
+	return hits, err
 }
 
 // Nearest is DB.Nearest inside the transaction.
 func (t *Tx) Nearest(table string, q Vector, k int, where string, args ...any) ([]Hit, error) {
-	return nil, notYet("Tx.Nearest", nearestTask(where))
+	if filtered(where) {
+		return nil, notYet("Tx.Nearest", "G4")
+	}
+	stx, err := t.open()
+	if err != nil {
+		return nil, err
+	}
+	return nearest(stx, table, q, k)
 }
 
-// nearestTask names the task that makes a search work: G2 for one without a
-// filter, and G4, which brings SQL, for one with a filter.
-func nearestTask(where string) string {
-	if strings.TrimSpace(where) != "" {
-		return "G4"
+// filtered reports whether where is a filter, as 0.x reads it: anything but
+// spaces. A search with one waits for task G4, which brings SQL. A search
+// without one doesn't use its args. 0.x hands them to database/sql all the
+// same, which refuses one of a type it can't convert, such as a channel.
+func filtered(where string) bool {
+	return strings.TrimSpace(where) != "" && plant != "hypercrux/filter-ignored"
+}
+
+// nearest searches r without a filter, as 0.x's Nearest does: the checks,
+// the errors and the hits are the store's, which are 0.x's. A table with no
+// vector size gives nil, and a search that finds nothing in a table with
+// one gives an empty list, as in 0.x. The hits come in a list of their own,
+// and their keys are the records' own strings, which never change.
+func nearest(r store.Reader, table string, q Vector, k int) ([]Hit, error) {
+	found, err := r.Nearest(table, []float32(q), k, nil)
+	if err != nil || found == nil {
+		return nil, err
 	}
-	return "G2"
+	if len(found) == 0 && plant == "hypercrux/nearest-nil-for-none" {
+		return nil, nil
+	}
+	hits := make([]Hit, len(found))
+	for i, h := range found {
+		hits[i] = Hit(h)
+	}
+	return hits, nil
 }

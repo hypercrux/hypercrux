@@ -190,11 +190,12 @@ func (t *Tx) open() (*store.Tx, error) {
 // caught that way: a write waits for the write lock and fails once the
 // wait is over, and a read after fn's first change, or Close, hangs.
 //
-// An error from the commit itself means its outcome is unknown. The
-// database in memory goes back to how it was before fn, but a power cut
-// could still leave the commit in the file. If the file can't be put back,
-// every later write through db fails with an error that wraps ErrStuck,
-// until db is closed.
+// When the commit itself fails, the database in memory goes back to how it
+// was before fn, and the commit is cut back out of the file for good. If
+// the file can't be put back, the error wraps ErrStuck and the commit's
+// outcome is unknown, and every later write through db fails with an error
+// that wraps ErrStuck until db is closed, while other handles and processes
+// wait for the write lock.
 func (db *DB) Update(fn func(tx *Tx) error) (err error) {
 	s, err := db.current()
 	if err != nil {

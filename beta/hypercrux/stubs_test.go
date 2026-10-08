@@ -30,20 +30,6 @@ func TestTheStubsSayWhatsMissing(t *testing.T) {
 		name, task string
 		err        error
 	}{
-		{"DB.Scan", "G2", errOf(db.Scan("docs:", "", 0))},
-		{"Tx.Scan", "G2", errOf(tx.Scan("docs:", "", 0))},
-		{"DB.Drop", "G2", db.Drop("docs")},
-		{"Tx.Drop", "G2", tx.Drop("docs")},
-		{"DB.Link", "G2", db.Link("docs:1", "cites", "docs:2")},
-		{"Tx.Link", "G2", tx.Link("docs:1", "cites", "docs:2")},
-		{"DB.Unlink", "G2", db.Unlink("docs:1", "", "docs:2")},
-		{"Tx.Unlink", "G2", tx.Unlink("docs:1", "", "docs:2")},
-		{"DB.Neighbours", "G2", errOf(db.Neighbours("docs:1", hc.Both, ""))},
-		{"Tx.Neighbours", "G2", errOf(tx.Neighbours("docs:1", hc.Both, ""))},
-		{"DB.Walk", "G2", errOf(db.Walk("docs:1", hc.Out, "", 2))},
-		{"Tx.Walk", "G2", errOf(tx.Walk("docs:1", hc.Out, "", 2))},
-		{"DB.Nearest", "G2", errOf(db.Nearest("docs", q, 10, ""))},
-		{"Tx.Nearest", "G2", errOf(tx.Nearest("docs", q, 10, " "))},
 		{"DB.Nearest", "G4", errOf(db.Nearest("docs", q, 10, "status = ?", "open"))},
 		{"Tx.Nearest", "G4", errOf(tx.Nearest("docs", q, 10, "status = ?", "open"))},
 		{"DB.Exec", "G4", errOf(db.Exec("DELETE FROM docs"))},

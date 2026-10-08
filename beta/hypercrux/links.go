@@ -5,7 +5,11 @@
 
 package hypercrux
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/hypercrux/hypercrux/beta/internal/store"
+)
 
 // Link is a typed, one-way connection between two records.
 type Link struct {
@@ -54,22 +58,38 @@ func ParseDirection(s string) (Direction, error) {
 }
 
 // MaxDepth is the furthest Walk goes.
-const MaxDepth = 32
+const MaxDepth = store.MaxDepth
 
 // Link connects from to to with a link of the given type, such as "owns" or
 // "cites". Both records must exist. Adding a link that's already there
 // does nothing.
-func (db *DB) Link(from, typ, to string) error { return notYet("DB.Link", "G2") }
+func (db *DB) Link(from, typ, to string) error {
+	return db.Update(func(tx *Tx) error { return tx.Link(from, typ, to) })
+}
 
 // Link is DB.Link inside the transaction.
-func (t *Tx) Link(from, typ, to string) error { return notYet("Tx.Link", "G2") }
+func (t *Tx) Link(from, typ, to string) error {
+	stx, err := t.open()
+	if err != nil {
+		return err
+	}
+	return stx.Link(from, typ, to)
+}
 
 // Unlink removes the link of the given type from from to to, or every link
 // from from to to when typ is "". It returns ErrNotFound if there was none.
-func (db *DB) Unlink(from, typ, to string) error { return notYet("DB.Unlink", "G2") }
+func (db *DB) Unlink(from, typ, to string) error {
+	return db.Update(func(tx *Tx) error { return tx.Unlink(from, typ, to) })
+}
 
 // Unlink is DB.Unlink inside the transaction.
-func (t *Tx) Unlink(from, typ, to string) error { return notYet("Tx.Unlink", "G2") }
+func (t *Tx) Unlink(from, typ, to string) error {
+	stx, err := t.open()
+	if err != nil {
+		return err
+	}
+	return stx.Unlink(from, typ, to)
+}
 
 // Neighbours returns the links of the record with this key in the direction
 // dir, of the type typ, or of every type when typ is "". They're sorted by
@@ -77,12 +97,44 @@ func (t *Tx) Unlink(from, typ, to string) error { return notYet("Tx.Unlink", "G2
 // the key each link is from, then the key it's to. It returns ErrNotFound if
 // there's no such record.
 func (db *DB) Neighbours(key string, dir Direction, typ string) ([]Link, error) {
-	return nil, notYet("DB.Neighbours", "G2")
+	if plant == "hypercrux/neighbours-unlocked" {
+		s, err := db.current()
+		if err != nil {
+			return nil, err
+		}
+		return neighbours(s, key, dir, typ)
+	}
+	var links []Link
+	err := db.read(func(r store.Reader) error {
+		var err error
+		links, err = neighbours(r, key, dir, typ)
+		return err
+	})
+	return links, err
 }
 
 // Neighbours is DB.Neighbours inside the transaction.
 func (t *Tx) Neighbours(key string, dir Direction, typ string) ([]Link, error) {
-	return nil, notYet("Tx.Neighbours", "G2")
+	stx, err := t.open()
+	if err != nil {
+		return nil, err
+	}
+	return neighbours(stx, key, dir, typ)
+}
+
+// neighbours reads a record's links from r, as 0.x's Neighbours gives them,
+// and nil when there are none. The checks, the errors and the order are the
+// store's, which are 0.x's, and the links come in a list of their own.
+func neighbours(r store.Reader, key string, dir Direction, typ string) ([]Link, error) {
+	found, err := r.Neighbours(key, store.Direction(dir), typ)
+	if err != nil || found == nil {
+		return nil, err
+	}
+	links := make([]Link, len(found))
+	for i, l := range found {
+		links[i] = Link(l)
+	}
+	return links, nil
 }
 
 // Step is one record Walk reached, and how many links it took to get there.
@@ -97,10 +149,35 @@ type Step struct {
 // links of every type. depth runs from 1 to MaxDepth. It returns
 // ErrNotFound if there's no such record.
 func (db *DB) Walk(key string, dir Direction, typ string, depth int) ([]Step, error) {
-	return nil, notYet("DB.Walk", "G2")
+	var steps []Step
+	err := db.read(func(r store.Reader) error {
+		var err error
+		steps, err = walk(r, key, dir, typ, depth)
+		return err
+	})
+	return steps, err
 }
 
 // Walk is DB.Walk inside the transaction.
 func (t *Tx) Walk(key string, dir Direction, typ string, depth int) ([]Step, error) {
-	return nil, notYet("Tx.Walk", "G2")
+	stx, err := t.open()
+	if err != nil {
+		return nil, err
+	}
+	return walk(stx, key, dir, typ, depth)
+}
+
+// walk follows links from a record in r, as 0.x's Walk does, and gives nil
+// when it reaches nothing. The checks, the errors and the order are the
+// store's, which are 0.x's, and the steps come in a list of their own.
+func walk(r store.Reader, key string, dir Direction, typ string, depth int) ([]Step, error) {
+	found, err := r.Walk(key, store.Direction(dir), typ, depth)
+	if err != nil || found == nil {
+		return nil, err
+	}
+	steps := make([]Step, len(found))
+	for i, s := range found {
+		steps[i] = Step(s)
+	}
+	return steps, nil
 }

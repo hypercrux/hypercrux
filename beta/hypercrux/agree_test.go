@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"path/filepath"
@@ -21,32 +22,130 @@ import (
 	hc "github.com/hypercrux/hypercrux/beta/hypercrux"
 )
 
-// TestTheBetaAgrees0x runs the same random puts, gets, deletes and Updates
-// on 0.x and on the Beta, through their Go APIs, and now and then closes
-// the Beta and opens its file again. Every call must give the same answer
-// on both: the same error, with the same message and of the same kind, or
-// the same fields, with every number's bits. After each reopen, and at the
-// end, every key the workload can name must read the same on both, and
-// Check must give the same counts. Only the message for one field in two
-// spellings may differ, since 0.x reports whichever of the two its map
-// gave first.
+// TestTheBetaAgrees0x runs the same random calls on 0.x and on the Beta,
+// through their Go APIs, and now and then closes the Beta and opens its
+// file again. The calls are every one the Beta has: puts, gets, deletes,
+// scans, links, unlinks, reads of links, walks, searches without a filter
+// and drops, on their own and inside Updates. Every call must give the same
+// answer on both: the same error, with the same message and of the same
+// kind, or the same results, with every number's bits, and nil where 0.x
+// gives nil. A search's distances must agree within
+// conformance.DistanceBound, and its keys come in the same order but where
+// two distances fall within it, since 0.x adds in another order. After each
+// reopen, and at the end, everything the workload can name must read the
+// same on both: every key, with its links both ways and a walk from it,
+// every table's scan, a search of every table, and Check's counts.
+//
+// Two things may differ. The message for one field in two spellings, since
+// 0.x reports whichever of the two its map gave first. And the case of a
+// field's name, in a table where a Put that failed inside an Update that
+// went on left new fields in 0.x, spelt its way, and nothing in the Beta,
+// as TestAFailedPutLeavesNoField pins: the workload notes such a Put from
+// 0.x's error, and compares that table's field names regardless of case
+// until the table is dropped.
 //
 // An Update holds one to five calls through its transaction, and commits,
 // returns an error or panics. A call in it that fails doesn't end it, as
 // with 0.x. 0.x is the judge throughout: of the rules and their order of
 // errors, of the conversions from Go values, and of what a reopen must
 // read back.
+//
+// The counts at the end, over every seed, show that each call came up with
+// each of its answers, and that the reads reached something: scans that
+// found records, walks that went two links, and searches with hits.
 func TestTheBetaAgrees0x(t *testing.T) {
-	steps := 1500
+	steps, seeds := 5000, 3
 	if testing.Short() {
-		steps = 300
+		steps, seeds = 1000, 2
 	}
-	for seed := uint64(1); seed <= 2; seed++ {
-		t.Run(fmt.Sprint("seed ", seed), func(t *testing.T) { agree0x(t, seed, steps) })
+	outcomes, seen := map[string]int{}, map[string]int{}
+	for seed := 1; seed <= seeds; seed++ {
+		t.Run(fmt.Sprint("seed ", seed), func(t *testing.T) { agree0x(t, uint64(seed), steps, outcomes, seen) })
+	}
+	if t.Failed() {
+		return
+	}
+	all := steps * seeds
+	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "delete ok",
+		"delete not found", "scan ok", "scan invalid", "link ok", "link invalid", "link not found", "unlink ok",
+		"unlink not found", "neighbours ok", "neighbours invalid", "neighbours not found", "walk ok", "walk invalid",
+		"walk not found", "nearest ok", "nearest invalid", "nearest not found", "drop ok", "drop invalid",
+		"drop not found", "update ok", "update error", "reopen ok"} {
+		if outcomes[o] < all/1000 {
+			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], all, outcomes)
+		}
+	}
+	for o, least := range map[string]int{"scans that found records": all / 30, "walks that went two links": all / 300,
+		"walks after a reopen that went two links": all / 50, "searches with hits": all / 50,
+		"searches of an emptied table": 1} {
+		if seen[o] < least {
+			t.Errorf("%q came up %d times in %d steps: %v", o, seen[o], all, seen)
+		}
+	}
+	t.Logf("%d steps from %d seeds; outcomes: %v", all, seeds, outcomes)
+	t.Logf("reads that reached something: %v", seen)
+}
+
+// TestAFailedPutLeavesNoField pins a difference from 0.x that
+// beta/README.md lists: a Put that fails changes nothing, even inside an
+// Update that goes on to commit, so a field that only the failed Put named
+// isn't there, and a later Put spells it its own way. 0.x adds a Put's new
+// fields before it checks the vector's size, and keeps them when the check
+// fails, spelt as the failed Put spelt them, so there the later Put takes
+// that spelling. For this reason TestTheBetaAgrees0x compares field names
+// regardless of case in a table where such a Put failed, and the
+// differential harness compares them regardless of case throughout.
+func TestAFailedPutLeavesNoField(t *testing.T) {
+	dir := t.TempDir()
+	z, err := zx.Open(filepath.Join(dir, "zero.db"))
+	ok(t, err)
+	defer z.Close()
+	b := open(t, filepath.Join(dir, "beta.hcx"))
+	for _, h := range []handle{zeroOn{z}, betaOn{b}} {
+		ok(t, h.put("docs:1", goFields{"vec": vec{1, 2}}))
+	}
+	failed := call{op: "put", key: "docs:1", f: goFields{"Title": "x", "vec": vec{1, 2, 3}}}
+	later := call{op: "put", key: "docs:1", f: goFields{"title": "y"}}
+	var zSaid, bSaid []result
+	ok(t, runUpdate(func(fn func(h handle) error) error {
+		return z.Update(func(tx *zx.Tx) error { return fn(zeroOn{tx}) })
+	}, []call{failed, later}, 2, &zSaid))
+	ok(t, runUpdate(func(fn func(h handle) error) error {
+		return b.Update(func(tx *hc.Tx) error { return fn(betaOn{tx}) })
+	}, []call{failed, later}, 2, &bSaid))
+	for i := range zSaid {
+		same(t, i, "inside the Update", bSaid[i], zSaid[i])
+	}
+	if !errors.Is(zSaid[0].err, zx.ErrInvalid) {
+		t.Fatalf("0.x's Put of a vector of the wrong size gave %v", zSaid[0].err)
+	}
+	zf, err := z.Get("docs:1")
+	ok(t, err)
+	bf, err := b.Get("docs:1")
+	ok(t, err)
+	if zf["Title"] != "y" || len(zf) != 2 {
+		t.Errorf("0.x gives %v, so it no longer keeps a failed Put's spelling, and beta/README.md's difference can go", show(zf))
+	}
+	if bf["title"] != "y" || len(bf) != 2 {
+		t.Errorf("the Beta gives %v, where the failed Put should have left no field", show(bf))
 	}
 }
 
-func agree0x(t *testing.T, seed uint64, steps int) {
+// mix says how often each kind of step comes up, out of 100. A reopen and
+// an Update are steps of their own, and the rest can be calls inside an
+// Update too.
+var mix = []struct {
+	op   string
+	upTo int
+}{
+	{"reopen", 2}, {"update", 12}, {"put", 36}, {"get", 44}, {"delete", 49}, {"scan", 57}, {"link", 73},
+	{"unlink", 78}, {"neighbours", 85}, {"walk", 92}, {"nearest", 99}, {"drop", 100},
+}
+
+// inUpdate is where the calls an Update can hold start in mix.
+const inUpdate = 12
+
+func agree0x(t *testing.T, seed uint64, steps int, outcomes, seen map[string]int) {
 	dir := t.TempDir()
 	z, err := zx.Open(filepath.Join(dir, "zero.db"))
 	if err != nil {
@@ -58,57 +157,17 @@ func agree0x(t *testing.T, seed uint64, steps int) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { b.Close() }()
+	defer func() {
+		if b != nil {
+			b.Close()
+		}
+	}()
 
-	g := &workload{r: rand.New(rand.NewPCG(seed, 0x61)), sizes: map[string]int{}}
-	outcomes := map[string]int{}
+	g := &workload{r: rand.New(rand.NewPCG(seed, 0x61)), sizes: map[string]int{}, seen: seen, respelt: map[string]bool{}}
 	note := func(what string, err error) { outcomes[what+" "+kindOf(err)]++ }
 	for step := 0; step < steps; step++ {
-		switch w := g.r.IntN(100); {
-		case w < 40:
-			key, f := g.put()
-			zErr, bErr := z.Put(key, f.zero()), b.Put(key, f.beta())
-			sameErr(t, step, fmt.Sprintf("put %q %v", key, f), bErr, zErr)
-			g.learn(z, key, zErr)
-			note("put", zErr)
-		case w < 60:
-			key := g.key()
-			zf, zErr := z.Get(key)
-			bf, bErr := b.Get(key)
-			sameErr(t, step, "get "+key, bErr, zErr)
-			sameFields(t, step, "get "+key, bf, zf)
-			note("get", zErr)
-		case w < 70:
-			key := g.key()
-			zErr, bErr := z.Delete(key), b.Delete(key)
-			sameErr(t, step, "delete "+key, bErr, zErr)
-			note("delete", zErr)
-		case w < 95:
-			outcome := g.r.IntN(4) // 0: an error, 1: a panic, else a commit
-			calls := g.update()
-			var zSaid, bSaid []string
-			zErr := runUpdate(func(fn func(h handle) error) error {
-				return z.Update(func(tx *zx.Tx) error { return fn(zeroTx{tx}) })
-			}, calls, outcome, &zSaid)
-			bErr := runUpdate(func(fn func(h handle) error) error {
-				return b.Update(func(tx *hc.Tx) error { return fn(betaTx{tx}) })
-			}, calls, outcome, &bSaid)
-			desc := fmt.Sprintf("update %v, ending %d", calls, outcome)
-			sameErr(t, step, desc, bErr, zErr)
-			for i := range zSaid {
-				if bSaid[i] != zSaid[i] {
-					t.Fatalf("step %d: %s: call %d gives on the Beta\n  %s\nand on 0.x\n  %s", step, desc, i, bSaid[i], zSaid[i])
-				}
-			}
-			if zErr == nil {
-				for _, c := range calls {
-					if c.op == "put" {
-						g.learn(z, c.key, nil)
-					}
-				}
-			}
-			note("update", zErr)
-		default:
+		switch op := g.op(g.r.IntN(100)); op {
+		case "reopen":
 			if err := b.Close(); err != nil {
 				t.Fatal(err)
 			}
@@ -117,6 +176,39 @@ func agree0x(t *testing.T, seed uint64, steps int) {
 			}
 			g.everything(t, step, z, b)
 			note("reopen", nil)
+		case "update":
+			ending := g.r.IntN(4) // 0: an error, 1: a panic, else a commit
+			calls := g.update()
+			var zSaid, bSaid []result
+			zErr := runUpdate(func(fn func(h handle) error) error {
+				return z.Update(func(tx *zx.Tx) error { return fn(zeroOn{tx}) })
+			}, calls, ending, &zSaid)
+			bErr := runUpdate(func(fn func(h handle) error) error {
+				return b.Update(func(tx *hc.Tx) error { return fn(betaOn{tx}) })
+			}, calls, ending, &bSaid)
+			desc := fmt.Sprintf("update %v, ending %d", calls, ending)
+			sameErr(t, step, desc, bErr, zErr)
+			respelt := maps.Clone(g.respelt)
+			for i := range zSaid {
+				g.respell(t, step, fmt.Sprintf("%s: call %d", desc, i), calls[i], bSaid[i], zSaid[i], respelt)
+				g.saw(calls[i], zSaid[i])
+				if zErr == nil {
+					g.learn(calls[i], zSaid[i].err)
+				}
+			}
+			if zErr == nil {
+				g.respelt = respelt
+			}
+			g.sizesFrom(z)
+			note("update", zErr)
+		default:
+			cl := g.call(op)
+			zr, br := do(zeroOn{z}, cl), do(betaOn{b}, cl)
+			g.respell(t, step, cl.String(), cl, br, zr, g.respelt)
+			g.saw(cl, zr)
+			g.learn(cl, zr.err)
+			g.sizesFrom(z)
+			note(op, zr.err)
 		}
 	}
 	b.Close()
@@ -124,30 +216,36 @@ func agree0x(t *testing.T, seed uint64, steps int) {
 		t.Fatal(err)
 	}
 	g.everything(t, steps, z, b)
-	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "delete ok",
-		"delete not found", "update ok", "update error", "reopen ok"} {
-		if outcomes[o] < steps/300 {
-			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
-		}
-	}
-	if testing.Verbose() {
-		t.Logf("outcomes: %v", outcomes)
-	}
 }
 
 // workload makes the random calls, with a rough idea of each table's vector
-// size, learnt from 0.x, so that most vectors fit.
+// size and of the links there are, learnt from 0.x, so that most vectors
+// fit and most reads of links find some.
 type workload struct {
 	r     *rand.Rand
 	sizes map[string]int
+	keys  []string // keys 0.x has put, some of them gone since
+	links []hc.Link
+	seen  map[string]int // what the reads found, for the counts at the end
+	// respelt holds the tables where a Put that failed inside an Update
+	// that committed has left new fields in 0.x, and nothing in the Beta.
+	// Their fields' names compare regardless of case, until the table is
+	// dropped.
+	respelt map[string]bool
 }
 
 var (
-	tables   = []string{"docs", "people", "t_1"}
-	ids      = []string{"1", "2", "3", "4", "é", "a b", "x/y"}
-	names    = []string{"title", "Title", "TITLE", "n", "N", "score", "_x", "Zeta", "zeta", "a1", "vec", "Vec", "VEC"}
-	badNames = []string{"key", "Rowid", "1st", "has space", "oid"}
-	badKeys  = []string{"nocolon", "docs:", "Docs:1", "docs:\x00", "hc_x:1", ":1", "docs:\xff"}
+	tables    = []string{"docs", "people", "t_1"}
+	ids       = []string{"1", "2", "3", "4", "é", "a b", "x/y"}
+	names     = []string{"title", "Title", "TITLE", "n", "N", "score", "_x", "Zeta", "zeta", "a1", "vec", "Vec", "VEC"}
+	badNames  = []string{"key", "Rowid", "1st", "has space", "oid"}
+	badKeys   = []string{"nocolon", "docs:", "Docs:1", "docs:\x00", "hc_x:1", ":1", "docs:\xff"}
+	linkTypes = []string{"cites", "owns", "x", "é ✓", "a b", "a\x00b", "\n", strings.Repeat("ü", 200)}
+	// badTypes break the rules for a link's type. One that starts with a
+	// zero byte is left out: 0.x refuses it with a plain error, and the Beta
+	// with ErrInvalid, as beta/README.md says.
+	badTypes  = []string{"", strings.Repeat("ü", 201), "\xff", "a\xffb"}
+	badTables = []string{"Docs", "hc_x", "sqlite_x", "", "a-b", "7up", "nosuch"}
 )
 
 type status string
@@ -155,11 +253,23 @@ type blob []byte
 
 func (g *workload) pick(list []string) string { return list[g.r.IntN(len(list))] }
 
+func (g *workload) one(in int) bool { return g.r.IntN(in) == 0 }
+
 func (g *workload) key() string {
-	if g.r.IntN(20) == 0 {
+	if g.one(20) {
 		return g.pick(badKeys)
 	}
 	return g.pick(tables) + ":" + g.pick(ids)
+}
+
+// op is the kind of step that w, from 0 to 99, picks in mix.
+func (g *workload) op(w int) string {
+	for _, m := range mix {
+		if w < m.upTo {
+			return m.op
+		}
+	}
+	panic("mix doesn't reach 100")
 }
 
 // value returns a Go value for a field other than vec: of every type Put
@@ -178,10 +288,28 @@ func (g *workload) value() any {
 		"\xff", math.NaN(), math.Inf(-1), uint64(math.MaxUint64), []float32{1}, make(chan int),
 		map[string]any{"f": func() {}},
 	}
-	if g.r.IntN(3) == 0 {
+	if g.one(3) {
 		return values[g.r.IntN(len(values))]
 	}
 	return values[g.r.IntN(len(values)-7)]
+}
+
+// floats returns n random values, now and then with an awkward one among
+// them, and now and then the same values each time, so searches meet ties.
+func (g *workload) floats(n int) []float32 {
+	v := make([]float32, n)
+	for i := range v {
+		v[i] = float32(g.r.NormFloat64())
+	}
+	if g.one(8) {
+		v[g.r.IntN(n)] = []float32{float32(math.Copysign(0, -1)), math.SmallestNonzeroFloat32, math.MaxFloat32}[g.r.IntN(3)]
+	}
+	if g.one(10) {
+		for i := range v {
+			v[i] = 0.5
+		}
+	}
+	return v
 }
 
 // vector returns a value for vec: mostly a vector of the table's size, in
@@ -189,16 +317,10 @@ func (g *workload) value() any {
 // holding NaN, or something that isn't a vector at all.
 func (g *workload) vector(tbl string) any {
 	n := g.sizes[tbl]
-	if n == 0 || g.r.IntN(12) == 0 {
+	if n == 0 || g.one(12) {
 		n = 1 + g.r.IntN(4)
 	}
-	v := make([]float32, n)
-	for i := range v {
-		v[i] = float32(g.r.NormFloat64())
-	}
-	if g.r.IntN(8) == 0 {
-		v[g.r.IntN(n)] = []float32{float32(math.Copysign(0, -1)), math.SmallestNonzeroFloat32, math.MaxFloat32}[g.r.IntN(3)]
-	}
+	v := g.floats(n)
 	switch g.r.IntN(16) {
 	case 0:
 		return nil
@@ -285,14 +407,14 @@ func (f goFields) beta() hc.Fields {
 func (g *workload) put() (string, goFields) {
 	key := g.key()
 	tbl, _, _ := strings.Cut(key, ":")
-	if g.r.IntN(15) == 0 {
+	if g.one(15) {
 		return key, nil
 	}
 	f := goFields{}
 	bad, clash := false, false
 	for n := g.r.IntN(5); n > 0; n-- {
 		name := g.pick(names)
-		if !bad && !clash && g.r.IntN(30) == 0 {
+		if !bad && !clash && g.one(30) {
 			name, bad = g.pick(badNames), true
 		}
 		for have := range f {
@@ -312,120 +434,309 @@ func (g *workload) put() (string, goFields) {
 	return key, f
 }
 
-// learn notes a table's vector size from 0.x once a put of key has
-// worked, so later vectors mostly fit.
-func (g *workload) learn(z *zx.DB, key string, err error) {
-	if err != nil {
-		return
+// held is the key at one end of a link the workload has made, most of the
+// time, so reads of links and walks find some.
+func (g *workload) held() string {
+	if len(g.links) > 0 && !g.one(4) {
+		l := g.links[g.r.IntN(len(g.links))]
+		if g.one(2) {
+			return l.To
+		}
+		return l.From
 	}
-	tbl, _, _ := strings.Cut(key, ":")
-	var dims *int64
-	if z.QueryRow(`SELECT dims FROM hc_tables WHERE name = ?`, tbl).Scan(&dims) == nil && dims != nil {
-		g.sizes[tbl] = int(*dims)
-	}
+	return g.put0()
 }
 
-// call is one call inside an Update.
+// put0 is a key 0.x has put, most of the time, so most links join records
+// that exist.
+func (g *workload) put0() string {
+	if len(g.keys) > 0 && !g.one(5) {
+		return g.keys[g.r.IntN(len(g.keys))]
+	}
+	return g.key()
+}
+
+func (g *workload) linkType() string {
+	if g.one(20) {
+		return g.pick(badTypes)
+	}
+	return g.pick(linkTypes)
+}
+
+// maybeType is a type to read or follow links by: every type, a type some
+// link has, or now and then one no link can have.
+func (g *workload) maybeType() string {
+	switch g.r.IntN(8) {
+	case 0, 1, 2, 3:
+		return ""
+	case 4:
+		return g.pick(badTypes[1:])
+	}
+	if len(g.links) > 0 {
+		return g.links[g.r.IntN(len(g.links))].Type
+	}
+	return g.pick(linkTypes)
+}
+
+// direction is mostly one of the three, and now and then a number that
+// isn't one.
+func (g *workload) direction() int {
+	if g.one(25) {
+		return []int{3, -1, 100}[g.r.IntN(3)]
+	}
+	return g.r.IntN(3)
+}
+
+func (g *workload) table() string {
+	if g.one(12) {
+		return g.pick(badTables)
+	}
+	return g.pick(tables)
+}
+
+// query is a search's query for a table: mostly a vector of its size, and
+// now and then one of another size, all zeros, holding NaN, or empty.
+func (g *workload) query(tbl string) []float32 {
+	n := g.sizes[tbl]
+	if n == 0 || g.one(15) {
+		n = 1 + g.r.IntN(4)
+	}
+	v := g.floats(n)
+	switch g.r.IntN(30) {
+	case 0:
+		return make([]float32, n)
+	case 1:
+		v[n-1] = float32(math.Inf(1))
+	case 2:
+		return nil
+	}
+	return v
+}
+
+// call is one call, on its own or inside an Update.
 type call struct {
-	op  string
-	key string
-	f   goFields
+	op           string
+	key, to, typ string // the key, or Scan's prefix and Drop's or Nearest's table; Link's and Unlink's to; a link type
+	after        string
+	n, dir       int // Scan's limit, Walk's depth or Nearest's k; a direction
+	f            goFields
+	q            []float32
+	where        string
+	args         []any
 }
 
-func (c call) String() string {
-	if c.op == "put" {
-		return fmt.Sprintf("put %q %v", c.key, c.f)
+func (cl call) String() string {
+	switch cl.op {
+	case "put":
+		return fmt.Sprintf("put %q %v", cl.key, cl.f)
+	case "scan":
+		return fmt.Sprintf("scan %q after %q limit %d", cl.key, cl.after, cl.n)
+	case "link", "unlink":
+		return fmt.Sprintf("%s %q -%q-> %q", cl.op, cl.key, cl.typ, cl.to)
+	case "neighbours":
+		return fmt.Sprintf("neighbours %q %d %q", cl.key, cl.dir, cl.typ)
+	case "walk":
+		return fmt.Sprintf("walk %q %d %q depth %d", cl.key, cl.dir, cl.typ, cl.n)
+	case "nearest":
+		return fmt.Sprintf("nearest %q %v k %d where %q %v", cl.key, cl.q, cl.n, cl.where, cl.args)
 	}
-	return c.op + " " + c.key
+	return fmt.Sprintf("%s %q", cl.op, cl.key)
+}
+
+// call makes a call of the kind op.
+func (g *workload) call(op string) call {
+	switch op {
+	case "put":
+		key, f := g.put()
+		return call{op: op, key: key, f: f}
+	case "scan":
+		cl := call{op: op, key: g.pick(tables) + ":"}
+		switch g.r.IntN(12) {
+		case 0:
+			cl.key = g.pick([]string{"docs", "", "Docs:", "hc_x:", ":", "a-b:", "nosuch:"})
+		case 1, 2:
+			cl.key += g.pick([]string{"1", "a", "x/", "\xc3", "é", " ", "zz"})
+		}
+		switch g.r.IntN(6) {
+		case 0, 1:
+			cl.after = g.key()
+		case 2:
+			cl.after = g.pick([]string{cl.key, "zzz", "\xff", "docs:2", "a"})
+		}
+		if !g.one(3) {
+			cl.n = 1 + g.r.IntN(4)
+		}
+		if g.one(25) {
+			cl.n = -1 - g.r.IntN(2)
+		}
+		return cl
+	case "link":
+		cl := call{op: op, key: g.put0(), typ: g.linkType(), to: g.put0()}
+		if len(g.links) > 0 {
+			l := g.links[g.r.IntN(len(g.links))]
+			switch g.r.IntN(6) {
+			case 0: // the same two records, maybe another type
+				cl.key, cl.to = l.From, l.To
+			case 1, 2: // a chain, for walks of several links
+				cl.key = l.To
+			}
+		}
+		return cl
+	case "unlink":
+		if len(g.links) > 0 && !g.one(4) {
+			l := g.links[g.r.IntN(len(g.links))]
+			if g.one(3) {
+				l.Type = ""
+			}
+			return call{op: op, key: l.From, typ: l.Type, to: l.To}
+		}
+		return call{op: op, key: g.key(), typ: g.maybeType(), to: g.key()}
+	case "neighbours":
+		return call{op: op, key: g.held(), dir: g.direction(), typ: g.maybeType()}
+	case "walk":
+		cl := call{op: op, key: g.held(), dir: g.direction(), typ: g.maybeType(), n: 1 + g.r.IntN(4)}
+		if g.one(20) {
+			cl.n = []int{0, -1, hc.MaxDepth, hc.MaxDepth + 1}[g.r.IntN(4)]
+		}
+		return cl
+	case "nearest":
+		tbl := g.table()
+		cl := call{op: op, key: tbl, q: g.query(tbl), n: 1 + g.r.IntN(6)}
+		if g.one(20) {
+			cl.n = []int{0, -1, hc.MaxK, hc.MaxK + 1}[g.r.IntN(4)]
+		}
+		switch g.r.IntN(10) {
+		case 0: // no filter, said with spaces
+			cl.where = g.pick([]string{" ", "\t\n"})
+		case 1: // arguments without a filter, which neither engine uses
+			cl.args = []any{1, "open"}
+		}
+		return cl
+	case "drop":
+		switch g.r.IntN(6) {
+		case 0:
+			return call{op: op, key: g.pick(badTables)}
+		case 1:
+			return call{op: op, key: g.pick([]string{"nosuch", "t_2", "gone"})}
+		}
+		return call{op: op, key: g.pick(tables)}
+	}
+	return call{op: op, key: g.key()} // get and delete
 }
 
 func (g *workload) update() []call {
 	calls := make([]call, 1+g.r.IntN(5))
 	for i := range calls {
-		switch w := g.r.IntN(10); {
-		case w < 6:
-			key, f := g.put()
-			calls[i] = call{"put", key, f}
-		case w < 8:
-			calls[i] = call{"get", g.key(), nil}
-		default:
-			calls[i] = call{"delete", g.key(), nil}
-		}
+		calls[i] = g.call(g.op(inUpdate + g.r.IntN(100-inUpdate)))
 	}
 	return calls
 }
 
-// handle is what both packages' transactions do, with each one's fields.
-type handle interface {
-	get(key string) (map[string]any, error)
-	put(key string, f goFields) error
-	delete(key string) error
-}
-
-type zeroTx struct{ tx *zx.Tx }
-
-func (h zeroTx) get(key string) (map[string]any, error) {
-	f, err := h.tx.Get(key)
-	return f, err
-}
-func (h zeroTx) put(key string, f goFields) error { return h.tx.Put(key, f.zero()) }
-func (h zeroTx) delete(key string) error          { return h.tx.Delete(key) }
-
-type betaTx struct{ tx *hc.Tx }
-
-func (h betaTx) get(key string) (map[string]any, error) {
-	f, err := h.tx.Get(key)
-	return f, err
-}
-func (h betaTx) put(key string, f goFields) error { return h.tx.Put(key, f.beta()) }
-func (h betaTx) delete(key string) error          { return h.tx.Delete(key) }
-
-var errRollback = errors.New("rolled back on purpose")
-
-// runUpdate makes calls inside one Update through update, noting what each
-// gave in said, and ends the function by outcome: 0 returns an error, 1
-// panics, and anything else commits.
-func runUpdate(update func(fn func(h handle) error) error, calls []call, outcome int, said *[]string) (err error) {
-	defer func() {
-		if p := recover(); p != nil {
-			err = fmt.Errorf("panicked: %v", p)
+// learn notes the keys and links a call has made, from 0.x's answer, so
+// later calls find them. It keeps the last 40 of each.
+func (g *workload) learn(cl call, err error) {
+	if err != nil {
+		return
+	}
+	switch cl.op {
+	case "put":
+		g.keys = append(g.keys, cl.key)
+		if len(g.keys) > 40 {
+			g.keys = g.keys[1:]
 		}
-	}()
-	return update(func(h handle) error {
-		for _, c := range calls {
-			var e error
-			var f map[string]any
-			switch c.op {
-			case "put":
-				e = h.put(c.key, c.f)
-			case "get":
-				f, e = h.get(c.key)
-			case "delete":
-				e = h.delete(c.key)
-			}
-			*said = append(*said, describeErr(e)+" "+show(f))
+	case "link":
+		g.links = append(g.links, hc.Link{From: cl.key, Type: cl.typ, To: cl.to})
+		if len(g.links) > 40 {
+			g.links = g.links[1:]
 		}
-		switch outcome {
-		case 0:
-			return errRollback
-		case 1:
-			panic("on purpose")
-		}
-		return nil
-	})
+	}
 }
 
-// everything compares every key the workload can name on both databases,
-// and Check's counts.
+// respell compares a call's results, with field names regardless of case
+// in a table of respelt, and then notes in respelt what the call did to
+// that: 0.x keeps the new fields of a Put that fails its vector's size
+// check, inside an Update, and a drop takes them away. respelt is the
+// workload's own for a call on its own, which can't leave fields, since
+// such a call is an Update that rolls back when it fails, and a copy of it
+// for a call inside an Update, which becomes the workload's if the Update
+// commits.
+func (g *workload) respell(t *testing.T, step int, what string, cl call, beta, zero result, respelt map[string]bool) {
+	t.Helper()
+	tbl := ""
+	switch cl.op {
+	case "get", "put", "scan":
+		tbl, _, _ = strings.Cut(cl.key, ":")
+	case "drop":
+		tbl = cl.key
+	}
+	if sameOrRespelt(t, step, what, beta, zero, respelt[tbl]) {
+		g.seen["field names a failed Put spelt in 0.x"]++
+	}
+	switch {
+	case cl.op == "drop" && zero.err == nil:
+		delete(respelt, tbl)
+	case cl.op == "put" && zero.err != nil && strings.Contains(zero.err.Error(), " holds vectors of "):
+		respelt[tbl] = true
+	}
+}
+
+// saw counts what a read found on 0.x, for the counts at the end, which
+// show the reads reaching something.
+func (g *workload) saw(cl call, r result) {
+	if r.err != nil {
+		return
+	}
+	switch {
+	case cl.op == "scan" && strings.HasPrefix(r.text, "ok [\""):
+		g.seen["scans that found records"]++
+	case cl.op == "walk" && strings.Contains(r.text, "@2"):
+		g.seen["walks that went two links"]++
+	case cl.op == "nearest" && len(r.hits) > 0:
+		g.seen["searches with hits"]++
+	case cl.op == "nearest" && r.hits != nil:
+		g.seen["searches of an emptied table"]++
+	}
+}
+
+// sizesFrom notes each table's vector size from 0.x, so later vectors
+// mostly fit.
+func (g *workload) sizesFrom(z *zx.DB) {
+	for _, tbl := range tables {
+		var dims *int64
+		if z.QueryRow(`SELECT dims FROM hc_tables WHERE name = ?`, tbl).Scan(&dims) == nil && dims != nil {
+			g.sizes[tbl] = int(*dims)
+		} else {
+			delete(g.sizes, tbl)
+		}
+	}
+}
+
+// everything compares what the workload can name on both databases: every
+// key, with its links both ways and a walk from it, every table's scan, a
+// search of every table with a vector size, and Check's counts. It notes
+// what the reads found as it goes.
 func (g *workload) everything(t *testing.T, step int, z *zx.DB, b *hc.DB) {
 	t.Helper()
+	zh, bh := zeroOn{z}, betaOn{b}
+	var calls []call
 	for _, tbl := range tables {
+		calls = append(calls, call{op: "scan", key: tbl + ":"})
 		for _, id := range ids {
 			key := tbl + ":" + id
-			zf, zErr := z.Get(key)
-			bf, bErr := b.Get(key)
-			sameErr(t, step, "after a reopen, get "+key, bErr, zErr)
-			sameFields(t, step, "after a reopen, get "+key, bf, zf)
+			calls = append(calls, call{op: "get", key: key}, call{op: "neighbours", key: key, dir: int(hc.Both)},
+				call{op: "walk", key: key, dir: int(hc.Both), n: hc.MaxDepth})
+		}
+		if n := g.sizes[tbl]; n > 0 {
+			q := make([]float32, n)
+			q[0] = 1
+			calls = append(calls, call{op: "nearest", key: tbl, q: q, n: 30})
+		}
+	}
+	for _, cl := range calls {
+		zr := do(zh, cl)
+		g.respell(t, step, "after a reopen, "+cl.String(), cl, do(bh, cl), zr, g.respelt)
+		if cl.op == "walk" && strings.Contains(zr.text, "@2") {
+			g.seen["walks after a reopen that went two links"]++
 		}
 	}
 	zr, zErr := z.Check()
@@ -469,17 +780,10 @@ func sameErr(t *testing.T, step int, what string, beta, zero error) {
 	}
 }
 
-func sameFields[B ~map[string]any, Z ~map[string]any](t *testing.T, step int, what string, beta B, zero Z) {
-	t.Helper()
-	if b, z := show(beta), show(zero); b != z {
-		t.Fatalf("step %d: %s: the Beta gives\n  %s\nand 0.x\n  %s", step, what, b, z)
-	}
-}
-
 // show writes fields with their types, and numbers with their bits, so
 // that -0 and 0, or a whole number and a real, never look the same. Each
-// package's Vector shows the same way, as does a nil map and an empty one,
-// which 0.x never gives for a record that exists.
+// package's Vector shows the same way. A nil map shows as nil and an empty
+// one as {}, which 0.x gives for a record with no fields.
 func show[F ~map[string]any](f F) string {
 	if f == nil {
 		return "nil"

@@ -32,12 +32,8 @@ func (r Report) OK() bool { return len(r.Problems) == 0 }
 // Until task G7 writes those checks, Check only counts what the database
 // holds, and finds no problems.
 func (db *DB) Check() (Report, error) {
-	s, err := db.current()
-	if err != nil {
-		return Report{}, err
-	}
 	var rep Report
-	err = s.Read(func(r store.Reader) error {
+	err := db.read(func(r store.Reader) error {
 		rep = count(r)
 		return nil
 	})
@@ -46,8 +42,7 @@ func (db *DB) Check() (Report, error) {
 
 // count counts the tables, records, links and vectors in r, from its
 // snapshot, which holds each table as a CreateTable, each record as a Put
-// with its vector among its fields, and each link as a Link once S5 adds
-// them.
+// with its vector among its fields, and each link as a Link.
 func count(r store.Reader) Report {
 	var rep Report
 	for c := range r.Snapshot() {

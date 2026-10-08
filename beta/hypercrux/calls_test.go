@@ -42,14 +42,23 @@ func within(t *testing.T, fn func()) {
 // database inside its own Update. A write, Close and a nested Update fail at
 // once with ErrInsideUpdate, before the first change and after it. A read
 // goes ahead before the first change, seeing what was committed, and fails
-// after it, as BETA.md's "Transactions" says.
+// after it, as BETA.md's "Transactions" says. The same reads through the
+// transaction see its changes.
 func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 	db := open(t, filepath.Join(t.TempDir(), "test.hcx"))
-	ok(t, db.Put("docs:1", hc.Fields{"n": 1}))
+	ok(t, db.Update(func(tx *hc.Tx) error {
+		ok(t, tx.Put("docs:1", hc.Fields{"n": 1, "vec": hc.Vector{1, 0}}))
+		ok(t, tx.Put("docs:2", hc.Fields{"n": 2, "vec": hc.Vector{0, 1}}))
+		ok(t, tx.Put("other:1", nil))
+		return tx.Link("docs:1", "cites", "docs:2")
+	}))
 	writes := func(when string) {
 		for name, err := range map[string]error{
-			"Put":    db.Put("docs:2", hc.Fields{"n": 2}),
+			"Put":    db.Put("docs:3", hc.Fields{"n": 3}),
 			"Delete": db.Delete("docs:1"),
+			"Drop":   db.Drop("other"),
+			"Link":   db.Link("docs:2", "cites", "docs:1"),
+			"Unlink": db.Unlink("docs:1", "", "docs:2"),
 			"Update": db.Update(func(*hc.Tx) error { return nil }),
 			"Close":  db.Close(),
 		} {
@@ -58,25 +67,53 @@ func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 			}
 		}
 	}
+	// reads makes each read through h, and says what each gave.
+	reads := func(h betaCalls, check func() (hc.Report, error)) map[string]string {
+		f, err := h.Get("docs:1")
+		got := map[string]string{"Get": fmt.Sprint(f["n"], " ", err)}
+		recs, err := h.Scan("docs:", "", 0)
+		got["Scan"] = fmt.Sprint(len(recs), " ", err)
+		links, err := h.Neighbours("docs:1", hc.Both, "")
+		got["Neighbours"] = fmt.Sprint(links, " ", err)
+		steps, err := h.Walk("docs:1", hc.Out, "", 2)
+		got["Walk"] = fmt.Sprint(steps, " ", err)
+		hits, err := h.Nearest("docs", hc.Vector{0, 1}, 1, "")
+		got["Nearest"] = fmt.Sprint(len(hits) > 0 && hits[0].Key == "docs:2", " ", err)
+		if check != nil {
+			rep, err := check()
+			got["Check"] = fmt.Sprint(rep.Records, " ", rep.Links, " ", err)
+		}
+		return got
+	}
+	committed := reads(db, db.Check)
 	within(t, func() {
 		ok(t, db.Update(func(tx *hc.Tx) error {
 			writes("before the first change")
-			if f, err := db.Get("docs:1"); err != nil || f["n"] != int64(1) {
-				t.Errorf("before the first change, db.Get gave %v, %v", f, err)
+			for name, got := range reads(db, db.Check) {
+				if got != committed[name] {
+					t.Errorf("before the first change, db.%s gave %s, where %s was committed", name, got, committed[name])
+				}
 			}
-			if _, err := db.Check(); err != nil {
-				t.Errorf("before the first change, db.Check gave %v", err)
-			}
-			ok(t, tx.Put("docs:1", hc.Fields{"n": 10}))
+			ok(t, tx.Put("docs:1", hc.Fields{"n": 10, "vec": hc.Vector{0, 1}}))
+			ok(t, tx.Put("docs:3", hc.Fields{"n": 3}))
+			ok(t, tx.Link("docs:2", "cites", "docs:3"))
 			writes("after the first change")
-			if _, err := db.Get("docs:1"); !errors.Is(err, hc.ErrInsideUpdate) {
-				t.Errorf("after the first change, db.Get gave %v", err)
+			for name, got := range reads(db, db.Check) {
+				if !strings.Contains(got, hc.ErrInsideUpdate.Error()) {
+					t.Errorf("after the first change, db.%s gave %s", name, got)
+				}
 			}
-			if _, err := db.Check(); !errors.Is(err, hc.ErrInsideUpdate) {
-				t.Errorf("after the first change, db.Check gave %v", err)
+			want := map[string]string{
+				"Get":        "10 <nil>",
+				"Scan":       "3 <nil>",
+				"Neighbours": "[docs:1 -cites-> docs:2] <nil>",
+				"Walk":       "[{docs:2 1} {docs:3 2}] <nil>",
+				"Nearest":    "false <nil>", // docs:1 ties with docs:2 now, and comes first by key
 			}
-			if f, err := tx.Get("docs:1"); err != nil || f["n"] != int64(10) {
-				t.Errorf("tx.Get gave %v, %v", f, err)
+			for name, got := range reads(tx, nil) {
+				if got != want[name] {
+					t.Errorf("tx.%s gave %s, where %s is wanted", name, got, want[name])
+				}
 			}
 			return nil
 		}))
@@ -84,52 +121,98 @@ func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 	if f, err := db.Get("docs:1"); err != nil || f["n"] != int64(10) {
 		t.Fatalf("after the Update, docs:1 gives %v, %v", f, err)
 	}
-	if _, err := db.Get("docs:2"); !errors.Is(err, hc.ErrNotFound) {
-		t.Fatalf("a Put through db inside the Update went in: %v", err)
+	for _, key := range []string{"docs:1", "other:1"} {
+		if _, err := db.Get(key); err != nil {
+			t.Fatalf("a write through db inside the Update took %s: %v", key, err)
+		}
+	}
+	if links, err := db.Neighbours("docs:1", hc.Both, ""); err != nil || len(links) != 1 {
+		t.Fatalf("a link or an unlink through db inside the Update went in: %v, %v", links, err)
 	}
 }
 
-// TestReadersWaitFromTheFirstChange reads from another goroutine during an
-// Update: before its first change the read goes ahead and sees what was
-// committed, and from then on it waits until the commit, and sees it.
+// TestReadersWaitFromTheFirstChange reads from other goroutines during an
+// Update, with each of the reads through the database. Before the Update's
+// first change each read goes ahead and sees what was committed, and from
+// then on each waits until the commit, and sees it.
 func TestReadersWaitFromTheFirstChange(t *testing.T) {
 	db := open(t, filepath.Join(t.TempDir(), "test.hcx"))
-	ok(t, db.Put("docs:1", hc.Fields{"n": 1}))
-	read := func() chan any {
-		c := make(chan any, 1)
-		go func() {
+	ok(t, db.Put("docs:1", hc.Fields{"n": 1, "vec": hc.Vector{1, 0}}))
+	ok(t, db.Put("docs:2", hc.Fields{"n": 2, "vec": hc.Vector{0.6, 0.8}}))
+	reads := map[string]func() string{
+		"Get": func() string {
 			f, err := db.Get("docs:1")
-			if err != nil {
-				c <- err
-				return
+			return fmt.Sprint(f["n"], err)
+		},
+		"Scan": func() string {
+			recs, err := db.Scan("docs:", "", 0)
+			return fmt.Sprint(len(recs), err)
+		},
+		"Neighbours": func() string {
+			links, err := db.Neighbours("docs:1", hc.Out, "")
+			return fmt.Sprint(len(links), err)
+		},
+		"Walk": func() string {
+			steps, err := db.Walk("docs:2", hc.In, "", 1)
+			return fmt.Sprint(len(steps), err)
+		},
+		"Nearest": func() string {
+			hits, err := db.Nearest("docs", hc.Vector{0, 1}, 1, "")
+			if err != nil || len(hits) == 0 {
+				return fmt.Sprint(hits, err)
 			}
-			c <- f["n"]
-		}()
-		return c
+			return hits[0].Key
+		},
+		"Check": func() string {
+			rep, err := db.Check()
+			return fmt.Sprint(rep.Records, rep.Links, err)
+		},
 	}
-	var waiting chan any
-	ok(t, db.Update(func(tx *hc.Tx) error {
-		if n := <-read(); n != int64(1) {
-			t.Errorf("before the first change, a read gave %v", n)
+	start := func() map[string]chan string {
+		out := map[string]chan string{}
+		for name, read := range reads {
+			c := make(chan string, 1)
+			go func() { c <- read() }()
+			out[name] = c
 		}
-		ok(t, tx.Put("docs:1", hc.Fields{"n": 2}))
-		waiting = read()
-		select {
-		case n := <-waiting:
-			t.Errorf("after the first change, a read went ahead and gave %v", n)
-		case <-time.After(50 * time.Millisecond):
+		return out
+	}
+	before := map[string]string{"Get": "1 <nil>", "Scan": "2 <nil>", "Neighbours": "0 <nil>", "Walk": "0 <nil>", "Nearest": "docs:2", "Check": "2 0 <nil>"}
+	after := map[string]string{"Get": "10 <nil>", "Scan": "3 <nil>", "Neighbours": "1 <nil>", "Walk": "1 <nil>", "Nearest": "docs:1", "Check": "3 1 <nil>"}
+	var waiting map[string]chan string
+	ok(t, db.Update(func(tx *hc.Tx) error {
+		for name, c := range start() {
+			if got := <-c; got != before[name] {
+				t.Errorf("before the first change, db.%s gave %s, where %s was committed", name, got, before[name])
+			}
+		}
+		ok(t, tx.Put("docs:1", hc.Fields{"n": 10, "vec": hc.Vector{0, 1}}))
+		ok(t, tx.Put("docs:3", nil))
+		ok(t, tx.Link("docs:1", "cites", "docs:2"))
+		waiting = start()
+		time.Sleep(50 * time.Millisecond)
+		for name, c := range waiting {
+			select {
+			case got := <-c:
+				t.Errorf("after the first change, db.%s went ahead and gave %s", name, got)
+				delete(waiting, name)
+			default:
+			}
 		}
 		return nil
 	}))
-	if n := <-waiting; n != int64(2) {
-		t.Fatalf("the read that waited for the commit gave %v", n)
+	for name, c := range waiting {
+		if got := <-c; got != after[name] {
+			t.Errorf("db.%s, which waited for the commit, gave %s, where %s is wanted", name, got, after[name])
+		}
 	}
 }
 
 // TestCallsAfterTheEnd checks the calls that come too late: on a
 // transaction once its Update has returned, on a database once it's
 // closed, and on a DB or Tx that nothing opened. Each fails with ErrClosed,
-// and Close itself does nothing the second time.
+// before it checks its arguments, and Close itself does nothing the second
+// time.
 func TestCallsAfterTheEnd(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.hcx")
 	db, err := hc.Open(path)
@@ -139,29 +222,37 @@ func TestCallsAfterTheEnd(t *testing.T) {
 		kept = tx
 		return tx.Put("docs:1", hc.Fields{"n": 1})
 	}))
+	// Every argument breaks a rule, so a call that checked them first would
+	// give ErrInvalid.
+	calls := func(h betaCalls) map[string]error {
+		return map[string]error{
+			"Get":        errOf(h.Get("Bad")),
+			"Put":        h.Put("Bad key", nil),
+			"Delete":     h.Delete("Bad"),
+			"Scan":       errOf(h.Scan("Bad", "", -1)),
+			"Drop":       h.Drop("Bad"),
+			"Link":       h.Link("Bad", "", "Bad"),
+			"Unlink":     h.Unlink("Bad", "", "Bad"),
+			"Neighbours": errOf(h.Neighbours("Bad", 7, "")),
+			"Walk":       errOf(h.Walk("Bad", 7, "", 0)),
+			"Nearest":    errOf(h.Nearest("Bad", nil, 0, "")),
+		}
+	}
 	for _, tx := range []*hc.Tx{kept, new(hc.Tx)} {
-		for name, err := range map[string]error{
-			"Get":    errOf(tx.Get("docs:1")),
-			"Put":    tx.Put("Bad key", nil),
-			"Delete": tx.Delete("docs:1"),
-		} {
-			wantErr(t, err, hc.ErrClosed)
-			if name == "Put" && errors.Is(err, hc.ErrInvalid) {
-				t.Errorf("tx.Put on an ended transaction checked its key: %v", err)
+		for name, err := range calls(tx) {
+			if !errors.Is(err, hc.ErrClosed) || errors.Is(err, hc.ErrInvalid) || errors.Is(err, hc.ErrNotFound) {
+				t.Errorf("tx.%s on an ended transaction gave %v", name, err)
 			}
 		}
 	}
 	ok(t, db.Close())
 	ok(t, db.Close())
 	for _, d := range []*hc.DB{db, new(hc.DB)} {
-		for name, err := range map[string]error{
-			"Get":    errOf(d.Get("docs:1")),
-			"Put":    d.Put("docs:1", nil),
-			"Delete": d.Delete("docs:1"),
-			"Update": d.Update(func(*hc.Tx) error { return nil }),
-			"Check":  errOf(d.Check()),
-		} {
-			if !errors.Is(err, hc.ErrClosed) {
+		all := calls(d)
+		all["Update"] = d.Update(func(*hc.Tx) error { return nil })
+		all["Check"] = errOf(d.Check())
+		for name, err := range all {
+			if !errors.Is(err, hc.ErrClosed) || errors.Is(err, hc.ErrInvalid) || errors.Is(err, hc.ErrNotFound) {
 				t.Errorf("db.%s on a closed database gave %v", name, err)
 			}
 		}

@@ -17,8 +17,10 @@ import (
 // The glue between the file and the in-memory copy (G1). A call goes like
 // this:
 //
-//   - A read through db loads the copy and reads it inside the copy's Read,
-//     which holds the copy's lock shared, and copies out what it returns.
+//   - A read through db loads the copy and reads it inside the copy's Read
+//     (db.read), which holds the copy's lock shared, and copies out what it
+//     returns. A read through a Tx reads the copy's transaction, which sees
+//     the Update's changes, and copies out the same way.
 //   - A write through db is an Update of its own.
 //   - Update checks that it isn't running inside an Update on the same
 //     goroutine (the copy's Outside), then takes the log's write lock,
@@ -96,4 +98,17 @@ func (db *DB) current() (*store.Store, error) {
 		return nil, fmt.Errorf("%w: a database that was never opened", ErrClosed)
 	}
 	return nil, fmt.Errorf("%w: %s", ErrClosed, db.path)
+}
+
+// read runs fn on the in-memory copy inside the copy's Read, for a read
+// through db: fn sees one point in the log, and copies out what it keeps.
+// It fails with an error that wraps ErrClosed once the database is closed,
+// and, inside an Update after its first change, with ErrInsideUpdate at
+// once, since Read would wait for that Update.
+func (db *DB) read(fn func(r store.Reader) error) error {
+	s, err := db.current()
+	if err != nil {
+		return err
+	}
+	return s.Read(fn)
 }

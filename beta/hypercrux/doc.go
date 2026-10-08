@@ -15,12 +15,14 @@
 // changing its import path. Like the rest of beta/, it builds only on
 // Linux.
 //
-// What works so far: Open, Close, Update, Get, Put, Delete and TableOf, on
-// DB and Tx alike, through the file (task G1), and Check, which only counts
-// until task G7. A DB reads other processes' commits when an Update of its
-// own takes the write lock; following them between Updates is task F6's.
-// The helpers that hold no state work as 0.x's do: ParseDirection,
-// ParseVector, DecodeVector, and the methods of Vector, Direction and Link.
-// The rest returns an error that wraps errors.ErrUnsupported and names the
-// task that makes it work.
+// What works so far, on DB and Tx alike, through the file: Open, Close,
+// Update, Get, Put, Delete and TableOf (task G1), and Scan, Drop, Link,
+// Unlink, Neighbours, Walk and Nearest without a filter (task G2). Check
+// only counts until task G7. A DB reads other processes' commits when an
+// Update of its own takes the write lock; following them between Updates
+// is for tasks F6 and F9. The helpers that hold no state work as 0.x's do:
+// ParseDirection, ParseVector, DecodeVector, and the methods of Vector,
+// Direction and Link. The rest, SQL and Nearest with a filter among them,
+// returns an error that wraps errors.ErrUnsupported and names the task that
+// makes it work.
 package hypercrux

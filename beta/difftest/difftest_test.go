@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	c "github.com/hypercrux/hypercrux/beta/conformance"
+	"github.com/hypercrux/hypercrux/beta/conformance/betax"
 	"github.com/hypercrux/hypercrux/beta/conformance/zerox"
 )
 
@@ -47,12 +48,13 @@ func sequences(t *testing.T) int {
 	return 2000
 }
 
-// check runs Find, and on a failure saves the shrunk sequence into
-// testdata, where TestSavedSequences replays it from then on.
-func check(t *testing.T, a, b c.Engine, seed uint64) {
+// check runs Find, leaving out the kinds of step in leave, and on a
+// failure saves the shrunk sequence into testdata, where TestSavedSequences
+// replays it from then on.
+func check(t *testing.T, a, b c.Engine, seed uint64, leave ...string) {
 	t.Helper()
 	n := sequences(t)
-	f, err := Find(a, b, Options{Sequences: n, MaxLength: 80, Seed: seed, Dir: scratch(t)})
+	f, err := Find(a, b, Options{Sequences: n, MaxLength: 80, Seed: seed, Dir: scratch(t), Leave: leave})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,28 +72,63 @@ func TestZeroxAgainstItself(t *testing.T) {
 	check(t, zerox.Engine{}, zerox.Engine{}, 1)
 }
 
-// TestSavedSequences replays every sequence saved in testdata. A saved one
-// stays as a test after the difference it found is fixed.
+// betaLeaves are the kinds of step the Beta can't take yet: SQL, and
+// Nearest's filters, which are SQL too. Both wait for task G4.
+var betaLeaves = []string{"sql", "where"}
+
+// TestZeroxAgainstTheBeta runs 0.x against the Beta, 0.x being the judge,
+// on sequences without the steps in betaLeaves.
+func TestZeroxAgainstTheBeta(t *testing.T) {
+	check(t, zerox.Engine{}, betax.Engine{}, 1, betaLeaves...)
+}
+
+// TestSavedSequences replays every sequence saved in testdata, with 0.x
+// against the Beta. A saved one stays as a test after the difference it
+// found is fixed. A sequence with a step the Beta can't take yet replays
+// with 0.x against itself until task G4.
 func TestSavedSequences(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "*.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := scratch(t)
+	waiting := 0
 	for _, path := range files {
 		f, err := Load(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		m, err := Replay(zerox.Engine{}, zerox.Engine{}, f.Ops, dir)
+		var b c.Engine = betax.Engine{}
+		if takes(f.Ops, betaLeaves) {
+			b = zerox.Engine{}
+			waiting++
+		}
+		m, err := Replay(zerox.Engine{}, b, f.Ops, dir)
 		if err != nil {
 			t.Fatalf("%s: %v", path, err)
 		}
 		if m != nil {
-			t.Errorf("%s still fails:\n%v", path, m)
+			t.Errorf("%s still fails, with 0.x against %s:\n%v", path, b.Name(), m)
 		}
 	}
-	t.Logf("replayed %d saved sequences", len(files))
+	t.Logf("replayed %d saved sequences, %d of them with 0.x against itself until task G4", len(files), waiting)
+}
+
+// takes reports whether a sequence has a step of one of the kinds named,
+// counting the steps inside an Update and "where" for Nearest's filters,
+// as Generate leaves them out.
+func takes(ops []Op, kinds []string) bool {
+	for _, op := range ops {
+		for _, k := range kinds {
+			if op.Kind == k || k == "where" && op.Where != "" {
+				return true
+			}
+		}
+		if takes(op.Ops, kinds) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestABrokenEngineIsCaught runs 0.x against copies of itself with one

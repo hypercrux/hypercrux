@@ -68,13 +68,15 @@ func openFault(t *testing.T, d *fault.Disk, path string) *hc.DB {
 	return db
 }
 
-// look describes what db holds at the keys named, and Check's counts, with
-// every number's bits.
+// look describes what db holds at the keys named, with each one's links
+// both ways, and Check's counts, with every number's bits.
 func look(db *hc.DB, keys ...string) string {
 	var b strings.Builder
 	for _, k := range keys {
 		f, err := db.Get(k)
 		fmt.Fprintf(&b, "%s: %s %s\n", k, show(f), describeErr(err))
+		links, err := db.Neighbours(k, hc.Both, "")
+		fmt.Fprintf(&b, "  links %q %s\n", links, describeErr(err))
 	}
 	rep, err := db.Check()
 	fmt.Fprintf(&b, "check: %+v %v", rep, err)
@@ -183,7 +185,8 @@ func TestAReopenReadsBackWhatWasCommitted(t *testing.T) {
 
 // TestUpdateRollsBackWhenTheCommitFails fails the batch's write, its sync
 // and its marker's write in turn, on the fault layer's disk, in an Update
-// that puts, adds a field and a table, and deletes. Each time Update gives
+// that puts, adds a field and a table, links, unlinks, drops a table with a
+// link into another, and deletes a record with links. Each time Update gives
 // the disk's error, and the copy holds what it held before. The log cuts the
 // failed batch back out of the file (F5), so a reopen reads what was there
 // before, and a later Update through the same handle commits as if the
@@ -197,18 +200,29 @@ func TestAReopenReadsBackWhatWasCommitted(t *testing.T) {
 // and the check marks it, since a failed commit's outcome is unknown.
 func TestUpdateRollsBackWhenTheCommitFails(t *testing.T) {
 	const path = "/db/test.hcx"
-	keys := []string{"docs:1", "docs:2", "docs:3", "fresh:1"}
+	keys := []string{"docs:1", "docs:2", "docs:3", "fresh:1", "gone:1"}
 	setUp := func(t *testing.T, seed uint64) (*fault.Disk, *hc.DB) {
 		d := fault.New(seed)
 		db := openFault(t, d, path)
 		ok(t, db.Put("docs:1", hc.Fields{"n": 1, "vec": hc.Vector{1, 2}}))
-		ok(t, db.Put("docs:3", hc.Fields{"title": "three"}))
+		ok(t, db.Update(func(tx *hc.Tx) error {
+			ok(t, tx.Put("docs:3", hc.Fields{"title": "three"}))
+			ok(t, tx.Put("gone:1", nil))
+			ok(t, tx.Link("docs:1", "cites", "docs:3"))
+			ok(t, tx.Link("docs:1", "cites", "gone:1"))
+			ok(t, tx.Link("docs:1", "owns", "gone:1"))
+			return tx.Link("gone:1", "back", "docs:1")
+		}))
 		return d, db
 	}
 	commit := func(tx *hc.Tx) error {
 		ok(t, tx.Put("docs:1", hc.Fields{"n": 2, "new_field": "x"}))
 		ok(t, tx.Put("docs:2", hc.Fields{"vec": hc.Vector{3, 4}}))
 		ok(t, tx.Put("fresh:1", hc.Fields{"a": 1}))
+		ok(t, tx.Link("docs:1", "owns", "docs:2"))
+		ok(t, tx.Link("fresh:1", "cites", "docs:1"))
+		ok(t, tx.Unlink("docs:1", "cites", "gone:1"))
+		ok(t, tx.Drop("gone"))
 		ok(t, tx.Delete("docs:3"))
 		return nil
 	}
@@ -284,22 +298,39 @@ func TestUpdateRollsBackWhenTheCommitFails(t *testing.T) {
 
 // TestAnUpdateThatChangesNothingWritesNothing checks that the log is
 // written only by a commit with changes: not by an Update whose function
-// fails, panics, makes no change, or makes only writes that fail.
+// fails, panics, makes no change, or makes only writes that fail, nor by a
+// link that's there already, which changes nothing, or by reads.
 func TestAnUpdateThatChangesNothingWritesNothing(t *testing.T) {
 	const path = "/db/test.hcx"
 	d := fault.New(1)
 	db := openFault(t, d, path)
-	ok(t, db.Put("docs:1", hc.Fields{"n": 1}))
+	ok(t, db.Put("docs:1", hc.Fields{"n": 1, "vec": hc.Vector{1, 0}}))
+	ok(t, db.Put("docs:3", nil))
+	ok(t, db.Link("docs:1", "cites", "docs:3"))
 	writes := d.Calls(fault.WriteAt, path)
 	boom := errors.New("boom")
 	for _, fn := range []func(tx *hc.Tx) error{
 		func(tx *hc.Tx) error { tx.Put("docs:2", hc.Fields{"n": 2}); return boom },
 		func(tx *hc.Tx) error { tx.Put("docs:2", hc.Fields{"n": 2}); panic(boom) },
+		func(tx *hc.Tx) error { tx.Link("docs:3", "cites", "docs:1"); tx.Drop("docs"); return boom },
 		func(tx *hc.Tx) error { _, err := tx.Get("docs:1"); return err },
 		func(tx *hc.Tx) error {
 			tx.Put("Docs:2", nil)
 			tx.Put("docs:2", hc.Fields{"n": math.NaN()})
 			tx.Delete("docs:9")
+			tx.Link("docs:1", "cites", "docs:9")
+			tx.Link("docs:1", "", "docs:3")
+			tx.Unlink("docs:1", "owns", "docs:3")
+			tx.Drop("nosuch")
+			tx.Drop("Bad")
+			return nil
+		},
+		func(tx *hc.Tx) error { return tx.Link("docs:1", "cites", "docs:3") }, // there already
+		func(tx *hc.Tx) error {
+			tx.Scan("docs:", "", 0)
+			tx.Neighbours("docs:1", hc.Both, "")
+			tx.Walk("docs:1", hc.Both, "", 3)
+			tx.Nearest("docs", hc.Vector{1, 1}, 3, "")
 			return nil
 		},
 	} {
@@ -308,12 +339,124 @@ func TestAnUpdateThatChangesNothingWritesNothing(t *testing.T) {
 			db.Update(fn)
 		}()
 	}
+	ok(t, db.Link("docs:1", "cites", "docs:3"))
+	wantErr(t, db.Unlink("docs:1", "owns", "docs:3"), hc.ErrNotFound)
+	wantErr(t, db.Drop("nosuch"), hc.ErrNotFound)
+	db.Scan("docs:", "", 0)
+	db.Neighbours("docs:1", hc.Both, "")
+	db.Walk("docs:1", hc.Both, "", 3)
+	db.Nearest("docs", hc.Vector{1, 1}, 3, "")
 	ok(t, db.Delete("docs:1"))
 	if err := db.Delete("docs:1"); !errors.Is(err, hc.ErrNotFound) {
 		t.Fatalf("deleting a missing record gave %v", err)
 	}
 	if n := d.Calls(fault.WriteAt, path) - writes; n != 2 {
-		t.Errorf("the Updates that changed nothing and one Delete made %d writes, where the Delete's batch and marker make 2", n)
+		t.Errorf("the Updates that changed nothing, the reads and one Delete made %d writes, where the Delete's batch and marker make 2", n)
+	}
+}
+
+// TestAReopenReadsBackLinksAndDrops commits links of several types, links
+// from a record to itself, unlinks of one type and of every type, deletes
+// and drops that take links with them both ways, and a table dropped and
+// made again with another vector size, and checks that a reopen reads all
+// of it back: every record's links both ways, a walk from each record, a
+// scan of every table and a search of every table, bit for bit.
+func TestAReopenReadsBackLinksAndDrops(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.hcx")
+	db := open(t, path)
+	var keys []string
+	for _, tbl := range []string{"docs", "people", "tags"} {
+		for i := range 6 {
+			keys = append(keys, fmt.Sprintf("%s:%d", tbl, i))
+		}
+	}
+	ok(t, db.Update(func(tx *hc.Tx) error {
+		for i, k := range keys {
+			v := hc.Vector{float32(i%5) - 2, 1, float32(i % 3)}
+			if strings.HasPrefix(k, "people:") {
+				v = hc.Vector{float32(i), 1}
+			}
+			ok(t, tx.Put(k, hc.Fields{"i": i, "vec": v}))
+		}
+		for i, from := range keys {
+			for j, to := range keys {
+				if (i*7+j*3)%5 == 0 {
+					ok(t, tx.Link(from, []string{"cites", "owns", "a b", "é"}[(i+j)%4], to))
+				}
+			}
+		}
+		return nil
+	}))
+	for i := range 6 {
+		ok(t, db.Link(keys[i], "self", keys[i]))
+	}
+	ok(t, db.Unlink(keys[0], "", keys[0]))
+	out, err := db.Neighbours(keys[1], hc.Out, "")
+	ok(t, err)
+	ok(t, db.Unlink(out[0].From, out[0].Type, out[0].To)) // one type of several
+	both, err := db.Neighbours(keys[7], hc.Both, "")
+	ok(t, err)
+	for _, l := range both {
+		if l.From != l.To {
+			ok(t, db.Unlink(l.From, "", l.To)) // every type
+			break
+		}
+	}
+	ok(t, db.Delete("docs:2"))
+	ok(t, db.Delete("people:3"))
+	ok(t, db.Drop("tags"))
+	ok(t, db.Put("tags:9", hc.Fields{"vec": hc.Vector{1, 2, 3, 4}}))
+	ok(t, db.Link("tags:9", "back", "docs:1"))
+	ok(t, db.Update(func(tx *hc.Tx) error {
+		ok(t, tx.Drop("people"))
+		ok(t, tx.Put("people:1", hc.Fields{"vec": hc.Vector{0, 0, 0, 0, 1}}))
+		return tx.Link("docs:1", "knows", "people:1")
+	}))
+	keys = append(keys, "tags:9")
+
+	read := func(db *hc.DB) string {
+		var b strings.Builder
+		b.WriteString(look(db, keys...))
+		for _, k := range keys {
+			for _, dir := range []hc.Direction{hc.Out, hc.In, hc.Both} {
+				steps, err := db.Walk(k, dir, "", hc.MaxDepth)
+				fmt.Fprintf(&b, "walk %s %v: %v %s\n", k, dir, steps, describeErr(err))
+			}
+		}
+		for _, tbl := range []string{"docs", "people", "tags"} {
+			recs, err := db.Scan(tbl+":", "", 0)
+			fmt.Fprintf(&b, "scan %s: %s\n", tbl, describeErr(err))
+			for _, r := range recs {
+				fmt.Fprintf(&b, "  %s %s\n", r.Key, show(r.Fields))
+			}
+			for _, n := range []int{2, 3, 4, 5} {
+				q := make(hc.Vector, n)
+				q[0] = 1
+				hits, err := db.Nearest(tbl, q, 20, "")
+				fmt.Fprintf(&b, "nearest %s %d: %s", tbl, n, describeErr(err))
+				for _, h := range hits {
+					fmt.Fprintf(&b, " %s %016x", h.Key, math.Float64bits(h.Distance))
+				}
+				b.WriteString("\n")
+			}
+		}
+		return b.String()
+	}
+	before := read(db)
+	for _, want := range []string{`"docs:1 -knows-> people:1"`, `"tags:9 -back-> docs:1"`, `"docs:5 -self-> docs:5"`,
+		"tags:1: nil not found", "people:3: nil not found", "docs:2: nil not found", "nearest tags 4: ok tags:9 "} {
+		if !strings.Contains(before, want) {
+			t.Fatalf("the commits didn't give %s:\n%s", want, before)
+		}
+	}
+	for _, unwanted := range []string{"-> tags:1", "-> people:3", "-> docs:2", `"docs:0 -self-> docs:0"`} {
+		if strings.Contains(before, unwanted) {
+			t.Fatalf("the commits left %s:\n%s", unwanted, before)
+		}
+	}
+	ok(t, db.Close())
+	if after := read(open(t, path)); after != before {
+		t.Fatalf("after a reopen the database reads\n%s\nwhere before it, it read\n%s", after, before)
 	}
 }
 

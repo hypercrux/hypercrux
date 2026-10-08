@@ -6,6 +6,7 @@
 package hypercrux
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -41,12 +42,8 @@ func TableOf(key string) (string, error) { return rules.TableOf(key) }
 
 // Get returns the fields of the record with this key, or ErrNotFound.
 func (db *DB) Get(key string) (Fields, error) {
-	s, err := db.current()
-	if err != nil {
-		return nil, err
-	}
 	var f Fields
-	err = s.Read(func(r store.Reader) error {
+	err := db.read(func(r store.Reader) error {
 		var err error
 		f, err = get(r, key)
 		return err
@@ -191,18 +188,75 @@ func (t *Tx) Delete(key string) error {
 // beginning), at most limit of them, or all of them when limit is 0.
 // Vectors are left out; Get a record to see its vector.
 func (db *DB) Scan(prefix, after string, limit int) ([]Record, error) {
-	return nil, notYet("DB.Scan", "G2")
+	var recs []Record
+	err := db.read(func(r store.Reader) error {
+		var err error
+		recs, err = scan(r, prefix, after, limit)
+		return err
+	})
+	return recs, err
 }
 
 // Scan is DB.Scan inside the transaction.
 func (t *Tx) Scan(prefix, after string, limit int) ([]Record, error) {
-	return nil, notYet("Tx.Scan", "G2")
+	stx, err := t.open()
+	if err != nil {
+		return nil, err
+	}
+	return scan(stx, prefix, after, limit)
+}
+
+// scan reads from r the records whose keys start with prefix and come after
+// after, as 0.x's Scan gives them: in byte order of key, at most limit of
+// them or all of them for 0, each with the fields that hold a value under
+// the names its table spells them with, by Value.Go, without its vector,
+// and nil when there are none. The store's Scan checks the prefix, with
+// 0.x's errors in 0.x's order, and 0.x checks the limit after that.
+// Everything is copied out, as get copies it.
+func scan(r store.Reader, prefix, after string, limit int) ([]Record, error) {
+	if plant == "hypercrux/scan-limit-first" && limit < 0 {
+		return nil, fmt.Errorf("%w: limit %d", ErrInvalid, limit)
+	}
+	c, err := r.Scan(prefix, after)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("%w: limit %d", ErrInvalid, limit)
+	}
+	// The store has checked that the prefix has a colon, and every record
+	// it gives is in the table before it.
+	t, _ := r.Table(prefix[:strings.IndexByte(prefix, ':')])
+	var recs []Record
+	for limit == 0 || len(recs) < limit {
+		rec, more := c.Next()
+		if !more {
+			break
+		}
+		f := make(Fields, len(rec.Fields))
+		for _, fv := range rec.Fields {
+			f[t.Fields[fv.Index]] = fv.Value.Go()
+		}
+		if rec.Vec != nil && plant == "hypercrux/scan-vector-kept" {
+			f[t.Fields[t.Vec]] = Vector(slices.Clone(rec.Vec))
+		}
+		recs = append(recs, Record{Key: rec.Key, Fields: f})
+	}
+	return recs, nil
 }
 
 // Drop deletes a table with its records and every link to or from them. Its
 // vector size goes too, so a new table of that name can take vectors of
 // another size. It returns ErrNotFound if there's no such table.
-func (db *DB) Drop(table string) error { return notYet("DB.Drop", "G2") }
+func (db *DB) Drop(table string) error {
+	return db.Update(func(tx *Tx) error { return tx.Drop(table) })
+}
 
 // Drop is DB.Drop inside a transaction.
-func (t *Tx) Drop(table string) error { return notYet("Tx.Drop", "G2") }
+func (t *Tx) Drop(table string) error {
+	stx, err := t.open()
+	if err != nil {
+		return err
+	}
+	return stx.Drop(table)
+}

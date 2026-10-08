@@ -77,3 +77,8 @@ logfile/cut-unsynced ./beta/internal/logfile
 logfile/cut-without-marker ./beta/internal/logfile
 logfile/stuck-lets-go ./beta/internal/logfile
 logfile/check-cuts-what-failed ./beta/internal/logfile
+hypercrux/scan-limit-first ./beta/hypercrux
+hypercrux/scan-vector-kept ./beta/hypercrux
+hypercrux/neighbours-unlocked ./beta/hypercrux
+hypercrux/nearest-nil-for-none ./beta/hypercrux
+hypercrux/filter-ignored ./beta/hypercrux

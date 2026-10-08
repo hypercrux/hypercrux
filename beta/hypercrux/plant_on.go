@@ -21,9 +21,24 @@ import "os"
 //     transaction, so a batch that breaks the rules goes in by halves.
 //   - hypercrux/vector-shared: Get hands out the copy's own vector, so a
 //     caller that changes it changes the database.
+//   - hypercrux/scan-limit-first: Scan checks its limit before its prefix,
+//     so a bad prefix with a limit below 0 gives the limit's error, where
+//     0.x gives the prefix's.
+//   - hypercrux/scan-vector-kept: Scan gives each record's vector among its
+//     fields, which 0.x's Scan leaves out.
+//   - hypercrux/neighbours-unlocked: DB.Neighbours reads the copy without
+//     its Read, so it neither waits for an Update's changes to commit nor
+//     fails inside one, and can read changes that roll back.
+//   - hypercrux/nearest-nil-for-none: Nearest gives nil for a search that
+//     finds nothing in a table with a vector size, where 0.x gives an empty
+//     list.
+//   - hypercrux/filter-ignored: Nearest with a filter searches without it,
+//     where it should wait for task G4 as a stub.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
-	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared":
+	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
+		"hypercrux/scan-limit-first", "hypercrux/scan-vector-kept", "hypercrux/neighbours-unlocked",
+		"hypercrux/nearest-nil-for-none", "hypercrux/filter-ignored":
 		return p
 	}
 	return ""

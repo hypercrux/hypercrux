@@ -91,15 +91,21 @@ func show(v any) string {
 	return fmt.Sprintf("%T %v", v, v)
 }
 
+// showFields writes fields with each name in lower case, in byte order of
+// those names. Field names are ASCII and match regardless of case, and the
+// two engines can spell a field differently on purpose: a Put that fails
+// changes nothing in the Beta, where 0.x keeps the new fields it named,
+// spelt as it spelt them, so a later Put that names one of them in another
+// case is spelt the failed Put's way in 0.x and its own way in the Beta.
 func showFields(f c.Fields) string {
 	names := make([]string, 0, len(f))
 	for n := range f {
 		names = append(names, n)
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
 	parts := make([]string, len(names))
 	for i, n := range names {
-		parts[i] = n + ": " + show(f[n])
+		parts[i] = strings.ToLower(n) + ": " + show(f[n])
 	}
 	return "{" + strings.Join(parts, ", ") + "}"
 }

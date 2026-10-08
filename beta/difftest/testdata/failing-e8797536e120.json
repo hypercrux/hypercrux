@@ -1,0 +1,73 @@
+{
+  "engines": [
+    "HyperCrux 0.2.0 on SQLite",
+    "HyperCrux 0.0.0-beta in Go"
+  ],
+  "seed": 2961,
+  "mismatch": "step 1, {\"op\":\"update\",\"ops\":[{\"op\":\"put\",\"key\":\"t_1:😀\",\"fields\":[{\"name\":\"Title\",\"value\":{\"bool\":false}},{\"name\":\"vec\",\"value\":{\"vector\":[\"be08b5e7\",\"bfcf9063\",\"bfcdd56e\",\"3dcccccd\"]}}]},{\"op\":\"put\",\"key\":\"t_1:😀\",\"fields\":[{\"name\":\"title\",\"value\":{\"int\":\"9007199254740993\"}}]},{\"op\":\"get\",\"key\":\"t_1:😀\"}],\"fail\":true}: the answers differ\n  first engine:  [invalid | ok | ok {Title: int 9007199254740993, vec: vector [-0.37590694 (bec076e0), -0.12232903 (bdfa87a4), -0.9099228 (bf68f0b3), 1.6698743 (3fd5be71), 0.9112944 (3f694a97)]}] rolled back (hypercrux: invalid: table t_1 holds vectors of 5 values, and t_1:😀 has 4 |  |  | difftest: rolled back on purpose)\n  second engine: [invalid | ok | ok {title: int 9007199254740993, vec: vector [-0.37590694 (bec076e0), -0.12232903 (bdfa87a4), -0.9099228 (bf68f0b3), 1.6698743 (3fd5be71), 0.9112944 (3f694a97)]}] rolled back (hypercrux: invalid: table t_1 holds vectors of 5 values, and t_1:😀 has 4 |  |  | difftest: rolled back on purpose)",
+  "ops": [
+    {
+      "op": "put",
+      "key": "t_1:😀",
+      "fields": [
+        {
+          "name": "vec",
+          "value": {
+            "vector": [
+              "bec076e0",
+              "bdfa87a4",
+              "bf68f0b3",
+              "3fd5be71",
+              "3f694a97"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "op": "update",
+      "ops": [
+        {
+          "op": "put",
+          "key": "t_1:😀",
+          "fields": [
+            {
+              "name": "Title",
+              "value": {
+                "bool": false
+              }
+            },
+            {
+              "name": "vec",
+              "value": {
+                "vector": [
+                  "be08b5e7",
+                  "bfcf9063",
+                  "bfcdd56e",
+                  "3dcccccd"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "op": "put",
+          "key": "t_1:😀",
+          "fields": [
+            {
+              "name": "title",
+              "value": {
+                "int": "9007199254740993"
+              }
+            }
+          ]
+        },
+        {
+          "op": "get",
+          "key": "t_1:😀"
+        }
+      ],
+      "fail": true
+    }
+  ]
+}

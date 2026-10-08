@@ -21,11 +21,13 @@ import (
 // TestConformanceAfterAReopen runs the suite on the Beta with every read
 // through a database made on a fresh open of the file: the adapter closes
 // the database and opens it again before each read. So every check a test
-// makes through the database reads what the file holds. Reads through a
-// transaction stay inside its Update. When a test closes a database, every key the test named is
-// read once more, then again after one last reopen, and the two reads must
-// agree, as must Check's counts. It skips what the plain run skips, and two
-// tests that a reopen before every read doesn't suit.
+// makes through the database reads what the file holds, its scans, links,
+// walks and searches among them. Reads through a transaction stay inside
+// its Update. When a test closes a database, every key the test named is
+// read once more, with its links both ways, then again after one last
+// reopen, and the two reads must agree, as must Check's counts. It skips
+// what the plain run skips, and two tests that a reopen before every read
+// doesn't suit.
 func TestConformanceAfterAReopen(t *testing.T) {
 	e := reopening{log: &problems{}}
 	conformance.Run(t, e)
@@ -261,13 +263,15 @@ func (d *reopened) Close() error {
 	return db.Close()
 }
 
-// describe reads each key, and Check, and says what each gave, with every
-// number's bits, so that -0 and 0 differ.
+// describe reads each key, with its links both ways, and Check, and says
+// what each gave, with every number's bits, so that -0 and 0 differ.
 func describe(db conformance.DB, keys []string) []string {
 	var out []string
 	for _, k := range keys {
 		f, err := db.Get(k)
 		out = append(out, fmt.Sprintf("Get(%q) gives %s, %v", k, show(f), err))
+		links, err := db.Neighbours(k, conformance.Both, "")
+		out = append(out, fmt.Sprintf("Neighbours(%q, both) gives %q, %v", k, links, err))
 	}
 	rep, err := db.Check()
 	return append(out, fmt.Sprintf("Check gives %+v, %v", rep, err))
