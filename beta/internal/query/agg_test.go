@@ -206,7 +206,7 @@ func TestAggregatesTakeTheirArgumentsScope(t *testing.T) {
 		}
 		return st.(*Select).Results[0].Expr
 	}
-	e := expr("date('now') || count(*)")
+	e := expr("walk('docs:1', 2) || count(*)")
 	aggs, err := NewAggregates([]Expr{e}, inner)
 	if err != nil || aggs.Len() != 1 {
 		t.Fatalf("got %v aggregates, %v", aggs, err)
@@ -216,7 +216,7 @@ func TestAggregatesTakeTheirArgumentsScope(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := []value.Value{value.Int(7)}
-	if v, err := ev(&Frame{Row: &row}); err != nil || v != value.Text("date()7") {
+	if v, err := ev(&Frame{Row: &row}); err != nil || v != value.Text("walk()7") {
 		t.Errorf("got %s, %v", v, err)
 	}
 	// The parser refuses a field beside an aggregate in the result columns,

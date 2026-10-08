@@ -314,7 +314,7 @@ func TestARowScopeFindsNames(t *testing.T) {
 		{"walk.n", "no such column: walk.n"}, {"zz", "no such column: zz"},
 		{"(SELECT n FROM docs WHERE key = 'docs:1')", "no such table: docs"},
 		{"'a' IN (SELECT key FROM walk('docs:1', 1))", "no such table: walk"},
-		{"date('now')", "date() needs the statement's planner"},
+		{"walk('docs:1', 2)", "walk() needs the statement's planner"},
 	}
 	for _, cs := range cases {
 		st, err := Parse("SELECT " + cs.expr + " FROM t")
@@ -341,8 +341,8 @@ func TestARowScopeFindsNames(t *testing.T) {
 
 	// The rest goes to Next.
 	s.Next = &fakeScope{}
-	ev := compileAll(t, s, "date('now') || count(*)")[0]
-	if v, err := ev(&Frame{Row: &row}); err != nil || v != value.Text("date()count()") {
+	ev := compileAll(t, s, "walk('docs:1', 2) || count(*)")[0]
+	if v, err := ev(&Frame{Row: &row}); err != nil || v != value.Text("walk()count()") {
 		t.Errorf("Next gave %s, %v", v, err)
 	}
 
