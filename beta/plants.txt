@@ -58,3 +58,4 @@ store/both-not-merged ./beta/internal/store
 store/walk-unsorted ./beta/internal/store
 store/walk-start-included ./beta/internal/store
 store/snapshot-links-by-table ./beta/internal/store
+procs/marker-before-batch ./beta/internal/procs
