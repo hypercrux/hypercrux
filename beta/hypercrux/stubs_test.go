@@ -8,6 +8,7 @@ package hypercrux_test
 import (
 	"bytes"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,28 +23,50 @@ func errOf[T any](_ T, err error) error { return err }
 // wraps errors.ErrUnsupported and neither of 0.x's errors, naming the call
 // and the task that makes it work, and does nothing else. The task that
 // makes a call work takes its line out of this test.
+//
+// A statement that parses, with an argument for each ? mark, waits for task
+// G4, which runs SQL, through each way into the driver: Exec, Query and
+// QueryRow on the database and on a transaction, and SQL(), with a prepared
+// statement among them. They go through the driver on an open database,
+// since on one that isn't open they fail with ErrClosed first.
 func TestTheStubsSayWhatsMissing(t *testing.T) {
+	type stub struct {
+		name, task string
+		err        error
+	}
 	db, tx := new(hc.DB), new(hc.Tx)
 	q := hc.Vector{1, 0}
 	var out bytes.Buffer
-	stubs := []struct {
-		name, task string
-		err        error
-	}{
+	stubs := []stub{
 		{"DB.Nearest", "G4", errOf(db.Nearest("docs", q, 10, "status = ?", "open"))},
 		{"Tx.Nearest", "G4", errOf(tx.Nearest("docs", q, 10, "status = ?", "open"))},
-		{"DB.Exec", "G4", errOf(db.Exec("DELETE FROM docs"))},
-		{"Tx.Exec", "G4", errOf(tx.Exec("DELETE FROM docs"))},
-		{"DB.Query", "G4", errOf(db.Query("SELECT 1"))},
-		{"Tx.Query", "G4", errOf(tx.Query("SELECT 1"))},
-		{"SQL", "G4", db.QueryRow("SELECT 1").Scan(new(int))},
-		{"SQL", "G4", tx.QueryRow("SELECT ?", 1).Scan(new(int))},
-		{"SQL", "G4", db.SQL().Ping()},
-		{"SQL", "G4", errOf(db.SQL().Begin())},
 		{"DB.Export", "G6", db.Export(&out)},
 		{"DB.Import", "G6", db.Import(strings.NewReader(""))},
 		{"DB.Compact", "G5", db.Compact()},
 	}
+
+	live := open(t, filepath.Join(t.TempDir(), "test.hcx"))
+	ok(t, live.Put("docs:1", hc.Fields{"n": 1}))
+	prepared, err := live.SQL().Prepare("SELECT n FROM docs WHERE n = ?")
+	ok(t, err)
+	defer prepared.Close()
+	stubs = append(stubs,
+		stub{"SQL", "G4", errOf(live.Exec("DELETE FROM docs"))},
+		stub{"SQL", "G4", errOf(live.Query("SELECT n FROM docs"))},
+		stub{"SQL", "G4", live.QueryRow("SELECT ?", 1).Scan(new(int))},
+		stub{"SQL", "G4", errOf(live.SQL().Exec("UPDATE docs SET n = ?", 2))},
+		stub{"SQL", "G4", errOf(live.SQL().Query("SELECT 1"))},
+		stub{"SQL", "G4", prepared.QueryRow(1).Scan(new(int))},
+	)
+	ok(t, live.Update(func(tx *hc.Tx) error {
+		stubs = append(stubs,
+			stub{"SQL", "G4", errOf(tx.Exec("INSERT INTO docs (key) VALUES (?)", "docs:2"))},
+			stub{"SQL", "G4", errOf(tx.Query("SELECT n FROM docs WHERE key = ?", "docs:1"))},
+			stub{"SQL", "G4", tx.QueryRow("SELECT 1").Scan(new(int))},
+		)
+		return nil
+	}))
+
 	for _, s := range stubs {
 		want := "hypercrux: " + s.name + " is an unsupported operation in the Beta until task " + s.task
 		switch {
@@ -61,17 +84,11 @@ func TestTheStubsSayWhatsMissing(t *testing.T) {
 	if db.Path() != "" {
 		t.Errorf("a DB that was never opened has the path %q", db.Path())
 	}
-
-	// SQL hands out a handle that a program can set up without a panic,
-	// which the conformance suite's OneConnection does first.
-	h := db.SQL()
-	h.SetMaxOpenConns(1)
-	if err := h.Ping(); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("Ping on one connection: %v", err)
+	if f, err := live.Get("docs:1"); err != nil || f["n"] != int64(1) {
+		t.Errorf("after the SQL stubs, docs:1 gives %v, %v", f, err)
 	}
-	h.SetMaxOpenConns(0)
-	if tx.QueryRow("SELECT 1").Err() == nil {
-		t.Error("QueryRow's row has no error")
+	if _, err := live.Get("docs:2"); !errors.Is(err, hc.ErrNotFound) {
+		t.Errorf("after the SQL stubs, docs:2 gives %v", err)
 	}
 }
 

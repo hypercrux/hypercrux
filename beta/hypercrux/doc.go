@@ -22,7 +22,12 @@
 // Update of its own takes the write lock; following them between Updates
 // is for tasks F6 and F9. The helpers that hold no state work as 0.x's do:
 // ParseDirection, ParseVector, DecodeVector, and the methods of Vector,
-// Direction and Link. The rest, SQL and Nearest with a filter among them,
-// returns an error that wraps errors.ErrUnsupported and names the task that
-// makes it work.
+// Direction and Link.
+//
+// Query, QueryRow, Exec and SQL() go through the package's database/sql
+// driver (task G3), which parses each statement and takes its arguments,
+// and hands it on inside a transaction's Update or through the database.
+// SQL().Begin returns an error. Running a statement waits for task G4. The
+// rest, running SQL and Nearest with a filter among them, returns an error
+// that wraps errors.ErrUnsupported and names the task that makes it work.
 package hypercrux

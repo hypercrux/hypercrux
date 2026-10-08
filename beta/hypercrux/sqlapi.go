@@ -5,68 +5,75 @@
 
 package hypercrux
 
-import (
-	"context"
-	"database/sql"
-	"database/sql/driver"
-	"sync"
-)
+import "database/sql"
+
+// The methods hand each statement to database/sql through calls, with
+// the DB and the Tx in its context, and the driver runs it there
+// (driver.go). A closed database and an ended transaction fail with
+// ErrClosed before anything looks at the statement or its arguments, as
+// every other call does.
 
 // Exec runs an SQL statement that changes the database: an INSERT, an
 // UPDATE or a DELETE on one table, in the subset beta/SQL.md sets out. Each
 // row it writes goes through the same checks as Put and Delete, and a
 // statement that breaks one of their rules fails with an error that wraps
 // ErrInvalid. A statement is all or nothing.
+//
+// The result's RowsAffected gives the count of rows the statement changed,
+// and 0 for a SELECT, whose rows Exec drops. Its LastInsertId returns an
+// error, since records have no row numbers.
 func (db *DB) Exec(query string, args ...any) (sql.Result, error) {
-	return nil, notYet("DB.Exec", "G4")
+	if _, err := db.current(); err != nil {
+		return nil, err
+	}
+	return calls().ExecContext(db.context(), query, args...)
 }
 
 // Exec is DB.Exec inside the transaction. A statement that fails undoes its
 // own changes, and the transaction carries on.
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
-	return nil, notYet("Tx.Exec", "G4")
+	if _, err := t.open(); err != nil {
+		return nil, err
+	}
+	return calls().ExecContext(t.context(), query, args...)
 }
 
 // Query runs an SQL query in the subset beta/SQL.md sets out. Besides its
 // text and number functions it can use distance(a, b), vector(json) and
 // walk(key, depth [, type [, direction]]), which works as a table and as a
 // function giving JSON text.
+//
+// Query reads every row before it returns, so rows left open hold up no
+// Update, and they go on giving what the database held when the query ran.
+// A write through Query runs, and gives no columns and no rows.
 func (db *DB) Query(query string, args ...any) (*sql.Rows, error) {
-	return nil, notYet("DB.Query", "G4")
+	if _, err := db.current(); err != nil {
+		return nil, err
+	}
+	return calls().QueryContext(db.context(), query, args...)
 }
 
-// Query is DB.Query inside the transaction.
+// Query is DB.Query inside the transaction, which sees the transaction's
+// changes.
 func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
-	return nil, notYet("Tx.Query", "G4")
+	if _, err := t.open(); err != nil {
+		return nil, err
+	}
+	return calls().QueryContext(t.context(), query, args...)
 }
 
 // QueryRow runs an SQL query that returns at most one row.
 func (db *DB) QueryRow(query string, args ...any) *sql.Row {
-	return stubSQL().QueryRow(query, args...)
+	if _, err := db.current(); err != nil {
+		return failedRow(err)
+	}
+	return calls().QueryRowContext(db.context(), query, args...)
 }
 
 // QueryRow is DB.QueryRow inside the transaction.
 func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
-	return stubSQL().QueryRow(query, args...)
+	if _, err := t.open(); err != nil {
+		return failedRow(err)
+	}
+	return calls().QueryRowContext(t.context(), query, args...)
 }
-
-// stubSQL is the database/sql handle that SQL and QueryRow hand out until
-// task G3 writes the Beta's driver. Every connection it tries fails with a
-// stub's error, so every call through it returns that error, and a caller
-// that scans a row or sets a pool size doesn't panic on a nil handle. It's
-// made on first use, since database/sql starts a goroutine for each handle.
-var stubSQL = sync.OnceValue(func() *sql.DB { return sql.OpenDB(stubConnector{}) })
-
-// stubConnector is a driver.Connector whose connections all fail.
-type stubConnector struct{}
-
-func (stubConnector) Connect(context.Context) (driver.Conn, error) {
-	return nil, notYet("SQL", "G4")
-}
-
-func (stubConnector) Driver() driver.Driver { return stubDriver{} }
-
-// stubDriver is the driver.Driver behind stubConnector.
-type stubDriver struct{}
-
-func (stubDriver) Open(string) (driver.Conn, error) { return nil, notYet("SQL", "G4") }

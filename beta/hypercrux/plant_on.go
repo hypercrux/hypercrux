@@ -5,7 +5,10 @@
 
 package hypercrux
 
-import "os"
+import (
+	"os"
+	"unsafe"
+)
 
 // A build with the hypercrux_planted tag can switch on one of this
 // package's planted bugs, named in HYPERCRUX_PLANT. scripts/planted.sh runs
@@ -34,12 +37,42 @@ import "os"
 //     list.
 //   - hypercrux/filter-ignored: Nearest with a filter searches without it,
 //     where it should wait for task G4 as a stub.
+//   - hypercrux/blob-shared: the driver hands bytes and vectors to
+//     database/sql without copying them, so a caller that writes into a
+//     sql.RawBytes writes into the store's copy.
+//   - hypercrux/time-layout: the driver turns a time.Time argument into text
+//     in RFC 3339's layout, where go-sqlite3 writes
+//     2006-01-02 15:04:05.999999999-07:00.
+//   - hypercrux/tx-dropped: a Tx's Query, QueryRow and Exec run through the
+//     database, outside the transaction's Update.
+//   - hypercrux/row-kept: the driver keeps the slice the engine hands over
+//     for each row without copying its values, so when the engine uses one
+//     buffer for every row, every row reads as the last.
+//   - hypercrux/rows-pulled-late: the driver reads a SELECT's rows from the
+//     engine as database/sql asks for them, after the read has ended, so
+//     they see changes made since Query returned.
+//   - hypercrux/write-kept: a write that fails inside an Update keeps the
+//     changes it made before it failed, so the Update commits half a
+//     statement.
+//   - hypercrux/sql-wraps-invalid: an error through SQL() still wraps
+//     ErrInvalid, where 0.x's wraps nothing.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
 		"hypercrux/scan-limit-first", "hypercrux/scan-vector-kept", "hypercrux/neighbours-unlocked",
-		"hypercrux/nearest-nil-for-none", "hypercrux/filter-ignored":
+		"hypercrux/nearest-nil-for-none", "hypercrux/filter-ignored",
+		"hypercrux/blob-shared", "hypercrux/time-layout", "hypercrux/tx-dropped", "hypercrux/row-kept",
+		"hypercrux/rows-pulled-late", "hypercrux/write-kept", "hypercrux/sql-wraps-invalid":
 		return p
 	}
 	return ""
 }()
+
+// shared returns the bytes of s without copying them, for
+// hypercrux/blob-shared, and an empty slice for empty s, as []byte(s) does.
+func shared(s string) []byte {
+	if s == "" {
+		return []byte{}
+	}
+	return unsafe.Slice(unsafe.StringData(s), len(s))
+}

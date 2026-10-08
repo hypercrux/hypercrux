@@ -127,3 +127,10 @@ query/substr-zero-is-one ./beta/internal/query
 query/like-folds-unicode ./beta/internal/query
 query/where-or-works-out-both ./beta/internal/query
 query/time-in-utc ./beta/internal/query
+hypercrux/blob-shared ./beta/hypercrux
+hypercrux/time-layout ./beta/hypercrux
+hypercrux/tx-dropped ./beta/hypercrux
+hypercrux/row-kept ./beta/hypercrux
+hypercrux/rows-pulled-late ./beta/hypercrux
+hypercrux/write-kept ./beta/hypercrux
+hypercrux/sql-wraps-invalid ./beta/hypercrux

@@ -6,6 +6,7 @@
 package hypercrux
 
 import (
+	"database/sql"
 	"fmt"
 
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -85,6 +86,10 @@ func open(files fsys.FS, path string, o logfile.Options) (*DB, error) {
 	// made through db once Open has handed it out.
 	t.opening = false
 	db.log = l
+	// The database/sql handle that SQL gives, over connections bound to db,
+	// and what runs the statements that parse until task G4 brings SQL.
+	db.sql = sql.OpenDB(connector{db: db})
+	db.engine = notYetEngine{}
 	return db, nil
 }
 

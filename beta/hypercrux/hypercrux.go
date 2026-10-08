@@ -98,6 +98,12 @@ type DB struct {
 	mem atomic.Pointer[store.Store]
 	// log is the file, with the write lock.
 	log *logfile.Log
+	// sql is the handle SQL gives, over the Beta's driver, made in Open
+	// and closed by Close (driver.go).
+	sql *sql.DB
+	// engine runs the statements that parse, through SQL and the methods
+	// alike (driver.go).
+	engine engine
 }
 
 // Open opens the database at path, creating it if it doesn't exist, and
@@ -138,6 +144,9 @@ func (db *DB) Close() error {
 	// nothing reaches the copy through the log after this.
 	err := db.log.Close()
 	db.mem.Store(nil) // reads fail from now on, and the copy can go
+	// Statements through SQL() fail from now on too, with database/sql's
+	// error for a closed handle. Its connections hold nothing to close.
+	db.sql.Close()
 	if errors.Is(err, ErrClosed) {
 		return nil // another goroutine's Close got there first
 	}
@@ -152,7 +161,19 @@ func (db *DB) Path() string { return db.path }
 // beta/SQL.md sets out, through a driver of the Beta's own, and writes
 // through it keep the same rules as Put and Delete. Transactions go through
 // Update, so its Begin returns an error.
-func (db *DB) SQL() *sql.DB { return stubSQL() }
+//
+// A statement through it runs through the database, outside any Update,
+// so inside one it fails as a call through db does there. Its errors wrap
+// neither ErrInvalid nor ErrNotFound, as in 0.x, where the handle gives
+// SQLite's errors as they are: a rule broken by a write reads as it does in
+// Exec's error, without its "invalid: ". Once the database is closed, the
+// handle is closed too.
+func (db *DB) SQL() *sql.DB {
+	if db.sql == nil {
+		return closedSQL() // a DB that was never opened
+	}
+	return db.sql
+}
 
 // Tx is a write transaction, passed to the function given to Update. It has
 // DB's methods for records, links, vectors and SQL, and everything done
