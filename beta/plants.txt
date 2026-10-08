@@ -59,3 +59,8 @@ store/walk-unsorted ./beta/internal/store
 store/walk-start-included ./beta/internal/store
 store/snapshot-links-by-table ./beta/internal/store
 procs/marker-before-batch ./beta/internal/procs
+logfile/cut-at-zeros ./beta/internal/logfile
+logfile/damage-unconfirmed ./beta/internal/logfile
+logfile/window-edge ./beta/internal/logfile
+logfile/any-sequence-number ./beta/internal/logfile
+logfile/compacted-held-only ./beta/internal/logfile

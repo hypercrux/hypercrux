@@ -10,11 +10,14 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
+	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
 // endLists are the change lists of the batches endCases write, in order.
@@ -32,10 +35,6 @@ type endCase struct {
 	// damage, naming the batch damage, and changes nothing.
 	want   func(w *builder)
 	damage uint64
-
-	// f4 says that F4's look past the end of the log reports the case as
-	// damage. Until F4, the check cuts what doesn't count.
-	f4 bool
 }
 
 // endCases are the ends of a log that TestReadingStopsAtTheEndOfTheLog
@@ -75,6 +74,15 @@ func endCases() []endCase {
 			w.batch(two)
 			w.b[at+format.BatchHeadSize+2] ^= 0x20
 		}, read: 1, want: upTo(1)},
+		{name: "a torn batch holding a copy of the database", build: func(w *builder) {
+			// The copy's markers name batches 1 and 2, which come before the
+			// end of the log, so they show no commit past it.
+			w.commit(one)
+			w.commit(two)
+			copied := value.Bytes(string(w.b))
+			w.batch([]format.Change{{Op: format.Put, Key: "files:1", Fields: []format.Field{{Name: "data", Value: copied}}}})
+			w.b = w.b[:len(w.b)-10]
+		}, read: 2, want: upTo(2)},
 
 		// A batch that counts, with valid changes, and nothing or a torn
 		// marker after it: a writer died after writing it.
@@ -104,26 +112,35 @@ func endCases() []endCase {
 		{name: "a marker naming a later batch", build: func(w *builder) { w.commit(one); w.marker(3, w.batch(two)) }, read: 1, damage: 2},
 
 		// A whole marker further on, naming the next sequence number or a
-		// later one: damage, which F4's look past the end of the log finds.
+		// later one: damage, which the look past the end of the log finds.
 		{name: "a marked batch that fails its checksum", build: func(w *builder) {
 			w.commit(one)
 			at := len(w.b)
 			w.commit(two)
 			w.b[at+format.BatchHeadSize+2] ^= 0x20
-		}, read: 1, want: upTo(1), f4: true},
-		{name: "a marked batch with the wrong sequence number", build: func(w *builder) { w.commit(one); w.marker(3, w.raw(1, 3, []byte("X\x03\x00two"))) }, read: 1, want: upTo(1), f4: true},
-		{name: "a marked batch of another generation", build: func(w *builder) { w.commit(one); w.marker(2, w.raw(2, 2, []byte("X\x03\x00two"))) }, read: 1, want: upTo(1), f4: true},
+		}, read: 1, damage: 2},
+		{name: "a marked batch with the wrong sequence number", build: func(w *builder) { w.commit(one); w.marker(3, w.raw(1, 3, []byte("X\x03\x00two"))) }, read: 1, damage: 2},
+		{name: "a marked batch of another generation", build: func(w *builder) { w.commit(one); w.marker(2, w.raw(2, 2, []byte("X\x03\x00two"))) }, read: 1, damage: 2},
 		{name: "a whole marker past zeros", build: func(w *builder) {
 			w.commit(one)
 			w.b = append(w.b, make([]byte, 64)...)
 			w.marker(2, 0x1234)
-		}, read: 1, want: upTo(1), f4: true},
+		}, read: 1, damage: 2},
+		{name: "a batch's head of zeros, then its marker and another batch", build: func(w *builder) {
+			w.commit(one)
+			at := len(w.b)
+			w.commit(two)
+			clear(w.b[at : at+format.BatchHeadSize])
+			w.commit(three)
+		}, read: 1, damage: 2},
+		{name: "a batch that counts without its marker, then a marked batch", build: func(w *builder) { w.commit(one); w.batch(two); w.commit(three) }, read: 1, damage: 2},
 	}
 }
 
 // holdLock takes flock on the database at path through an open file of its
 // own, as another process's writer holds it, and returns a function that
-// lets go.
+// lets go. The function can be called more than once, from any goroutine,
+// and lets go the first time.
 func holdLock(t *testing.T, path string) func() {
 	t.Helper()
 	f, err := fsys.OS{}.Open(path)
@@ -134,7 +151,18 @@ func holdLock(t *testing.T, path string) func() {
 		f.Close()
 		t.Fatalf("TryLock gave %v, %v", ok, err)
 	}
-	return func() { f.Close() }
+	var once sync.Once
+	return func() { once.Do(func() { f.Close() }) }
+}
+
+// releaseAfter lets go of a lock holdLock took, once d has gone by, and
+// lets go when the test ends if that's sooner.
+func releaseAfter(t *testing.T, release func(), d time.Duration) {
+	timer := time.AfterFunc(d, release)
+	t.Cleanup(func() {
+		timer.Stop()
+		release()
+	})
 }
 
 // TestTheCheckOfTheEndOfTheLog takes each of endCases through the check of
@@ -144,6 +172,10 @@ func holdLock(t *testing.T, path string) func() {
 // to the Target, and everything after the last marker is cut off. Damage is
 // reported, and the file stays as it was. Each file the check leaves opens
 // again without change, and takes a commit after its last batch.
+//
+// For Lock, the Log is opened on the file as far as the end of its log,
+// and then the rest is written in place, as another process would leave
+// it, so the Log's own Open has nothing to check or confirm.
 func TestTheCheckOfTheEndOfTheLog(t *testing.T) {
 	for _, c := range endCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -186,11 +218,17 @@ func TestTheCheckOfTheEndOfTheLog(t *testing.T) {
 
 			t.Run("Lock", func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "db")
-				w.write(path)
-				release := holdLock(t, path)
+				read := newBuilder(t)
+				for _, list := range endLists[:c.read] {
+					read.commit(list)
+				}
+				if !bytes.HasPrefix(w.b, read.b) {
+					t.Fatal("the case doesn't start with the batches it says opening reads")
+				}
+				read.write(path)
 				l, rec := openLog(t, path, Options{})
-				release()
 				rec.holds(t, endLists[:c.read]...)
+				w.write(path)
 				err := lockErr(l)
 				if want == nil {
 					mustBeDamage(t, err, path, c.damage)

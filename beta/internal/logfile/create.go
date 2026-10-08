@@ -87,7 +87,7 @@ func (l *Log) fill(info fsys.Info) error {
 		return err
 	}
 	l.t.Reset()
-	if err := l.load(); err != nil {
+	if _, err := l.load(); err != nil {
 		l.f.Unlock()
 		l.f.Close()
 		l.f = nil

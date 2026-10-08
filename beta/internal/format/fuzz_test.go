@@ -172,12 +172,29 @@ func FuzzDecodeMarker(f *testing.F) {
 	}
 	f.Fuzz(func(t *testing.T, b []byte, gen uint64) {
 		checkMarker(t, b, gen)
+		checkFind(t, b, gen)
 		if len(b) >= markerSize {
 			c := slices.Clone(b)
 			binary.LittleEndian.PutUint32(c[16:], sum(fixtureID[:], binary.LittleEndian.AppendUint64(nil, gen), c[:16]))
 			checkMarker(t, c, gen)
+			checkFind(t, c, gen)
 		}
 	})
+}
+
+// checkFind checks that FindMarker finds the first offset in b where
+// fixtures_test.go's reader reads a whole marker.
+func checkFind(t *testing.T, b []byte, gen uint64) {
+	want := -1
+	for i := range b {
+		if _, _, err := readMarker(b[i:], fixtureID[:], gen); err == nil {
+			want = i
+			break
+		}
+	}
+	if at, m := FindMarker(b, fixtureID, gen); at != want {
+		t.Fatalf("FindMarker gives %d, %+v, where fixtures_test.go's reader reads the first whole marker at %d", at, m, want)
+	}
 }
 
 func checkMarker(t *testing.T, b []byte, gen uint64) {

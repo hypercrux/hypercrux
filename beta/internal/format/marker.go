@@ -6,12 +6,16 @@
 package format
 
 import (
+	"bytes"
 	"encoding/binary"
 	"hash/crc32"
 )
 
 // MarkerSize is a marker's size in bytes.
 const MarkerSize = 20
+
+// magicMarkerBytes is the marker's magic number, for bytes.Index.
+var magicMarkerBytes = []byte(magicMarker)
 
 // Marker is what a marker says: the batch straight before it, by its
 // sequence number and checksum.
@@ -49,6 +53,30 @@ func DecodeMarker(b []byte, id [16]byte, gen uint64) (Marker, bool) {
 		return Marker{}, false
 	}
 	return Marker{Seq: binary.LittleEndian.Uint64(b[4:]), Sum: binary.LittleEndian.Uint32(b[12:])}, true
+}
+
+// FindMarker returns the offset of the first whole marker in b, for a file
+// with the database ID id and the generation gen, and what it says, or -1
+// when b holds none. It tries every offset, as the look past the end of the
+// log does (FORMAT.md, "Reading the log"), and finds each magic number with
+// bytes.Index, so a long run of other bytes, such as zeros or a torn
+// batch's changes, goes by quickly. A magic number whose check value doesn't
+// fit is passed over, and so is a marker that would run past the end of b,
+// which a caller reading a file in pieces finds in the next piece.
+//
+// What a whole marker found there means is the log's to decide, as for
+// DecodeMarker.
+func FindMarker(b []byte, id [16]byte, gen uint64) (int, Marker) {
+	for at := 0; ; at++ {
+		i := bytes.Index(b[at:], magicMarkerBytes)
+		if i < 0 || len(b)-(at+i) < MarkerSize {
+			return -1, Marker{}
+		}
+		at += i
+		if m, whole := DecodeMarker(b[at:], id, gen); whole {
+			return at, m
+		}
+	}
 }
 
 // markerCheck returns a marker's check value: the CRC32C of the database

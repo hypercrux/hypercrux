@@ -7,29 +7,27 @@ package logfile
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 
-	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 )
 
 // FORMAT.md's "Checking the end of the log". Nothing is cut, and nothing is
 // written again in place, without the write lock. Its holder checks the
 // end of the log before it appends anything (lockFile, through catchUp),
-// and so does opening, when it gets the lock without waiting (tryCheck).
-// F6 adds a reader that finds it can take the lock, since the writer is
-// gone, and it calls tryCheck too.
+// and so does opening once it holds the lock: when it gets it without
+// waiting (tryCheck), and when it waited for it to read again what looked
+// like damage (confirm, in damage.go). F6 adds a reader that finds it can
+// take the lock, since the writer is gone, and it calls tryCheck too.
 //
 // The check reads the log on to its end first, under the lock, so the end
 // it looks at is just past the last marked batch. Then:
 //
-//  1. It looks past the end of the log for damage. That's F4's, and its
-//     place is at the top of checkEnd. Until F4, the check takes whatever
-//     doesn't count there for the remains of a commit and cuts it, even
-//     when a whole marker further on shows that a commit was made there.
-//     What it does already is refuse to cut into a compacted part.
+//  1. It looks past the end of the log for damage (pastEnd, in damage.go):
+//     in a compacted file, a log that ends before the compacted part does,
+//     and a whole marker further on naming the next batch or a later one.
+//     Holding the lock, that's damage, and nothing is written.
 //  2. It looks at the first batch after the last marked one (markLeft).
 //     When that batch counts, and no whole marker naming another batch
 //     follows it, a writer left it there and died, before or after its
@@ -40,39 +38,44 @@ import (
 
 // tryCheck is the try at the write lock that Open makes once it has read
 // the log, and that a reader makes when it finds the writer gone (F6, which
-// calls it holding the mutex). It tries flock once, without waiting. When
-// it gets it, no writer is at work: it makes the checks a writer makes once
-// it holds the lock, reads on to the end of the log, checks the end of the
-// log, and lets go.
+// calls it holding the mutex). It tries flock once, without waiting, and
+// reports whether it got it. When it does, no writer is at work: it makes
+// the checks a writer makes once it holds the lock, reads on to the end of
+// the log, checks the end of the log, and lets go.
 //
 // When another holds the lock, that writer checks the end of the log before
-// it appends anything, and tryCheck does nothing. Nor does it when the file
-// is empty, since the first Lock makes a database of it, or when another
-// file has taken the path, or none is there, since the next Lock reads
-// what's there.
-func (l *Log) tryCheck() error {
+// it appends anything, and tryCheck does nothing more. Open then looks past
+// the end of the log without the lock (openCheck). Nor does tryCheck check
+// anything when the file is empty, since the first Lock makes a database of
+// it, or when nothing is at the path, since the next Lock reads what's
+// there. When another file has taken the path, it returns errReplaced.
+func (l *Log) tryCheck() (bool, error) {
 	if l.empty {
-		return nil
+		return false, nil
 	}
 	ok, err := l.f.TryLock()
 	if err != nil || !ok {
-		return err
+		return false, err
 	}
 	err = l.checkLocked()
 	if e := l.f.Unlock(); err == nil {
 		err = e
 	}
-	return err
+	return true, err
 }
 
-// checkLocked is tryCheck's work once flock is held.
+// checkLocked is the work of tryCheck and confirm once flock is held. When
+// another file has taken the path, what was read is no longer the
+// database, and it returns errReplaced.
 func (l *Log) checkLocked() error {
 	info, same, err := l.atPath()
 	switch {
-	case errors.Is(err, fs.ErrNotExist) || (err == nil && !same):
+	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
 		return err
+	case !same:
+		return errReplaced
 	}
 	if err := l.checkRead(info); err != nil {
 		return err
@@ -106,22 +109,23 @@ func (l *Log) catchUp(size int64) error {
 
 // checkEnd checks the end of the log, holding the write lock, once the log
 // has been read to its end in a file of size bytes. Damage it finds is a
-// *errs.Damage, and nothing is changed: a batch that counts followed by a
-// whole marker naming another batch, a batch that counts with changes that
-// break the rules, and in a compacted file a log that ends before the
-// compacted part does. A write, a sync or a cut that fails is handled as a
+// *errs.Damage, and nothing is changed: in a compacted file a log that ends
+// before the compacted part does, a whole marker past the end of the log
+// naming the next batch or a later one, a batch that counts followed by a
+// whole marker naming another batch, and a batch that counts with changes
+// that break the rules. A write, a sync or a cut that fails is handled as a
 // failed commit is (failed).
 func (l *Log) checkEnd(size int64) error {
-	// F4 goes here: step 1, a look from the end of the log to the end of the
-	// file for a whole marker naming the next batch or a later one, which is
-	// damage, since this read is made holding the lock.
-	if l.hdr.Gen > 1 && uint64(l.end) < l.hdr.CompactedEnd {
-		// A compacted file is whole before anyone can see it, so this is
-		// damage, and the cut below must never reach into the compacted part
-		// (FORMAT.md, "Compaction").
-		return &errs.Damage{Path: l.path, Offset: l.end, Batch: l.seq + 1, Reason: fmt.Sprintf("the log ends at offset %d, inside the compacted part, which ends at offset %d", l.end, l.hdr.CompactedEnd)}
-	}
-	if l.end == size {
+	// Step 1, before anything is written. Holding the lock, what the look
+	// past the end finds is damage. In a compacted file, it also keeps the
+	// cut below from ever reaching into the compacted part.
+	d, err := l.pastEnd(size)
+	switch {
+	case d != nil:
+		return d
+	case err != nil:
+		return err
+	case l.end == size:
 		return nil // the log is whole
 	}
 	defer l.r.release()
@@ -163,36 +167,17 @@ func (l *Log) checkEnd(size int64) error {
 // counts but breaks those rules is found only once it's marked, and is
 // damage then, as it is on every open after.
 func (l *Log) markLeft(size int64) error {
-	off, room, seq := l.end, size-l.end, l.seq+1
-	if room < format.BatchHeadSize {
-		return nil
+	// Changes that are malformed, or break the rules for a change on its
+	// own, are damage, which endBatch returns.
+	bt, b, err := l.endBatch(size)
+	if err != nil || b == nil {
+		return err
 	}
-	head, err := l.r.read(l.f, off, format.BatchHeadSize, size)
-	if err != nil {
-		return unread(err)
+	if d := l.otherMarker(bt, b); d != nil {
+		return d
 	}
-	n, err := format.BatchLength(head, l.hdr.Gen, seq, room)
-	if err != nil {
-		return nil // not a batch that counts
-	}
-	b, err := l.r.read(l.f, off, min(n+format.MarkerSize, room), size)
-	if err != nil {
-		return unread(err)
-	}
-	bt, err := format.DecodeBatch(b[:n], l.hdr.Gen, seq)
-	if errors.Is(err, format.ErrDoesNotCount) {
-		return nil
-	}
-	if err != nil {
-		return l.placed(off, err) // changes that are malformed, or break the rules for a change on its own
-	}
+	off, n := l.end, int64(bt.Length)
 	mine := format.Marker{Seq: bt.Seq, Sum: bt.Sum}
-	if int64(len(b)) == n+format.MarkerSize {
-		if m, whole := format.DecodeMarker(b[n:], l.hdr.ID, l.hdr.Gen); whole && m != mine {
-			return &errs.Damage{Path: l.path, Offset: off + n, Batch: bt.Seq, Reason: fmt.Sprintf(
-				"batch %d counts, with the checksum %#08x, and the whole marker after it names batch %d with the checksum %#08x, which no crash leaves", bt.Seq, bt.Sum, m.Seq, m.Sum)}
-		}
-	}
 	if plant == "logfile/cut-what-counts" {
 		return nil
 	}

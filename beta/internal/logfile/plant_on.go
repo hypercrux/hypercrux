@@ -34,10 +34,30 @@ import "os"
 //     clean, the sync puts nothing on the drive.
 //   - logfile/no-marker-again: the batch is written again without the
 //     marker before it, which a failed sync can have left off the drive too.
+//
+// F4's, in the look past the end of the log for damage:
+//
+//   - logfile/cut-at-zeros: zeros where a batch should start are taken for
+//     the end of everything, and the look past them is left out, so the
+//     check cuts off commits that a damaged batch's header hid.
+//   - logfile/damage-unconfirmed: Open, when another holds the write lock,
+//     reports what it finds past the end of the log as damage at once,
+//     without reading it again holding the lock, so a writer at work there
+//     makes a sound database fail to open.
+//   - logfile/window-edge: the look past reads the file a window at a time
+//     with no overlap between windows, so a marker across the edge of two
+//     is missed.
+//   - logfile/any-sequence-number: a whole marker past the end of the log
+//     shows a commit there whatever batch it names, so an older copy of the
+//     database stored in a torn batch makes the file read as damaged.
+//   - logfile/compacted-held-only: the rule for a compacted file is kept
+//     only holding the lock, so Open, when another holds it, reads part of
+//     a damaged compacted part as a whole database.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
-		"logfile/cut-what-counts", "logfile/sync-without-rewrite", "logfile/no-marker-again":
+		"logfile/cut-what-counts", "logfile/sync-without-rewrite", "logfile/no-marker-again",
+		"logfile/cut-at-zeros", "logfile/damage-unconfirmed", "logfile/window-edge", "logfile/any-sequence-number", "logfile/compacted-held-only":
 		return p
 	}
 	return ""

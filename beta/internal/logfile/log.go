@@ -20,14 +20,12 @@ import (
 // Where the later file tasks fit in. Each has a comment of its own at the
 // place named, starting with the task's name. F3's check of the end of the
 // log is in check.go: Lock runs it once the log is read to its end
-// (lockFile), and Open when it gets the lock without waiting (tryCheck).
+// (lockFile), and Open once it holds the lock (tryCheck, or confirm). F4's
+// look past the end of the log for damage is in damage.go: the check makes
+// it at its top (checkEnd), and Open makes it without the lock when another
+// holds it, then reads again holding the lock before it reports damage
+// (openCheck).
 //
-//   - F4, damage: where reading stops (readOn), and at the top of the check
-//     (checkEnd), a look past the end of the log for a whole marker naming
-//     the next batch or a later one, and in a compacted file a log that
-//     ends before the compacted part does, for readers. A marked batch that
-//     fails its checks is read again under the lock. Until F4, the check
-//     cuts whatever doesn't count.
 //   - F5, failed commits: Append's failures, and the check's, all go
 //     through failed, which cuts the file back to the end of the log and
 //     syncs, or keeps the lock and sets stuck. stuck is already how a
@@ -88,7 +86,9 @@ type Target interface {
 // Options holds a Log's settings.
 type Options struct {
 	// Wait is how long Lock waits for the write lock, the mutex and flock
-	// together. 0 means DefaultWait. The tests set a shorter one.
+	// together, and how long Open waits for it when it has to read the file
+	// again holding it, to confirm what looks like damage. 0 means
+	// DefaultWait. The tests set a shorter one.
 	Wait time.Duration
 
 	// ID, when it isn't all zeros, is the database ID that a database this
@@ -150,25 +150,36 @@ type Log struct {
 // Then Open tries the write lock once, without waiting. When it gets it, no
 // writer is at work, so it reads on to the end of the log and checks the end
 // of the log, as FORMAT.md's "Checking the end of the log" says, before it
-// lets go: a batch that counts with no whole marker after it, which a writer
-// left when it died, is written again, synced, marked and handed to t, and
-// everything after the last marker is cut off. When another holds the lock,
-// that writer checks before it appends anything, and Open leaves the end as
-// it is.
+// lets go: it looks past the end of the log for damage first, then a batch
+// that counts with no whole marker after it, which a writer left when it
+// died, is written again, synced, marked and handed to t, and everything
+// after the last marker is cut off.
+//
+// When another holds the lock, that writer checks the end before it appends
+// anything, and Open leaves the end as it is. It still looks past the end of
+// the log for damage, so damage in the middle of a file is never taken for
+// its end. Without the lock, a writer may be at work there, so what Open
+// finds is damage only once a read holding the lock agrees: Open waits for
+// the lock, up to Options.Wait, as a writer does, and then reads on and
+// checks the end of the log holding it, as when it gets the lock at once.
+// When the wait runs out, Open fails with an error that wraps
+// errs.ErrLockTimeout and says what it found. When another file has taken
+// the path by the time Open holds the lock, Open reads that one instead.
 //
 // An empty file holds no database yet, and Open leaves it as it is: the
 // first Lock makes a database of it. A file that isn't a database fails
 // with an error that wraps errs.ErrNotDatabase, a 0.x database with
 // errs.ErrZeroX, another format version with errs.ErrFormatVersion, and a
 // damaged header, a batch that counts whose changes are malformed or that t
-// refuses, or damage the check finds, with a *errs.Damage. A write, a sync
-// or a cut that fails in the check is an error saying its outcome is
-// unknown.
+// refuses, or damage the check finds, with a *errs.Damage, and nothing in
+// the file is changed. A write, a sync or a cut that fails in the check is
+// an error saying its outcome is unknown.
 func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	l := &Log{fsys: files, path: path, dir: filepath.Dir(path), t: t, wait: o.Wait, id: o.ID, mu: make(chan struct{}, 1)}
 	if l.wait <= 0 {
 		l.wait = DefaultWait
 	}
+	var deadline time.Time // for the wait for the write lock, when Open has to read again holding it
 	// F7 goes first: the path made real, with every symbolic link
 	// resolved, and a file with more than one name, or one that isn't a
 	// regular file, refused.
@@ -188,15 +199,23 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 			return nil, err
 		}
 		l.f = f
-		if err := l.load(); err != nil {
+		size, err := l.load()
+		if err != nil {
 			f.Close()
 			return nil, err
 		}
-		// F4 goes here: a look past the end of the log, which reports
-		// damage when it finds a whole marker naming the next batch or a
-		// later one, or in a compacted file a log that ends before the
-		// compacted part does, whether or not Open gets the lock below.
-		if err := l.tryCheck(); err != nil {
+		// The look past the end of the log, whether or not Open gets the
+		// lock, and the check of the end once it holds it (damage.go).
+		err = l.openCheck(size, &deadline)
+		if errors.Is(err, errReplaced) {
+			// Another file took the path before Open held the lock: read that
+			// one from its start instead.
+			f.Close()
+			l.f = nil
+			l.t.Reset()
+			continue
+		}
+		if err != nil {
 			f.Close()
 			return nil, err
 		}
@@ -219,11 +238,11 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 // "Creating a database" says. Then Lock checks that what this Log has read
 // is still in the file, as FORMAT.md's "Writing" asks, reads on to the end
 // of the log, handing each new marked batch to the Target, and checks the
-// end of the log, as Open does when it gets the lock: a batch a writer left
-// without its marker when it died is written again, synced, marked and
-// handed to the Target, before the caller's transaction runs, and what a
-// crash left half written is cut off. The first Lock of each Log also
-// removes leftover .new- files.
+// end of the log, as Open does when it gets the lock: it looks past the end
+// of the log for damage, then a batch a writer left without its marker when
+// it died is written again, synced, marked and handed to the Target, before
+// the caller's transaction runs, and what a crash left half written is cut
+// off. The first Lock of each Log also removes leftover .new- files.
 //
 // Damage the check finds is a *errs.Damage, and nothing is changed. A
 // write, a sync or a cut that fails in the check is handled as a failed
@@ -383,7 +402,7 @@ func (l *Log) reopen() error {
 	l.t.Reset()
 	// F9 goes here: a garbage collection between the reset and the read,
 	// so the process doesn't hold the old copy and the new one at once.
-	if err := l.load(); err != nil {
+	if _, err := l.load(); err != nil {
 		l.f = nil
 		f.Close()
 		return err

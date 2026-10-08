@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"slices"
 	"strings"
 	"testing"
@@ -346,6 +347,73 @@ func TestMarkers(t *testing.T) {
 		if got, ok := DecodeMarker(b[3:], c.id, c.gen); !ok || got != c.m || len(b) != 3+MarkerSize || string(b[:3]) != "abc" {
 			t.Errorf("the marker %+v comes back as %+v, %v, in % x", c.m, got, ok, b)
 		}
+	}
+}
+
+// TestFindMarker: FindMarker finds the first whole marker at any offset. It
+// passes over magic numbers whose check values don't fit, and markers of
+// another database or generation, and leaves a marker that runs past the
+// end of the bytes for the next piece. On bytes full of magic numbers, with
+// markers dropped in at random, it agrees with DecodeMarker tried at every
+// offset.
+func TestFindMarker(t *testing.T) {
+	m := AppendMarker(nil, fixtureID, 1, Marker{Seq: 7, Sum: 0xabcdef01})
+	bad := patch(m, 19, []byte{m[19] ^ 1})
+	other := AppendMarker(nil, [16]byte{1}, 1, Marker{Seq: 8, Sum: 2})
+	later := AppendMarker(nil, fixtureID, 2, Marker{Seq: 9, Sum: 3})
+	magics := strings.Repeat(magicMarker, 100)
+	join := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	for _, c := range []struct {
+		what string
+		b    []byte
+		at   int
+	}{
+		{"nothing", nil, -1},
+		{"a marker alone", m, 0},
+		{"a marker after zeros", join(make([]byte, 1000), m), 1000},
+		{"a marker and more after it", join(m, m, []byte("more")), 0},
+		{"a marker one byte short", m[:MarkerSize-1], -1},
+		{"a marker that runs past the end", join(make([]byte, 50), m[:12]), -1},
+		{"magic numbers and no marker", []byte(magics), -1},
+		{"a marker after magic numbers", join([]byte(magics+"HCR"), m), len(magics) + 3},
+		{"a marker that starts inside a magic number", join([]byte("HC"), m), 2},
+		{"a check value that doesn't fit, then a marker", join(bad, []byte("x"), m), MarkerSize + 1},
+		{"another database's marker, then this one's", join(other, m), MarkerSize},
+		{"a later generation's marker", later, -1},
+	} {
+		at, got := FindMarker(c.b, fixtureID, 1)
+		if at != c.at || (at >= 0 && got != (Marker{Seq: 7, Sum: 0xabcdef01})) {
+			t.Errorf("%s: FindMarker gives %d, %+v, where %d is wanted", c.what, at, got, c.at)
+		}
+	}
+	r := rand.New(rand.NewPCG(4, 7))
+	found := 0
+	for range 2000 {
+		b := make([]byte, r.IntN(400))
+		for i := range b {
+			b[i] = "HCRM\x00"[r.IntN(5)]
+		}
+		for range r.IntN(3) {
+			if len(b) >= MarkerSize {
+				copy(b[r.IntN(len(b)-MarkerSize+1):], m)
+			}
+		}
+		want := -1
+		for i := range b {
+			if _, ok := DecodeMarker(b[i:], fixtureID, 1); ok {
+				want = i
+				break
+			}
+		}
+		if at, _ := FindMarker(b, fixtureID, 1); at != want {
+			t.Fatalf("FindMarker gives %d, where DecodeMarker finds the first whole marker at %d, in % x", at, want, b)
+		}
+		if want >= 0 {
+			found++
+		}
+	}
+	if found < 500 {
+		t.Errorf("only %d of the random cases held a whole marker", found)
 	}
 }
 

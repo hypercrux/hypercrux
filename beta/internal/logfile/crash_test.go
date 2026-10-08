@@ -197,9 +197,12 @@ func againWorkload(setup, commits int, end string) crash.Workload {
 // so the cuts come in the check's writes and its cut too.
 //
 // A new database gets 128 seeds. A cut finds logfile/marker-before-sync in
-// a few per cent of seeds (T3.md), and only once F4's look past the end of
-// the log is in: the bug leaves a whole marker after a torn batch, and until
-// F4 the check cuts both, which the model allows for a commit under way.
+// a few per cent of seeds (T3.md): the bug can leave a whole marker after a
+// batch a cut tore, which the look past the end of the log reports as
+// damage, so the database doesn't open. A new database first shows it at
+// cut WriteAt 6 seed 22, and four of the other five workloads within their
+// first seven seeds. Without the bug, no cut leaves anything the look past
+// reports.
 func TestTheRealLogPassesACutAtEveryWrite(t *testing.T) {
 	t.Parallel()
 	commits, seeds, others := 8, 128, 32

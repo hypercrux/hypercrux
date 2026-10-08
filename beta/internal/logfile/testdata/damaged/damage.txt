@@ -1,0 +1,33 @@
+# The damaged fixtures, one a line: the file, the batch its damage names
+# (0 for the header), the offset the damage gives, and what's damaged.
+# Reading a file has to report that batch and offset, and change nothing.
+# README.md says how the files are made and changed.
+header-checksum.hcx 0 64 the header, with a byte of the database ID changed, fails its checksum
+header-compacted-past-end.hcx 0 56 a compacted file cut short inside its compacted part, so the header's end of the compacted part lies past the end of the file
+changes-malformed-end.hcx 4 371 the last batch counts and is marked, and its change is of a kind there isn't
+changes-malformed-middle.hcx 2 187 batch 2 counts and is marked, and its change is of a kind there isn't
+changes-break-rules-end.hcx 4 371 the last batch counts and is marked, and deletes the key Docs:1, which breaks the rules for keys
+changes-break-rules-middle.hcx 2 187 batch 2 counts and is marked, and puts the key Docs:2, which breaks the rules for keys
+changes-break-rules-unmarked.hcx 4 371 the last batch counts, with no marker after it, and deletes the key Docs:1, which breaks the rules for keys
+state-rules-end.hcx 4 343 the last batch counts and is marked, and puts a record into a table that doesn't exist
+state-rules-middle.hcx 2 159 batch 2 counts and is marked, and puts a record into a table that doesn't exist
+marker-names-another-end.hcx 4 384 the last batch counts, and the whole marker after it names the batch before
+marker-names-another-middle.hcx 2 159 batch 2 counts, and the whole marker after it names the batch before
+checksum-end.hcx 4 343 the last batch is marked and fails its checksum, with a bit changed in its changes
+checksum-middle.hcx 2 159 batch 2 is marked and fails its checksum, with a bit changed in its changes
+magic-end.hcx 4 343 the last batch is marked and has a bit changed in its magic number
+magic-middle.hcx 2 159 batch 2 is marked and has a bit changed in its magic number
+generation-end.hcx 4 343 the last batch is marked and has a bit changed in its generation
+generation-middle.hcx 2 159 batch 2 is marked and has a bit changed in its generation
+length-end.hcx 4 343 the last batch is marked and has a bit changed in its length
+length-middle.hcx 2 159 batch 2 is marked and has a bit changed in its length
+sequence-number-end.hcx 4 343 the last batch is marked and has a bit changed in its sequence number
+sequence-number-middle.hcx 2 159 batch 2 is marked and has a bit changed in its sequence number
+head-zeros-end.hcx 4 343 the last batch's head is zeros, and its marker is whole
+head-zeros-middle.hcx 2 159 batch 2's head is zeros, and its marker is whole
+batch-zeros-end.hcx 4 343 the last batch is zeros, and its marker is whole
+batch-zeros-middle.hcx 2 159 batch 2 is zeros, and its marker is whole
+batch-missing-middle.hcx 2 159 batch 2 and its marker are missing, and batch 3 follows batch 1
+marker-damaged-middle.hcx 2 159 batch 2 counts and its marker has a bit changed, with batches 3 and 4 marked after it
+compacted-part-end.hcx 2 181 a compacted file whose compacted part's last marker has a bit changed, with nothing after it
+compacted-part-middle.hcx 1 68 a compacted file whose compacted part's first batch fails its checksum, with a commit after the compacted part

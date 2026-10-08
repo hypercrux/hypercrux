@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -68,22 +69,41 @@ func TestBatchesSurviveAReopen(t *testing.T) {
 }
 
 // TestReadingStopsAtTheEndOfTheLog writes files whose logs end in each of
-// the ways FORMAT.md lists (endCases), and checks that opening applies the
-// marked batches before the end and nothing after it. Another open file
-// holds the write lock throughout, as another process's writer would, so
-// Open doesn't check the end of the log, and every file stays as it was.
+// the ways FORMAT.md lists (endCases), and opens them while another open
+// file holds the write lock, as another process's writer would, so Open
+// can't check the end of the log. Opening applies the marked batches before
+// the end and nothing after it, and every file stays as it was.
 // TestTheCheckOfTheEndOfTheLog takes the same files through the check.
+//
+// Where the end holds nothing that looks like damage, the lock is held
+// throughout, and Open returns without waiting for it. What looks like
+// damage is reported only once a read holding the lock agrees, since a
+// writer may be at work past the end of the log: Open waits for the lock,
+// which the holder lets go of a moment later, reads the file again holding
+// it, and reports the damage then.
 func TestReadingStopsAtTheEndOfTheLog(t *testing.T) {
+	const hold = 50 * time.Millisecond
 	for _, c := range endCases() {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "db")
 			w := newBuilder(t)
 			c.build(w)
 			w.write(path)
-			defer holdLock(t, path)()
+			release := holdLock(t, path)
+			defer release()
 
-			_, rec := openLog(t, path, Options{})
-			rec.holds(t, endLists[:c.read]...)
+			if c.want != nil {
+				_, rec := openLog(t, path, Options{Wait: time.Second})
+				rec.holds(t, endLists[:c.read]...)
+			} else {
+				began := time.Now()
+				releaseAfter(t, release, hold)
+				_, err := Open(fsys.OS{}, path, &recorder{}, Options{})
+				mustBeDamage(t, err, path, c.damage)
+				if took := time.Since(began); took < hold {
+					t.Errorf("Open reported damage after %v, before the lock it had to read the file again under came free", took)
+				}
+			}
 			if !bytes.Equal(fileBytes(t, path), w.b) {
 				t.Error("the file changed")
 			}

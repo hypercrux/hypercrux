@@ -9,8 +9,12 @@
 // appends, and on opening when it gets the lock without waiting, it checks
 // the end of the log: a batch whose writer died before marking it is
 // written again, synced and marked, and what a crash left half written is
-// cut off (check.go). It reaches the file only through fsys, so the crash
-// tests can put a fault layer under it.
+// cut off (check.go). First it looks past the end of the log for damage,
+// such as a whole marker further on that shows a commit was made there,
+// which it reports, cutting nothing; opening does that even when another
+// holds the lock, and then reads the file again holding it before it
+// reports damage (damage.go). It reaches the file only through fsys, so the
+// crash tests can put a fault layer under it.
 //
 // Tasks F2 to F9 build it. log.go says where each later task fits in. Like
 // the rest of beta/, it builds only on Linux.

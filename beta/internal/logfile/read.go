@@ -17,34 +17,35 @@ import (
 )
 
 // load reads l.f from its start: the header, then the log, handing every
-// marked batch to the Target. An empty file holds no database yet, and
-// load notes that and reads nothing more.
-func (l *Log) load() error {
+// marked batch to the Target. It returns the file's size as fstat gave it
+// before the read, where the read stops. An empty file holds no database
+// yet, and load notes that and reads nothing more.
+func (l *Log) load() (int64, error) {
 	l.empty, l.hdr, l.seq, l.end, l.tail = false, format.Header{}, 0, 0, false
 	st, err := l.f.Stat()
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if st.Size == 0 {
 		l.empty = true
-		return nil
+		return 0, nil
 	}
 	n, err := l.f.ReadAt(l.head[:min(st.Size, format.HeaderSize)], 0)
 	if err != nil && err != io.EOF {
-		return err
+		return 0, err
 	}
 	h, err := format.DecodeHeader(l.head[:n], st.Size)
 	if err != nil {
 		var d *errs.Damage
 		if errors.As(err, &d) {
 			d.Path = l.path
-			return d
+			return 0, d
 		}
-		return fmt.Errorf("%s: %w", l.path, err)
+		return 0, fmt.Errorf("%s: %w", l.path, err)
 	}
 	l.hdr = h
 	l.end = format.HeaderSize
-	return l.readOn(st.Size)
+	return st.Size, l.readOn(st.Size)
 }
 
 // readOn reads the log on from l.end, in a file of size bytes, handing
@@ -55,6 +56,13 @@ func (l *Log) load() error {
 // while it's read (FORMAT.md, "Reading the log"). A batch read while its
 // bytes change fails its checksum, or its marker isn't whole or names
 // another batch, so a commit is applied only once it's whole and marked.
+//
+// Where it stops, readOn takes what follows for the end of the log, and
+// leaves the look past it for damage to its callers, which know whether
+// they hold the lock (damage.go): Open's check (openCheck) after load, and
+// the check of the end of the log (checkEnd) after catchUp. readOn's other
+// callers, reopen and fill, are in lockFile, which takes the lock and
+// checks straight after them.
 func (l *Log) readOn(size int64) error {
 	defer l.r.release()
 	for {
@@ -104,11 +112,10 @@ func (l *Log) readOn(size int64) error {
 		l.end = off + n + format.MarkerSize
 		copy(l.last[:], b[n:])
 	}
-	// F4 goes here, where reading stops: a whole marker past the end of
-	// the log naming the next batch or a later one is damage once a read
-	// under the write lock agrees, and so is a marked batch that fails its
-	// checks. F2 stops at the end of the log, and takes what it finds there
-	// for a commit under way or the remains of one.
+	// F6 goes here, where a follower stops: with the cheap look that
+	// FORMAT.md's "Reading the log" gives it, at a whole marker after the
+	// batch it stopped at that names it while the batch fails its checks,
+	// and then confirm, before it reports damage.
 	return nil
 }
 
