@@ -339,9 +339,12 @@ end of the log once it holds it, when no other process can commit.
 
 ### Compaction
 
-When the file holds about twice as much as the live data, the writer
-compacts it at the end of a commit, still holding the lock, so the old file
-never changes again:
+When the file has grown to twice the size its last compaction left it at,
+and by a megabyte at least, the writer compacts it at the end of a commit,
+still holding the lock, so the old file never changes again. Without a pass
+over the whole copy, the writer can't tell how much of what was added since
+is live, so a database that only grows is compacted each time it doubles as
+well, which rewrites its data about once more in all:
 
 1. It creates `NAME.compact` beside the database, with the database's
    permissions and, where it's allowed to, its owner, and takes `flock` on
@@ -353,9 +356,10 @@ never changes again:
    tables and vector sizes come through. Vectors go in as ordinary fields of
    their records.
 3. It syncs the new file.
-4. It renames the new file to the database's path and syncs the directory.
-   This rename is the switch: before it, the database is generation N; after
-   it, N+1.
+4. It checks that the file at the path is still the one it compacted, so a
+   backup moved into place meanwhile is never replaced. Then it renames the
+   new file to the database's path and syncs the directory. This rename is
+   the switch: before it, the database is generation N; after it, N+1.
 5. It moves over to the new file and releases both files' locks and then the
    mutex. A writer that was waiting on the old file gets that lock, sees
    that the path names a different file, and starts again there.
@@ -383,12 +387,16 @@ so a read already under way finishes on the old file.
 Writers wait while a compaction runs, including the one whose commit set it
 off. It takes about as long as writing and syncing the live data once, and
 the pause grows with the live data, so compacting earlier would only make
-pauses more frequent. If writing and syncing run at half a gigabyte a
-second, a million records with 384-value vectors, about 1.6 GB, would hold
-writers up for about three seconds; task F8 measures the real rate. A
-waiting writer that finds `NAME.compact` locked keeps waiting past the usual
-10 seconds, until the compaction ends. Compacting in the background would
-take most of the pause away later without changing the format.
+pauses more frequent. Task F8 measured about 0.37 GB a second on a two-core
+cloud machine, where the sync itself ran at about 1.4 GB a second and
+building the batches took most of the time, so a million records with
+384-value vectors, about 1.6 GB, would hold writers up for about four and a
+half seconds. A waiting writer that finds `NAME.compact` locked keeps
+waiting past the usual 10 seconds, until the compaction ends, and 10 seconds
+more, so a writer has time to get the lock as the compaction lets go, and
+one stuck after its rename holds writers up no longer than a stuck commit.
+Compacting in the background would take most of the pause away later without
+changing the format.
 
 `Compact()` in Go and `hypercrux compact` run a compaction on demand. A
 compacted file holds only live data, so that's also how deleted data leaves

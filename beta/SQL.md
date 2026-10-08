@@ -376,7 +376,10 @@ Each term is worked out as SQLite works it out:
 2. A term that is an integer literal that fits in 32 bits, perhaps with
    signs in front or in parentheses, is a column number, counting from 1.
    A number outside 1 to the number of columns is an error, so `ORDER BY 0`
-   and `ORDER BY -1` are errors.
+   and `ORDER BY -1` are errors. A literal's IS NULL or IS NOT NULL is an
+   integer too, 0 or 1, as SQLite's parser makes it, so `ORDER BY 1 IS NOT
+   NULL` sorts by the first column and `ORDER BY 'a' IS NULL` is out of
+   range.
 3. Any other term is an expression, worked out for each row. Its names are
    the sources' fields first, and then the result columns' aliases. So
    `ORDER BY 1.5` or `ORDER BY '2'` sorts by a constant and changes nothing.
@@ -568,7 +571,7 @@ go-sqlite3:
 | Go value | SQL value |
 |---|---|
 | `nil` | NULL |
-| `int`, `int8` to `int64`, `uint8` to `uint32`, and `uint` and `uint64` up to 2^63 - 1 | integer |
+| `int`, `int8` to `int64`, `uint8` to `uint32` and `uint`, and `uint64` up to 2^63 - 1 | integer. A `uint` of 2^63 or more becomes a negative integer, as database/sql converts it, and a `uint64` that size is an error |
 | `bool` | integer, 1 or 0 |
 | `float64`, and `float32` widened | real, with NaN becoming NULL |
 | `string` | text, as given |
@@ -578,7 +581,8 @@ go-sqlite3:
 
 Named types and pointers go through database/sql's usual conversion, and
 other types are an error. A statement takes exactly as many arguments as it
-has `?` marks.
+has `?` marks. An argument with a name, from `sql.Named`, is an error, since
+the subset has `?` marks only.
 
 ### Results
 
@@ -706,6 +710,10 @@ is read like this:
 | CAST to NUMERIC | the longest start that reads as a number. An integer when it's written as one that fits, or when its value is whole and less than 2^51 in size, and a real otherwise | `sqlite3VdbeMemNumerify` |
 | `sum()`, `total()` and `avg()` | text that reads as a number, all of it, counts as that number. Other text counts as a real, read as for CAST to REAL | `sumStep` |
 
+Only about the first 19 significant digits count, as SQLite reads a number,
+so `3500000000000000.2500001` is 3500000000000000.0, where Go's
+`strconv.ParseFloat` gives 3500000000000000.5.
+
 ### CAST
 
 `CAST(x AS type)` takes the type INTEGER, REAL, TEXT, BLOB or NUMERIC, in
@@ -760,6 +768,14 @@ SQLite's routines are `likeFunc` and `patternCompare`.
   `NOT BETWEEN` is NOT of that.
 - `x IS y` is 1 when both are NULL or they're equal, and 0 otherwise. It
   never gives NULL. `IS NOT` gives the opposite.
+- `x IN ((SELECT f FROM t WHERE key = e))`, with the one-record subquery as
+  the only item, is IN over the subquery's rows, as SQLite's parser makes
+  it. With no such record the set is empty, so it gives 0 even when x is
+  NULL. The field's affinity counts beside x's, so a CAST to TEXT changes
+  nothing there.
+- `x IS (y IN ())` and `x IS (y NOT IN ())` are SQLite's `x IS FALSE` and
+  `x IS TRUE`, which take x's truth, unless y calls a function. So
+  `0.5 IS (1 NOT IN ())` is 1.
 
 ### What gets worked out
 
@@ -768,17 +784,31 @@ the smallest integer, or `distance()` of two vectors of different sizes.
 
 - In an expression, operands are worked out left to right, all of them,
   apart from these cases, as in SQLite:
-  - When one side of AND or OR is an integer literal that fits in 32 bits,
-    and it settles the result, the other side isn't worked out: `0 AND x`
-    and `x AND 0` give 0, and `1 OR x` and `x OR 1` give 1. SQLite's routine
-    is `sqlite3ExprSimplifiedAndOr`.
+  - When one side of AND or OR settles the result, the other side isn't
+    worked out: an integer literal that fits in 32 bits with no sign in
+    front of it, so `0 AND x` and `x AND 0` give 0 and `1 OR x` gives 1,
+    where `-0 AND x` works out x; an empty IN list; and a literal's IS NULL
+    or IS NOT NULL, which SQLite's parser makes 0 or 1. SQLite's routine is
+    `sqlite3ExprSimplifiedAndOr`.
   - `coalesce()` and `ifnull()` stop at the first argument that isn't NULL.
   - `x IN (...)` works out x, then the items in turn, and stops at the first
-    that equals x. An empty list doesn't work out x.
+    that equals x. A list of three items or more without fields or
+    subqueries is worked out whole, then x. An empty list doesn't work out
+    x. IN over a walk or over the one-record subquery works out the
+    subquery first.
+  - When one side of a comparison, an arithmetic operator, `||`, AND or OR
+    holds the one-record subquery or IN over a walk and the other side
+    doesn't, the other side goes first. The subquery isn't worked out when
+    that side is NULL, or when it settles an AND or an OR.
+  - LIKE works out the pattern, then x, then the escape, and its errors come
+    before NULL: `NULL LIKE 'a' ESCAPE 'ab'` is an error.
 - In WHERE, AND stops at the first condition that's false or NULL, and OR
   stops at the first that's true. 0.x's planner may check conditions in
   another order, or skip rows by their key, so a test shouldn't count on an
-  error from one condition when another rules the row out.
+  error from one condition when another rules the row out. AND's terms at
+  the top of a WHERE are worked out in turn as written, without the rule
+  for literals above, so `WHERE E AND 0` raises E's error, where
+  `SELECT E AND 0` gives 0.
 - ORDER BY terms are worked out for every row that passes WHERE, before
   LIMIT.
 
@@ -800,10 +830,10 @@ arguments to function".
 | `lower(x)`, `upper(x)` | NULL for NULL. Otherwise x as text with its ASCII letters changed and every other byte as it was |
 | `max(x, y, ...)`, `min(x, y, ...)` | 2 arguments or more. NULL when any is NULL. Otherwise the largest argument for `max()` and the smallest for `min()`, in the order of "Comparing", given back as it is. On a tie, `max()` keeps the earliest of the tied arguments and `min()` the latest, so `min(1, 1.0)` is 1.0 |
 | `nullif(x, y)` | NULL when x and y are equal in the order of "Comparing", two NULLs included, and x otherwise |
-| `replace(x, y, z)` | NULL when x or y is NULL. x as text when y is empty, even when z is NULL. Otherwise NULL when z is NULL, and else x as text with every y replaced by z, byte for byte |
+| `replace(x, y, z)` | NULL when x or y is NULL. x as text when y is empty or starts with a NUL byte, even when z is NULL. Otherwise NULL when z is NULL, and else x as text with every y replaced by z, byte for byte |
 | `round(x [, n])` | NULL when x or n is NULL. Otherwise a real: x read as a real, rounded to n places, with n clamped to 0 to 30 and 0 when left out. A real more than 2^52 in size stays as it is. With no places, SQLite adds or takes away a half and cuts to an integer, so halves go away from zero and `round(-0.4)` is 0.0. With places, the rounding is SQLite's printf `%!.nf` read back, so `round(2.675, 2)` is 2.67 |
-| `substr(x, y [, z])` | NULL when x, y or z is NULL. Otherwise z characters of x's text, or z bytes of bytes, from position y, counting from 1, and to the end when z is left out. A negative y counts from the end, a negative z takes the characters before y, and y of 0 takes one fewer than y of 1 would. Text stops at a NUL byte |
-| `trim(x [, y])` | NULL when x or y is NULL. Otherwise x as text, with any run of y's characters taken off both ends, and spaces when y is left out |
+| `substr(x, y [, z])` | NULL when x, y or z is NULL. Otherwise z characters of x's text, or z bytes of bytes, from position y, counting from 1, and to the end when z is left out. A negative y counts from the end, a negative z takes the characters before y, and y of 0 takes one fewer than y of 1 would. Text stops at a NUL byte. Empty bytes give NULL |
+| `trim(x [, y])` | NULL when x or y is NULL. Otherwise x as text, with any run of y's characters taken off both ends, and spaces when y is left out. y's characters are those before its first NUL byte, and each is matched byte for byte, so part of a character can be trimmed |
 | `typeof(x)` | 'null', 'integer', 'real', 'text' or 'blob' |
 | `CAST(x AS type)` | as "CAST" says |
 
@@ -900,7 +930,10 @@ of kind "error", as in 0.x.
 
 These kinds are those of `Query`, `QueryRow` and `Exec` on a database or a
 transaction. Through `SQL()`, 0.x wraps no errors at all, even in an
-`Exec`. G3 settles what `SQL()` gives in the Beta.
+`Exec`. The Beta does the same there: it wraps neither of the engine's two
+errors, so every error through `SQL()` is of kind "error", and a rule
+broken by a write reads as 0.x's does, without the "invalid: " of `Exec`'s
+error.
 
 ## 0.x's small behaviours, settled
 
@@ -968,6 +1001,8 @@ On purpose, and outside the corpus:
   arguments, of kind error, found before anything runs. 0.x finds it as
   `walk()` runs, so in a write it's invalid there, and a statement that
   never reaches the call gives no error.
+- An argument with a name, from `sql.Named`, is an error. 0.x leaves the
+  mark it falls on NULL.
 
 ## The named tests
 

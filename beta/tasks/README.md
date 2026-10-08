@@ -67,16 +67,16 @@ work in, and all 133 hours are done after R4.
 | 27 | F4 Damage | 2 | done, [F4.md](F4.md) |
 | 28 | F5 Failed commits | 2 | done, [F5.md](F5.md) |
 | 29 | F6 Following other processes | 3 | done, [F6.md](F6.md) |
-| 30 | F8 Compaction | 3 | next, [F8.md](F8.md) |
-| 31 | F9 Reloading | 2 | |
+| 30 | F8 Compaction | 3 | done, [F8.md](F8.md), with Q1 and G3 |
+| 31 | F9 Reloading | 2 | next, [F9.md](F9.md) |
 | 32 | F7 File rules and growth | 2 | |
-| 33 | Q1 Values and functions | 4 | next, [Q1.md](Q1.md) |
-| 34 | Q2 Dates | 2 | |
+| 33 | Q1 Values and functions | 4 | done, [Q1.md](Q1.md) |
+| 34 | Q2 Dates | 2 | next, [Q2.md](Q2.md) |
 | 35 | Q3 Parser | 5 | done, [Q3.md](Q3.md), ahead of Q1 and Q2 |
-| 36 | Q4 Operators | 2 | |
+| 36 | Q4 Operators | 2 | next, [Q4.md](Q4.md) |
 | 37 | Q5 Planner | 5 | |
 | 38 | Q6 SQL writes | 2 | |
-| 39 | G3 The database/sql driver | 2 | next, [G3.md](G3.md) |
+| 39 | G3 The database/sql driver | 2 | done, [G3.md](G3.md) |
 | 40 | G4 Slice 3: SQL | 2 | |
 | 41 | G6 Import and export in the Beta | 2 | |
 | 42 | G5 The command and `Compact` | 3 | |
@@ -88,7 +88,7 @@ work in, and all 133 hours are done after R4.
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
 
-Hours done so far: 84 of 133. The five early tasks, P1 to P5, S1 to S5, V1, F1 to F6, G1, G2, Q3 and T1 to T5 are done. G2 is the first working version. In the recorded run after it, `test/results/beta-bench.txt`, it meets the targets for `Get`, a walk one link out, both searches without a filter and a committed put. A walk three links out is 5 per cent over. Two targets are missed by more than double: a put among 1,000 in a transaction, 13.6 µs against 5 µs, and opening 100,000 records with vectors, 535 ms against 250 ms, from a log that compaction will replace. The next round is F8, Q1 and G3. F7 and F9 work in the log as F8 does, so they wait for the round after.
+Hours done so far: 93 of 133. The five early tasks, P1 to P5, S1 to S5, V1, F1 to F6, F8, G1 to G3, Q1, Q3 and T1 to T5 are done. G2 is the first working version. In the recorded run after it, `test/results/beta-bench.txt`, it meets the targets for `Get`, a walk one link out, both searches without a filter and a committed put. A walk three links out is 5 per cent over. Two targets are missed by more than double: a put among 1,000 in a transaction, 13.6 µs against 5 µs, and opening 100,000 records with vectors, 535 ms against 250 ms, from a log that compaction will replace. The next round is F9, Q2 and Q4, with Q2 and Q4 both in `beta/internal/query`, in files of their own where they can. F7 works in the log as F9 does, so it waits for the round after.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.

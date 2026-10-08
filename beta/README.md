@@ -39,9 +39,12 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
   0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
   `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` without a filter
-  and `TableOf` work through the file, and `Check` counts. The helpers that
-  hold no state work already, and the rest are stubs that name the task
-  that makes them work.
+  and `TableOf` work through the file, and `Check` counts. `Query`,
+  `QueryRow`, `Exec` and `SQL()` go through the Beta's database/sql driver,
+  which parses each statement and takes its arguments, and `SQL().Begin`
+  returns an error; running SQL waits for G4. The helpers that hold no
+  state work already, and the rest are stubs that name the task that makes
+  them work.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/crash/`: the crash-point driver. It runs a workload of commits
@@ -76,7 +79,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   keeps the lock until it's closed. A process that keeps the database open
   follows other processes' commits with `Follow`: one stat, then each new
   batch's head, its marker and the rest, and the check of the end of the
-  log when the writer has gone.
+  log when the writer has gone. The holder of the write lock compacts the
+  database from a snapshot of the copy into `NAME.compact`, which is synced
+  and renamed over the database, while writers wait it out, and the next
+  holder removes one a crash left.
 - `internal/procs/`: the many-process harness. It runs writer and reader
   processes on one database, copies of the test binary, kills them with
   SIGKILL at random moments and starts new ones in their place. Then it
@@ -86,9 +92,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   bug, and the real log with readers that open the file afresh and with
   followers. Runs can leave gaps with no writer, and wait for counts of a
   workload's own.
-- `internal/query/`: SQL. So far the operator iterator, `Rows`, and the
-  parser, with the tree it gives and the printer that gives a tree back as
-  SQL.
+- `internal/query/`: SQL. So far the operator iterator, `Rows`, the parser,
+  with the tree it gives and the printer that gives a tree back as SQL, and
+  the evaluator, which works out expressions and conditions as SQLite does,
+  with `Arg` for arguments.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
@@ -104,7 +111,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   readers off from its first change until it ends, and puts the copy back
   with its undo list when it rolls back.
 - `internal/value/`: the value type, holding FORMAT.md's six kinds of value
-  bit for bit, and `FromGo`, 0.x's conversions from Go values.
+  bit for bit, `FromGo`, 0.x's conversions from Go values, and SQLite's
+  routines for reading numbers from text and writing reals as text.
 - `internal/vecmath/`: the search loop. Dot products, norms and distances
   in 8 running sums, giving the same bits on amd64 and arm64, which CI
   checks on both against a golden file.
