@@ -1,0 +1,237 @@
+// Copyright HyperCrux.com 2026
+// SPDX-License-Identifier: Apache-2.0
+
+//go:build linux
+
+package logfile
+
+import (
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+
+	"github.com/hypercrux/hypercrux/beta/internal/errs"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
+)
+
+// FORMAT.md's "Checking the end of the log". Nothing is cut, and nothing is
+// written again in place, without the write lock. Its holder checks the
+// end of the log before it appends anything (lockFile, through catchUp),
+// and so does opening, when it gets the lock without waiting (tryCheck).
+// F6 adds a reader that finds it can take the lock, since the writer is
+// gone, and it calls tryCheck too.
+//
+// The check reads the log on to its end first, under the lock, so the end
+// it looks at is just past the last marked batch. Then:
+//
+//  1. It looks past the end of the log for damage. That's F4's, and its
+//     place is at the top of checkEnd. Until F4, the check takes whatever
+//     doesn't count there for the remains of a commit and cuts it, even
+//     when a whole marker further on shows that a commit was made there.
+//     What it does already is refuse to cut into a compacted part.
+//  2. It looks at the first batch after the last marked one (markLeft).
+//     When that batch counts, and no whole marker naming another batch
+//     follows it, a writer left it there and died, before or after its
+//     sync, with nothing or a torn marker after it. The batch is written
+//     again in place, with the marker before it, synced, marked, and handed
+//     to the Target.
+//  3. It cuts off everything after the last marker, and syncs the cut.
+
+// tryCheck is the try at the write lock that Open makes once it has read
+// the log, and that a reader makes when it finds the writer gone (F6, which
+// calls it holding the mutex). It tries flock once, without waiting. When
+// it gets it, no writer is at work: it makes the checks a writer makes once
+// it holds the lock, reads on to the end of the log, checks the end of the
+// log, and lets go.
+//
+// When another holds the lock, that writer checks the end of the log before
+// it appends anything, and tryCheck does nothing. Nor does it when the file
+// is empty, since the first Lock makes a database of it, or when another
+// file has taken the path, or none is there, since the next Lock reads
+// what's there.
+func (l *Log) tryCheck() error {
+	if l.empty {
+		return nil
+	}
+	ok, err := l.f.TryLock()
+	if err != nil || !ok {
+		return err
+	}
+	err = l.checkLocked()
+	if e := l.f.Unlock(); err == nil {
+		err = e
+	}
+	return err
+}
+
+// checkLocked is tryCheck's work once flock is held.
+func (l *Log) checkLocked() error {
+	info, same, err := l.atPath()
+	switch {
+	case errors.Is(err, fs.ErrNotExist) || (err == nil && !same):
+		return nil
+	case err != nil:
+		return err
+	}
+	if err := l.checkRead(info); err != nil {
+		return err
+	}
+	return l.catchUp(info.Size)
+}
+
+// catchUp reads on to the end of the log and checks the end of the log,
+// holding the write lock, in a file that fstat gave as size bytes long once
+// the lock was held.
+//
+// F5 goes here. Until it cuts a failed write back out of the file, a failure
+// is handled as F2 handles it: while the bytes a failed commit or a failed
+// check left past the end of the log are there, and the log hasn't moved on
+// past them, this Log appends nothing after them (Append) and doesn't check
+// them. Another Log's check can deal with them meanwhile, as it deals with
+// what a crash leaves, and once they've been cut, or marked and read, this
+// one checks again.
+func (l *Log) catchUp(size int64) error {
+	from := l.end
+	if err := l.readOn(size); err != nil {
+		return err
+	}
+	if l.tail && l.end == from {
+		l.tail = l.end < size
+		return nil
+	}
+	l.tail = false
+	return l.checkEnd(size)
+}
+
+// checkEnd checks the end of the log, holding the write lock, once the log
+// has been read to its end in a file of size bytes. Damage it finds is a
+// *errs.Damage, and nothing is changed: a batch that counts followed by a
+// whole marker naming another batch, a batch that counts with changes that
+// break the rules, and in a compacted file a log that ends before the
+// compacted part does. A write, a sync or a cut that fails is handled as a
+// failed commit is (failed).
+func (l *Log) checkEnd(size int64) error {
+	// F4 goes here: step 1, a look from the end of the log to the end of the
+	// file for a whole marker naming the next batch or a later one, which is
+	// damage, since this read is made holding the lock.
+	if l.hdr.Gen > 1 && uint64(l.end) < l.hdr.CompactedEnd {
+		// A compacted file is whole before anyone can see it, so this is
+		// damage, and the cut below must never reach into the compacted part
+		// (FORMAT.md, "Compaction").
+		return &errs.Damage{Path: l.path, Offset: l.end, Batch: l.seq + 1, Reason: fmt.Sprintf("the log ends at offset %d, inside the compacted part, which ends at offset %d", l.end, l.hdr.CompactedEnd)}
+	}
+	if l.end == size {
+		return nil // the log is whole
+	}
+	defer l.r.release()
+	if err := l.markLeft(size); err != nil {
+		return err
+	}
+	// Step 3. The marker markLeft writes can take the file past size, and
+	// then nothing is left after it.
+	if l.end >= size {
+		return nil
+	}
+	if err := l.f.Truncate(l.end); err != nil {
+		return l.failed(err, "cutting the file back to the end of the log at offset %d, which may not have happened", l.end)
+	}
+	if err := l.f.Sync(); err != nil {
+		return l.failed(err, "syncing the cut of the file back to the end of the log at offset %d, which may not last", l.end)
+	}
+	return nil
+}
+
+// markLeft is step 2 of the check, at the end of the log in a file of size
+// bytes. When the first batch after the end of the log counts, and no whole
+// marker naming another batch follows it, a writer left it there and died
+// before marking it, or a power cut took its marker. markLeft writes it
+// again in place, with the marker before it, syncs it, marks it and hands it
+// to the Target, and the log ends after it. A batch that doesn't count is
+// left for the cut.
+//
+// Both are written again because after a failed sync, Linux can mark their
+// pages clean, and a sync on its own could then report success without them
+// ever reaching the drive. The batch is FORMAT.md's reason. The marker
+// before it was written after the last sync that worked, so the same goes
+// for it. If a power cut then took that marker, the next check would find
+// the batch before it unmarked, mark it, and cut off this one, which a
+// reader may have seen.
+//
+// The Target judges the rules for the state, and takes a batch only once
+// it's marked and on the drive, as every reader does. So a batch that
+// counts but breaks those rules is found only once it's marked, and is
+// damage then, as it is on every open after.
+func (l *Log) markLeft(size int64) error {
+	off, room, seq := l.end, size-l.end, l.seq+1
+	if room < format.BatchHeadSize {
+		return nil
+	}
+	head, err := l.r.read(l.f, off, format.BatchHeadSize, size)
+	if err != nil {
+		return unread(err)
+	}
+	n, err := format.BatchLength(head, l.hdr.Gen, seq, room)
+	if err != nil {
+		return nil // not a batch that counts
+	}
+	b, err := l.r.read(l.f, off, min(n+format.MarkerSize, room), size)
+	if err != nil {
+		return unread(err)
+	}
+	bt, err := format.DecodeBatch(b[:n], l.hdr.Gen, seq)
+	if errors.Is(err, format.ErrDoesNotCount) {
+		return nil
+	}
+	if err != nil {
+		return l.placed(off, err) // changes that are malformed, or break the rules for a change on its own
+	}
+	mine := format.Marker{Seq: bt.Seq, Sum: bt.Sum}
+	if int64(len(b)) == n+format.MarkerSize {
+		if m, whole := format.DecodeMarker(b[n:], l.hdr.ID, l.hdr.Gen); whole && m != mine {
+			return &errs.Damage{Path: l.path, Offset: off + n, Batch: bt.Seq, Reason: fmt.Sprintf(
+				"batch %d counts, with the checksum %#08x, and the whole marker after it names batch %d with the checksum %#08x, which no crash leaves", bt.Seq, bt.Sum, m.Seq, m.Sum)}
+		}
+	}
+	if plant == "logfile/cut-what-counts" {
+		return nil
+	}
+
+	at, again := off, l.batch[:0]
+	if l.seq > 0 && plant != "logfile/no-marker-again" {
+		at, again = off-format.MarkerSize, append(again, l.last[:]...)
+	}
+	again = append(again, b[:n]...)
+	if cap(again) <= window {
+		l.batch = again // kept for the next commit, as Append keeps its own
+	}
+	if plant != "logfile/sync-without-rewrite" {
+		if _, err := l.f.WriteAt(again, at); err != nil {
+			return l.failed(err, "writing batch %d again, which a writer left without its marker, so whether it's on the drive is unknown", bt.Seq)
+		}
+	}
+	if err := l.f.Sync(); err != nil {
+		return l.failed(err, "syncing batch %d, which a writer left without its marker, so whether it's on the drive is unknown", bt.Seq)
+	}
+	var marker [format.MarkerSize]byte
+	format.AppendMarker(marker[:0], l.hdr.ID, l.hdr.Gen, mine)
+	if _, err := l.f.WriteAt(marker[:], off+n); err != nil {
+		return l.failed(err, "marking batch %d, which a writer left without its marker, so whether it's marked is unknown", bt.Seq)
+	}
+	if err := l.t.Apply(bt.Seq, bt.Changes); err != nil {
+		return l.refused(off, bt.Seq, err)
+	}
+	l.seq, l.end, l.last = bt.Seq, off+n+format.MarkerSize, marker
+	return nil
+}
+
+// unread is what the check makes of an error from reading the end of the
+// log. Holding the lock, the file can't be shorter than fstat said, unless
+// something other than HyperCrux cut it; then there's less to check, and the
+// cut goes back to the end of the log all the same.
+func unread(err error) error {
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	return err
+}

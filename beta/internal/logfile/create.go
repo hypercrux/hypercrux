@@ -141,15 +141,17 @@ type fresh struct {
 // with .new- and random letters added. The file gets the permissions perm,
 // and the owner uid and group gid unless uid is -1, where that's allowed.
 // It's locked before anything is written to it, given a new database's
-// header with a new random ID, and synced.
+// header with a new random ID, or Options.ID when that's set, and synced.
 //
 // A writer that removes leftover .new- files removes one it can lock. It
 // may take this one in the moment between its creation and its lock: then
 // the lock fails, or the name has gone once the lock is held, and newFile
 // tries another name.
 func (l *Log) newFile(perm fs.FileMode, uid, gid int) (*fresh, error) {
-	hdr := format.Header{Gen: 1}
-	rand.Read(hdr.ID[:])
+	hdr := format.Header{ID: l.id, Gen: 1}
+	if hdr.ID == ([16]byte{}) {
+		rand.Read(hdr.ID[:])
+	}
 	head, err := format.AppendHeader(nil, hdr)
 	if err != nil {
 		return nil, err

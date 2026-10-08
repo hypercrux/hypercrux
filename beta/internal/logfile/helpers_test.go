@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
@@ -28,6 +29,7 @@ type recorder struct {
 	batches []applied
 	resets  int
 	refuse  uint64 // a batch Apply refuses, by sequence number, or 0
+	damage  bool   // the refusal is a *errs.Damage naming the batch, as the store gives
 }
 
 type applied struct {
@@ -35,12 +37,29 @@ type applied struct {
 	changes []format.Change
 }
 
+// storeDamage is the reason in the damage a recorder refuses a batch with,
+// as the store words it (S3).
+const storeDamage = "change 1: hypercrux: not found: no record table nosuch"
+
 func (r *recorder) Apply(seq uint64, changes []format.Change) error {
-	if seq == r.refuse {
+	switch {
+	case seq == r.refuse && r.damage:
+		return &errs.Damage{Batch: seq, Reason: storeDamage}
+	case seq == r.refuse:
 		return errors.New("a put into a table that doesn't exist")
 	}
 	r.batches = append(r.batches, applied{seq, changes})
 	return nil
+}
+
+// state is what r holds, a line for each batch: its sequence number and its
+// changes.
+func (r *recorder) state() string {
+	var b strings.Builder
+	for _, a := range r.batches {
+		fmt.Fprintln(&b, a.seq, a.changes)
+	}
+	return b.String()
 }
 
 func (r *recorder) Reset() {

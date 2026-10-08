@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 )
 
@@ -30,8 +31,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// helperChanges is the batch a holding helper commits.
-var helperChanges = table("helper")
+// helperChanges is the batch a holding helper commits, and helperDied the
+// batch a dying helper leaves without its marker.
+var (
+	helperChanges = table("helper")
+	helperDied    = table("died")
+)
 
 // helper runs a helper process's role on the database at path:
 //
@@ -40,6 +45,10 @@ var helperChanges = table("helper")
 //     or for HYPERCRUX_LOGFILE_HOLD when that's set.
 //   - create: waits for a line on its standard input, then opens the
 //     database, creating it when it isn't there, and prints its ID.
+//   - die: opens the database, takes the write lock, writes the next batch
+//     and syncs it, prints "written", and exits holding the lock, before it
+//     writes the marker, as a writer killed then would. With
+//     HYPERCRUX_LOGFILE_TAIL=half, it writes half the batch.
 func helper(role, path string) int {
 	fail := func(err error) int {
 		fmt.Fprintln(os.Stderr, "helper:", role+":", err)
@@ -79,6 +88,28 @@ func helper(role, path string) int {
 		if err := l.Close(); err != nil {
 			return fail(err)
 		}
+	case "die":
+		l, err := Open(fsys.OS{}, path, &recorder{}, Options{})
+		if err != nil {
+			return fail(err)
+		}
+		if err := l.Lock(); err != nil {
+			return fail(err)
+		}
+		b, _, err := format.AppendBatch(nil, l.hdr.Gen, l.seq+1, helperDied)
+		if err != nil {
+			return fail(err)
+		}
+		if os.Getenv("HYPERCRUX_LOGFILE_TAIL") == "half" {
+			b = b[:len(b)/2]
+		}
+		if _, err := l.f.WriteAt(b, l.end); err != nil {
+			return fail(err)
+		}
+		if err := l.f.Sync(); err != nil {
+			return fail(err)
+		}
+		fmt.Println("written")
 	default:
 		return fail(errors.New("no such role"))
 	}

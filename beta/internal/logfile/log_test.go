@@ -68,84 +68,31 @@ func TestBatchesSurviveAReopen(t *testing.T) {
 }
 
 // TestReadingStopsAtTheEndOfTheLog writes files whose logs end in each of
-// the ways FORMAT.md lists, and checks that opening applies the marked
-// batches before the end and nothing after it. Holding the lock, F2
-// refuses to append after a tail it hasn't checked, and leaves it as it is,
-// so each file comes through Lock and a refused Append unchanged.
+// the ways FORMAT.md lists (endCases), and checks that opening applies the
+// marked batches before the end and nothing after it. Another open file
+// holds the write lock throughout, as another process's writer would, so
+// Open doesn't check the end of the log, and every file stays as it was.
+// TestTheCheckOfTheEndOfTheLog takes the same files through the check.
 func TestReadingStopsAtTheEndOfTheLog(t *testing.T) {
-	one, two := table("one"), table("two")
-	cases := []struct {
-		name  string
-		build func(w *builder)
-		read  int // the batches before the end of the log
-	}{
-		{"only a header", func(w *builder) {}, 0},
-		{"a whole log", func(w *builder) { w.commit(one); w.commit(two) }, 2},
-		{"a batch without its marker", func(w *builder) { w.commit(one); w.batch(two) }, 1},
-		{"a torn marker", func(w *builder) {
-			w.commit(one)
-			w.marker(2, w.batch(two))
-			w.b = w.b[:len(w.b)-9]
-		}, 1},
-		{"a marker naming another batch", func(w *builder) { w.commit(one); w.marker(2, w.batch(two)+1) }, 1},
-		{"a marker naming the batch before", func(w *builder) {
-			w.commit(one)
-			w.batch(two)
-			w.marker(1, crc(w, 1))
-		}, 1},
-		{"zeros", func(w *builder) { w.commit(one); w.b = append(w.b, make([]byte, 300)...) }, 1},
-		{"a batch cut short", func(w *builder) {
-			w.commit(one)
-			w.batch(two)
-			w.b = w.b[:len(w.b)-5]
-		}, 1},
-		{"a marked batch that fails its checksum", func(w *builder) {
-			w.commit(one)
-			start := len(w.b)
-			w.commit(two)
-			w.b[start+format.BatchHeadSize+2] ^= 0x20 // F4 reports this one as damage
-		}, 1},
-		{"a batch with the wrong sequence number", func(w *builder) {
-			w.commit(one)
-			w.marker(3, w.raw(1, 3, []byte("X\x03\x00two")))
-		}, 1},
-		{"a batch of another generation", func(w *builder) {
-			w.commit(one)
-			w.marker(2, w.raw(2, 2, []byte("X\x03\x00two")))
-		}, 1},
-		{"a batch with no room for its marker", func(w *builder) { w.commit(one); w.commit(two); w.b = w.b[:len(w.b)-1] }, 1},
-	}
-	for _, c := range cases {
+	for _, c := range endCases() {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "db")
 			w := newBuilder(t)
 			c.build(w)
 			w.write(path)
+			defer holdLock(t, path)()
 
-			l, rec := openLog(t, path, Options{})
-			rec.holds(t, [][]format.Change{one, two}[:c.read]...)
-			if err := l.Lock(); err != nil {
-				t.Fatal(err)
-			}
-			err := l.Append(table("three"))
-			tail := l.end < int64(len(w.b))
-			if tail && !errors.Is(err, errors.ErrUnsupported) {
-				t.Errorf("Append after a tail nothing has checked: %v", err)
-			}
-			if !tail && err != nil {
-				t.Errorf("Append after a whole log: %v", err)
-			}
-			if err := l.Unlock(); err != nil {
-				t.Fatal(err)
-			}
-			if tail && !bytes.Equal(fileBytes(t, path), w.b) {
+			_, rec := openLog(t, path, Options{})
+			rec.holds(t, endLists[:c.read]...)
+			if !bytes.Equal(fileBytes(t, path), w.b) {
 				t.Error("the file changed")
 			}
 		})
 	}
 }
 
-// crc returns the checksum of the batch numbered seq in what w has written.
+// crc returns the checksum of the batch numbered seq in what w has written,
+// counting from the header.
 func crc(w *builder, seq uint64) uint32 {
 	off := int64(format.HeaderSize)
 	for s := uint64(1); ; s++ {
@@ -163,22 +110,31 @@ func crc(w *builder, seq uint64) uint32 {
 // TestDamageInABatchThatCounts: a batch that counts holds what its writer
 // wrote, so changes in it that break the rules are damage, marked or not,
 // with the path, the batch and the offset of the bad change in the file.
+// Opening reports it, and so does Lock when the batch comes after the Log
+// was opened, and neither changes the file: the check of the end of the
+// log never writes such a batch again, marks it or cuts it.
 func TestDamageInABatchThatCounts(t *testing.T) {
 	for _, marked := range []bool{true, false} {
 		t.Run(fmt.Sprintf("marked %v", marked), func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "db")
 			w := newBuilder(t)
 			w.commit(table("one"))
+			w.write(path)
+			l, _ := openLog(t, path, Options{})
 			at := int64(len(w.b))
 			sum := w.raw(1, 2, []byte("X\x03\x00Bad")) // a table name with a capital letter
 			if marked {
 				w.marker(2, sum)
 			}
+			w.b = append(w.b, make([]byte, 100)...)
 			w.write(path)
 			_, err := Open(fsys.OS{}, path, &recorder{}, Options{})
 			var d *errs.Damage
 			if !errors.As(err, &d) || d.Path != path || d.Batch != 2 || d.Offset != at+format.BatchHeadSize {
 				t.Fatalf("Open gave %v, where damage in batch 2 at offset %d is wanted", err, at+format.BatchHeadSize)
+			}
+			if err := lockErr(l); !errors.As(err, &d) || d.Path != path || d.Batch != 2 || d.Offset != at+format.BatchHeadSize {
+				t.Fatalf("Lock gave %v, where damage in batch 2 at offset %d is wanted", err, at+format.BatchHeadSize)
 			}
 			if !bytes.Equal(fileBytes(t, path), w.b) {
 				t.Error("the file changed")
@@ -346,13 +302,14 @@ func TestUnlockLetsGoOfFlockFirst(t *testing.T) {
 	var l *Log
 	var held []bool
 	h := &hookFS{FS: fsys.OS{}, file: func(f fsys.File) fsys.File {
-		return &unlockSpy{File: f, held: func() { held = append(held, len(l.mu) == 1) }}
+		return &unlockSpy{File: f, held: func() { held = append(held, l != nil && len(l.mu) == 1) }}
 	}}
 	l, err := Open(h, path, &recorder{}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer l.Close()
+	held = nil // Open lets go of flock too, when its check of the end of the log is done
 	commit(t, l, table("one"))
 	if len(held) != 1 || !held[0] || len(l.mu) != 0 {
 		t.Errorf("flock was let go with the mutex held: %v, and the mutex is held after Unlock: %v", held, len(l.mu) == 1)
@@ -369,10 +326,14 @@ func (f *unlockSpy) Unlock() error {
 	return f.File.Unlock()
 }
 
-// TestAFailedCommitStopsAppends: until F5 cuts a failed commit back out of
-// the file, the bytes it left past the end of the log are a tail nothing
-// has checked, so neither this Log nor a later Lock appends after them, and
-// they stay as they are.
+// TestAFailedCommitStopsAppends pins F2's handling of a failed commit, which
+// F3 keeps and F5 changes. Until F5 cuts a failed commit back out of the
+// file, the bytes it left past the end of the log stay as they are, and
+// neither this Log nor a later Lock of it appends after them or checks
+// them. Another Log's check deals with them as it deals with what a crash
+// leaves: here the batch is whole, so it counts, and it's marked, since a
+// failed commit's outcome is unknown. Once the log has moved on past them,
+// the first Log appends again.
 func TestAFailedCommitStopsAppends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
 	fail := 0
@@ -409,7 +370,9 @@ func TestAFailedCommitStopsAppends(t *testing.T) {
 	if !bytes.Equal(fileBytes(t, path), file) {
 		t.Error("the file changed")
 	}
-	reread(t, path).holds(t, table("one"))
+	reread(t, path).holds(t, table("one"), table("two"))
+	commit(t, l, table("three"))
+	reread(t, path).holds(t, table("one"), table("two"), table("three"))
 }
 
 // TestAppendRefusesBadChanges: a change the codec refuses never reaches

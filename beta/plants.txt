@@ -46,3 +46,6 @@ hypercrux/append-error-dropped ./beta/hypercrux
 hypercrux/reset-kept ./beta/hypercrux
 hypercrux/load-after-open ./beta/hypercrux
 hypercrux/vector-shared ./beta/hypercrux
+logfile/cut-what-counts ./beta/internal/logfile
+logfile/sync-without-rewrite ./beta/internal/logfile
+logfile/no-marker-again ./beta/internal/logfile

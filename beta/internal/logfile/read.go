@@ -88,12 +88,7 @@ func (l *Log) readOn(size int64) error {
 		if err != nil {
 			// A batch that counts, whose changes are malformed or break
 			// the rules for a change on its own: damage, marked or not.
-			var d *errs.Damage
-			if errors.As(err, &d) {
-				d.Path = l.path
-				d.Offset += off
-			}
-			return err
+			return l.placed(off, err)
 		}
 		if int64(len(b)) < n+format.MarkerSize {
 			break // no room for its marker
@@ -103,7 +98,7 @@ func (l *Log) readOn(size int64) error {
 			break // a commit under way, or the remains of one
 		}
 		if err := l.t.Apply(bt.Seq, bt.Changes); err != nil {
-			return &errs.Damage{Path: l.path, Offset: off, Batch: bt.Seq, Reason: "changes that break the rules for the state they apply to: " + err.Error()}
+			return l.refused(off, bt.Seq, err)
 		}
 		l.seq = bt.Seq
 		l.end = off + n + format.MarkerSize
@@ -115,6 +110,32 @@ func (l *Log) readOn(size int64) error {
 	// checks. F2 stops at the end of the log, and takes what it finds there
 	// for a commit under way or the remains of one.
 	return nil
+}
+
+// placed fills in where the damage in err is, when err holds a *errs.Damage
+// from the codec or the Target, which name the batch and an offset from the
+// batch's start, or 0: it sets the path, and adds off, the batch's offset in
+// the file. It returns err.
+func (l *Log) placed(off int64, err error) error {
+	var d *errs.Damage
+	if errors.As(err, &d) {
+		d.Path = l.path
+		d.Offset += off
+	}
+	return err
+}
+
+// refused is the error for the batch seq at offset off when the Target
+// refuses it: damage, since changes that break the rules for the state they
+// apply to can't come from a crash. The store gives a *errs.Damage already,
+// naming the batch and the change, so that's the error, placed in the file.
+// Any other error is wrapped in a *errs.Damage of the log's own.
+func (l *Log) refused(off int64, seq uint64, err error) error {
+	var d *errs.Damage
+	if errors.As(err, &d) {
+		return l.placed(off, err)
+	}
+	return &errs.Damage{Path: l.path, Offset: off, Batch: seq, Reason: "changes that break the rules for the state they apply to: " + err.Error()}
 }
 
 // checkRead checks, holding the write lock, that what l has read is still
