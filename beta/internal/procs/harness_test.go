@@ -61,6 +61,15 @@ var (
 				time.Sleep(time.Hour)
 			}
 		}}
+	countingReader = Workload{Name: "a reader that counts", Write: func(w *Writer) error { return toyWrite(w, "") }, Final: toyFinal,
+		Read: func(r *Reader) error {
+			return toyReadInto(r.Path(), applyFunc(func(seq uint64, commit string) {
+				r.Apply(seq, commit)
+				if seq%20 == 0 {
+					r.Count("twentieth")
+				}
+			}))
+		}}
 )
 
 func TestOptionsThatCantBeUsed(t *testing.T) {
@@ -76,6 +85,9 @@ func TestOptionsThatCantBeUsed(t *testing.T) {
 		{"writers below 0", toy, Options{Path: path, Writers: -1}},
 		{"a life that ends before it starts", toy, Options{Path: path, ReaderLife: Span{Min: time.Second, Max: time.Millisecond}}},
 		{"a life of nothing", toy, Options{Path: path, WriterLife: Span{Min: 0, Max: 0}, ReaderLife: Span{Min: -time.Second}}},
+		{"a gap that ends before it starts", toy, Options{Path: path, WriterGap: Span{Min: time.Second, Max: time.Millisecond}}},
+		{"a least count below 0", toy, Options{Path: path, Least: map[string]int{"checks": -1}}},
+		{"a least count without a name", toy, Options{Path: path, Least: map[string]int{"": 1}}},
 	} {
 		if _, err := Run(c.w, c.o); err == nil || errors.As(err, new(*Failure)) {
 			t.Errorf("%s: Run gives %v", c.name, err)
@@ -305,3 +317,44 @@ func stopAfter(r *Reader, n uint64) applier {
 type applyFunc func(seq uint64, commit string)
 
 func (f applyFunc) Apply(seq uint64, commit string) { f(seq, commit) }
+
+// TestAWriterGapLeavesItsSlotEmpty: with a gap of 40 to 60 milliseconds
+// after each writer, in lives of 10 to 20, each writer's slot starts a new
+// writer at most once every 50 milliseconds, so the run starts far fewer
+// writers than it would without the gap, and passes as before.
+func TestAWriterGapLeavesItsSlotEmpty(t *testing.T) {
+	rep, err := Run(toy, Options{Path: filepath.Join(t.TempDir(), "toy"), Time: 600 * time.Millisecond,
+		WriterLife: Span{Min: 10 * time.Millisecond, Max: 20 * time.Millisecond}, WriterGap: Span{Min: 40 * time.Millisecond, Max: 60 * time.Millisecond}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if most := 2 * (int(rep.Took/(50*time.Millisecond)) + 1); rep.Writers > most {
+		t.Errorf("%d writers started in %v, where the gaps leave room for %d at most", rep.Writers, rep.Took, most)
+	}
+	t.Log(rep)
+}
+
+// TestARunWaitsForTheLeastCounts: a reader counts each twentieth commit it
+// sees, and a run whose Least wants 10 of them goes on past its time until
+// it has them, which its report gives. A run that wants a count no process
+// ever makes fails once it has waited for the least work, and says which.
+func TestARunWaitsForTheLeastCounts(t *testing.T) {
+	rep, err := Run(countingReader, Options{Path: filepath.Join(t.TempDir(), "toy"), Time: 50 * time.Millisecond, Least: map[string]int{"twentieth": 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Counts["twentieth"] < 10 {
+		t.Errorf("the run ended with %d of the 10 counts it wants", rep.Counts["twentieth"])
+	}
+	t.Log(rep)
+
+	r, err := newRun(countingReader, Options{Path: filepath.Join(t.TempDir(), "toy"), Time: 100 * time.Millisecond, Least: map[string]int{"never": 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.waits.idle = 500 * time.Millisecond
+	_, err = r.run()
+	if f := mustFail(t, err, Idle); !strings.Contains(f.Reason, `counted "never" 0 times, short of the 1 wanted`) {
+		t.Errorf("the reason is %q", f.Reason)
+	}
+}

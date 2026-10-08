@@ -68,9 +68,10 @@ func TestReportsReadBack(t *testing.T) {
 		rep.send(kindProblem, strconv.Itoa(int(Lost)), strconv.Quote(text))
 		rep.send(kindFail, strconv.Quote(text))
 		rep.send(kindEnd)
+		rep.send(kindCount, strconv.Quote(text))
 		want = append(want, report{kind: kindBegin, text: text}, report{kind: kindDone}, report{kind: kindFailed, text: text}, report{kind: kindReset},
 			report{kind: kindSaw, seq: uint64(i + 1), text: text}, report{kind: kindProblem, problem: Lost, text: text}, report{kind: kindFail, text: text},
-			report{kind: kindEnd})
+			report{kind: kindEnd}, report{kind: kindCount, text: text})
 	}
 	if n := strings.Count(out.String(), "\n"); n != len(want) {
 		t.Fatalf("%d reports went as %d lines", len(want), n)
@@ -114,7 +115,7 @@ func TestAReportCutShortIsDropped(t *testing.T) {
 func TestReportsThatDontReadBack(t *testing.T) {
 	for _, line := range []string{
 		"", "start", "start x", "begin a", `begin "a`, "done now", "reset 1", "end 0", "saw", "saw 1", `saw 0 "a"`, `saw x "a"`, "saw 1 a",
-		`problem 0 "a"`, `problem 10 "a"`, `problem x "a"`, `fail`, `finish "a"`, `Begin "a"`,
+		`problem 0 "a"`, `problem 10 "a"`, `problem x "a"`, `fail`, `finish "a"`, `Begin "a"`, "count", "count a", `count "a`,
 	} {
 		if rp, err := parseReport(line); err == nil {
 			t.Errorf("%q reads as %+v", line, rp)

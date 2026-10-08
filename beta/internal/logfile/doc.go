@@ -15,8 +15,12 @@
 // holds the lock, and then reads the file again holding it before it
 // reports damage (damage.go). A commit that fails is cut back out of the
 // file before the lock goes, and when that fails too, the handle keeps the
-// lock and refuses every write until it's closed (failed.go). It reaches the
-// file only through fsys, so the crash tests can put a fault layer under it.
+// lock and refuses every write until it's closed (failed.go). A process
+// that keeps the database open follows what other processes commit: one
+// stat of the path, then each new batch's head, its marker and the rest,
+// and the check of the end of the log when the writer has gone
+// (follow.go). It reaches the file only through fsys, so the crash tests
+// can put a fault layer under it.
 //
 // Tasks F2 to F9 build it. log.go says where each later task fits in. Like
 // the rest of beta/, it builds only on Linux.

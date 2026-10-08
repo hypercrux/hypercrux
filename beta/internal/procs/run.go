@@ -41,7 +41,8 @@ const (
 
 // Run runs w's writers and readers side by side on the database at
 // o.Path, kills each with SIGKILL at the end of a life of random length,
-// and starts a new one in its place, until o.Time is up, or o.Kills
+// and starts a new one in its place, after a gap of random length for a
+// writer when o.WriterGap gives one, until o.Time is up, or o.Kills
 // processes have been killed. Then it ends the run:
 //
 //  1. It kills every writer, and waits for each to end and for its reports
@@ -63,10 +64,10 @@ const (
 //
 // The run goes on past Time until it has done enough to mean something:
 // 10 commits that writers saw succeed, 3 writers killed with a commit under
-// way, and 2 readers killed once they had seen a commit. A slow machine
-// makes fewer commits in the time, so the run waits for them, and fails
-// with the problem Idle only after a minute without them, or ten times
-// Time when that's longer.
+// way, 2 readers killed once they had seen a commit, and the counts in
+// o.Least. A slow machine makes fewer commits in the time, so the run waits
+// for them, and fails with the problem Idle only after a minute without
+// them, or ten times Time when that's longer.
 //
 // Run returns a *Failure for the first problem it finds, and a plain
 // error when the workload or the options can't be used, or a child can't
@@ -160,6 +161,7 @@ type event struct {
 	state *os.ProcessState // evExited's
 	final []string         // evFinal's
 	err   error            // evFinal's
+	slot  int              // evStart's
 }
 
 type eventKind uint8
@@ -171,6 +173,7 @@ const (
 	evExited                   // kid has ended
 	evKill                     // kid's life is over
 	evFinal                    // Final has read the file
+	evStart                    // a writer's slot has been empty for its gap
 )
 
 func newRun(w Workload, o Options) (*run, error) {
@@ -209,6 +212,14 @@ func newRun(w Workload, o Options) (*run, error) {
 			return nil, fmt.Errorf("procs: a life of %v to %v, where a span from 0 or more to more than 0 is wanted", s.Min, s.Max)
 		}
 	}
+	if g := o.WriterGap; g != (Span{}) && (g.Min < 0 || g.Max < g.Min || g.Max == 0) {
+		return nil, fmt.Errorf("procs: a writer's gap of %v to %v, where none, or a span from 0 or more to more than 0, is wanted", g.Min, g.Max)
+	}
+	for what, n := range o.Least {
+		if what == "" || n < 0 {
+			return nil, fmt.Errorf("procs: Options.Least wants %d counts of %q, where a name and a number from 0 are wanted", n, what)
+		}
+	}
 	seed := o.Seed
 	if s := os.Getenv(envSeed); seed == 0 && s != "" {
 		n, err := strconv.ParseUint(s, 10, 64)
@@ -224,8 +235,10 @@ func newRun(w Workload, o Options) (*run, error) {
 	if err != nil {
 		return nil, fmt.Errorf("procs: finding the test binary: %w", err)
 	}
+	h := newHistory()
+	h.least = o.Least
 	return &run{
-		w: w, o: o, exe: exe, seed: seed, rng: rand.New(rand.NewPCG(seed, 0x70726f6373)), h: newHistory(),
+		w: w, o: o, exe: exe, seed: seed, rng: rand.New(rand.NewPCG(seed, 0x70726f6373)), h: h,
 		waits:  waits{start: startWait, kill: killWait, final: finalWait, catchUp: catchUpWait, idle: max(idleWait, 10*o.Time)},
 		events: make(chan event, 256), quit: make(chan struct{}),
 		kids: map[int]*kid{}, slots: make([]*kid, o.Writers+o.Readers),
@@ -304,6 +317,10 @@ func (r *run) handle(ev event) {
 			r.finalBusy = false
 			r.read(ev.final, ev.err)
 		}
+	case evStart:
+		if r.phase == running && r.slots[ev.slot] == nil {
+			r.start(ev.slot)
+		}
 	}
 }
 
@@ -357,6 +374,8 @@ func (r *run) report(k *kid, line string) {
 		if k.timer != nil {
 			k.timer.Stop()
 		}
+	case kindCount:
+		r.h.tally(rp.text)
 	}
 }
 
@@ -627,7 +646,14 @@ func (r *run) ended(k *kid) {
 		r.found(Failed, "%v ended by itself, with %v%s", k, k.state, k.out)
 	}
 	r.h.gone(k.id, k.killed)
-	if r.phase == running || (k.role == roleReader && r.phase < catchingUp) {
+	switch {
+	case k.role == roleWriter && r.phase == running && r.o.WriterGap != (Span{}):
+		// The slot stays empty for a while, and a new writer starts there
+		// then, unless the run has moved on.
+		g := r.o.WriterGap
+		slot := k.slot
+		time.AfterFunc(g.Min+time.Duration(r.rng.Int64N(int64(g.Max-g.Min)+1)), func() { r.send(event{kind: evStart, slot: slot}) })
+	case r.phase == running || (k.role == roleReader && r.phase < catchingUp):
 		r.start(k.slot)
 	}
 }

@@ -25,9 +25,10 @@ import (
 // The real log, beta/internal/logfile, under the harness. Writers commit
 // through it, as the public package will: Lock, Append, then Unlock, with
 // a Target that drops what Lock reads on. Readers open the file afresh for
-// every read, as the log's API allows until F6 adds following, so every
-// read goes from the first commit, and Open's try at the lock checks the
-// end of the log whenever no writer holds it. Final takes the lock, as the
+// every read, as the hypercrux command does, so every read goes from the
+// first commit, and Open's try at the lock checks the end of the log
+// whenever no writer holds it; follow_test.go has readers that open it
+// once and follow it instead (F6). Final takes the lock, as the
 // next writer would, so its check marks a batch that a killed writer left
 // synced and unmarked, and cuts off whatever else a killed writer left.
 //
@@ -41,8 +42,11 @@ var realLog = Workload{Name: "real log", Write: realWrite, Read: realRead, Final
 // realWrite is a writer's work on the real log: commits, one after
 // another, until the process is killed, with a short wait between them so
 // the writers take turns at the lock.
-func realWrite(w *Writer) error {
-	l, err := logfile.Open(fsys.OS{}, w.Path(), discard{}, logfile.Options{})
+func realWrite(w *Writer) error { return realWriteOn(fsys.OS{}, w) }
+
+// realWriteOn is realWrite through the file calls files.
+func realWriteOn(files fsys.FS, w *Writer) error {
+	l, err := logfile.Open(files, w.Path(), discard{}, logfile.Options{})
 	if err != nil {
 		return err
 	}

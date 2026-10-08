@@ -42,6 +42,7 @@ const (
 	kindProblem = "problem" // the harness has found a problem in the child: the problem's number and the reason
 	kindFail    = "fail"    // the child's work has failed: the error
 	kindEnd     = "end"     // the child's work has returned nil, and the child is ending
+	kindCount   = "count"   // the child counted an event of its workload's own: its name
 )
 
 // reporter writes a child's reports. Its methods are safe to call from
@@ -90,7 +91,7 @@ type report struct {
 	pid     int     // a start's
 	seq     uint64  // a saw's
 	problem Problem // a problem's
-	text    string  // what a commit holds, or an error, or a problem's reason
+	text    string  // what a commit holds, or an error, a problem's reason, or what a count counts
 }
 
 // parseReport reads back one line a child wrote, without its newline.
@@ -105,7 +106,7 @@ func parseReport(line string) (report, error) {
 		if rest != "" {
 			err = errors.New("there's more after its kind")
 		}
-	case kindBegin, kindFailed, kindFail:
+	case kindBegin, kindFailed, kindFail, kindCount:
 		rp.text, err = strconv.Unquote(rest)
 	case kindSaw:
 		seq, text, _ := strings.Cut(rest, " ")

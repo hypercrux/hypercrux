@@ -18,8 +18,9 @@ import (
 // end of the log before it appends anything (lockFile, through catchUp),
 // and so does opening once it holds the lock: when it gets it without
 // waiting (tryCheck), and when it waited for it to read again what looked
-// like damage (confirm, in damage.go). F6 adds a reader that finds it can
-// take the lock, since the writer is gone, and it calls tryCheck too.
+// like damage (confirm, in damage.go). So does a follower that finds it can
+// take the lock, since the writer is gone (Follow, in follow.go), through
+// tryCheck and confirm too.
 //
 // The check reads the log on to its end first, under the lock, so the end
 // it looks at is just past the last marked batch. Then:
@@ -43,18 +44,20 @@ import (
 // (unfinished).
 
 // tryCheck is the try at the write lock that Open makes once it has read
-// the log, and that a reader makes when it finds the writer gone (F6, which
-// calls it holding the mutex). It tries flock once, without waiting, and
-// reports whether it got it. When it does, no writer is at work: it makes
-// the checks a writer makes once it holds the lock, reads on to the end of
-// the log, checks the end of the log, and lets go.
+// the log, and that Follow makes when it stops short of the end of the
+// file, holding the mutex, to find whether the writer has gone. It tries
+// flock once, without waiting, and reports whether it got it. When it does,
+// no writer is at work: it makes the checks a writer makes once it holds
+// the lock, reads on to the end of the log, checks the end of the log, and
+// lets go.
 //
 // When another holds the lock, that writer checks the end of the log before
 // it appends anything, and tryCheck does nothing more. Open then looks past
-// the end of the log without the lock (openCheck). Nor does tryCheck check
-// anything when the file is empty, since the first Lock makes a database of
-// it, or when nothing is at the path, since the next Lock reads what's
-// there. When another file has taken the path, it returns errReplaced.
+// the end of the log without the lock (openCheck), and Follow makes its
+// cheap test (followOn). Nor does tryCheck check anything when the file is
+// empty, since the first Lock makes a database of it, or when nothing is at
+// the path, since the next Lock reads what's there. When another file has
+// taken the path, its error wraps ErrReplaced.
 func (l *Log) tryCheck() (bool, error) {
 	if l.empty {
 		return false, nil
@@ -72,7 +75,7 @@ func (l *Log) tryCheck() (bool, error) {
 
 // checkLocked is the work of tryCheck and confirm once flock is held. When
 // another file has taken the path, what was read is no longer the
-// database, and it returns errReplaced.
+// database, and its error wraps ErrReplaced.
 func (l *Log) checkLocked() error {
 	info, same, err := l.atPath()
 	switch {
@@ -81,7 +84,7 @@ func (l *Log) checkLocked() error {
 	case err != nil:
 		return err
 	case !same:
-		return errReplaced
+		return l.replaced()
 	}
 	if err := l.checkRead(info); err != nil {
 		return err

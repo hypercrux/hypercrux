@@ -6,6 +6,7 @@
 package procs
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -101,7 +102,23 @@ func TestTheHistoryCounts(t *testing.T) {
 	}
 	var rep Report
 	h.count(&rep, final)
-	if rep.Begun != 14 || rep.Done != 10 || rep.Errors != 1 || rep.UnderWay != 3 || rep.UnderWayIn != 1 || rep.Commits != 11 || rep.Seen != 12 {
+	if rep.Begun != 14 || rep.Done != 10 || rep.Errors != 1 || rep.UnderWay != 3 || rep.UnderWayIn != 1 || rep.Commits != 11 || rep.Seen != 12 || rep.Counts != nil {
 		t.Errorf("the counts are %+v", rep)
+	}
+
+	// The workload's own counts, and the least of them a run wants.
+	h.least = map[string]int{"checks": 2, "cuts": 0}
+	h.tally("checks")
+	if h.enough() || !strings.Contains(h.lacks(), `counted "checks" 1 time, short of the 2 wanted`) || strings.Contains(h.lacks(), "cuts") {
+		t.Errorf("with 1 of the 2 checks wanted, the run has done enough: %v: %s", h.enough(), h.lacks())
+	}
+	h.tally("checks")
+	h.tally("other")
+	if !h.enough() {
+		t.Errorf("with the 2 checks wanted, the run hasn't done enough: %s", h.lacks())
+	}
+	h.count(&rep, final)
+	if len(rep.Counts) != 2 || rep.Counts["checks"] != 2 || rep.Counts["other"] != 1 || !strings.Contains(rep.String(), "counted checks 2, other 1") {
+		t.Errorf("the report counts %v: %v", rep.Counts, rep)
 	}
 }

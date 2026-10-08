@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
@@ -27,16 +29,11 @@ import (
 // (openCheck). F5's failed commits are in failed.go: a commit that fails is
 // cut back out of the file before the lock is let go, or the Log keeps the
 // lock until Close (stuck), and a failure in the check leaves the end of the
-// log for the next check.
+// log for the next check. F6's following of other processes is in
+// follow.go: Follow reads on holding the write lock's mutex, which it never
+// waits for, and without flock, and when it finds the writer gone, it takes
+// flock and checks the end of the log.
 //
-//   - F6, following other processes: a call that reads on without the
-//     lock, made before each read: stat the path, read each batch's head,
-//     then its marker, then the rest (format.BatchLength), and try the lock
-//     without waiting when the log stops short of the end of the file,
-//     which is tryCheck. The fields that say how far the log has been read
-//     are the mutex holder's for now, so F6 decides how a reader shares
-//     them: it can skip reading on while the mutex is held, since nothing
-//     can be committed then.
 //   - F7, the file rules: in Open, before anything else.
 //   - F8, compaction: after a commit, holding the lock, and in flock, which
 //     waits past the deadline while NAME.compact is locked.
@@ -59,8 +56,12 @@ const maxTries = 100
 
 // Target is where the log hands what it reads: the in-memory copy, which
 // the public package joins to the log (G1), or a test's recorder. The log
-// calls it from Open and Lock, on the goroutine that called them, one call
-// at a time.
+// calls it from Open, Lock and Follow, on the goroutine that called them,
+// one call at a time. Lock and Follow call it holding the write lock's
+// mutex. An Update in the public package begins its transaction after Lock
+// and ends it before Unlock (G1), holding the mutex throughout, so no call
+// comes while an Update's transaction is open, and a transaction the
+// Target begins for a batch never waits for one (follow.go).
 type Target interface {
 	// Apply applies one marked batch: its sequence number, and its
 	// changes, in order. The changes are the Target's to keep: nothing
@@ -82,9 +83,9 @@ type Target interface {
 // Options holds a Log's settings.
 type Options struct {
 	// Wait is how long Lock waits for the write lock, the mutex and flock
-	// together, and how long Open waits for it when it has to read the file
-	// again holding it, to confirm what looks like damage. 0 means
-	// DefaultWait. The tests set a shorter one.
+	// together, and how long Open and Follow wait for it when they have to
+	// read the file again holding it, to confirm what looks like damage. 0
+	// means DefaultWait. The tests set a shorter one.
 	Wait time.Duration
 
 	// ID, when it isn't all zeros, is the database ID that a database this
@@ -104,7 +105,8 @@ type Options struct {
 // between Lock and Append, holding the lock, and Lock first reads what
 // other processes have committed, handing it to the Target, so the
 // transaction starts from the latest state, as 0.x's BEGIN IMMEDIATE does.
-// A transaction that changes nothing calls Unlock without Append.
+// A transaction that changes nothing calls Unlock without Append. Between
+// commits, Follow reads what other processes commit (follow.go).
 //
 // A Log can be used by many goroutines at once: the write lock keeps them
 // apart.
@@ -116,12 +118,26 @@ type Log struct {
 	wait time.Duration
 	id   [16]byte // Options.ID
 
+	// fol keeps followers apart, so a follower that finds another reading
+	// on waits for it, and reads at least as far. Only Follow takes it, and
+	// a follower holding it never waits for the mutex, so anyone may wait
+	// for fol, an Update's function included (follow.go).
+	fol sync.Mutex
+
+	// seen is how far this process has applied the log, as the mutex's
+	// holder last left it: the file and the end of its log, or nil when the
+	// Log has no file. Follow reads it without the mutex, to find at the
+	// cost of one stat that there's nothing to read.
+	seen atomic.Pointer[spot]
+
 	// mu is the mutex in front of flock, the write lock's first half. It's
 	// a channel holding one token at most, so a wait for it can time out.
 	// Its holder owns every field below. Open owns them until it returns.
+	// Follow takes it too, without waiting (follow.go).
 	mu chan struct{}
 
 	f     fsys.File // the database file, or nil after a switch to another file failed, or after Close
+	file  fsys.Info // what fstat said about f once it was opened, whose device and inode number say which file it is
 	empty bool      // the file was empty when it was read: no database yet, and the fields up to r aren't set
 	hdr   format.Header
 	head  [format.HeaderSize]byte // the header, as the file holds it
@@ -189,6 +205,7 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 			if err != nil {
 				return nil, err
 			}
+			l.publish()
 			return l, nil
 		}
 		if err != nil {
@@ -203,7 +220,7 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 		// The look past the end of the log, whether or not Open gets the
 		// lock, and the check of the end once it holds it (damage.go).
 		err = l.openCheck(size, &deadline)
-		if errors.Is(err, errReplaced) {
+		if errors.Is(err, ErrReplaced) {
 			// Another file took the path before Open held the lock: read that
 			// one from its start instead.
 			f.Close()
@@ -215,6 +232,7 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 			f.Close()
 			return nil, err
 		}
+		l.publish()
 		return l, nil
 	}
 	return nil, fmt.Errorf("hypercrux: %s: a file kept appearing at the path and going again while it was opened", path)
@@ -223,7 +241,10 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 // Lock takes the write lock: the mutex inside the process, then flock on
 // the database file, waiting up to Options.Wait for the two together.
 // When the lock doesn't come free in time, it fails with an error that
-// wraps errs.ErrLockTimeout.
+// wraps errs.ErrLockTimeout. While it waits for flock, holding the mutex,
+// it reads on between its tries, as Follow would, handing the Target what
+// other processes commit meanwhile, since Follow reads nothing while the
+// mutex is held (follow.go).
 //
 // Holding both, it checks by device and inode number that the file it
 // locked is still the one at the path. When another file has taken the
@@ -259,18 +280,28 @@ func (l *Log) Lock() error {
 	}
 	switch {
 	case l.closed:
-		<-l.mu
+		l.letGo()
 		return l.closedError()
 	case l.stuck != nil:
-		<-l.mu
+		l.letGo()
 		return l.stuck
 	}
 	if err := l.lockFile(deadline); err != nil {
-		<-l.mu
+		l.letGo()
 		return err
 	}
 	l.locked = true
+	// Caught up, holding flock, so nothing is committed elsewhere until
+	// Unlock: Follow's look without the mutex finds nothing to read.
+	l.publish()
 	return nil
+}
+
+// letGo lets go of the mutex, once it has told Follow how far this process
+// has applied the log (publish).
+func (l *Log) letGo() {
+	l.publish()
+	<-l.mu
 }
 
 // takeMutex waits for the mutex until deadline at most.
@@ -301,7 +332,7 @@ func (l *Log) lockFile(deadline time.Time) error {
 				return err
 			}
 		}
-		if err := l.flock(deadline); err != nil {
+		if err := l.flock(deadline, l.waiting()); err != nil {
 			return err
 		}
 		info, same, err := l.atPath()
@@ -349,7 +380,9 @@ func (l *Log) lockFile(deadline time.Time) error {
 }
 
 // flock takes flock on l.f, trying again after a pause until deadline.
-func (l *Log) flock(deadline time.Time) error {
+// After each pause, before it tries again, it calls between, when that
+// isn't nil.
+func (l *Log) flock(deadline time.Time, between func()) error {
 	pause := time.Millisecond
 	for {
 		ok, err := l.f.TryLock()
@@ -367,6 +400,9 @@ func (l *Log) flock(deadline time.Time) error {
 		}
 		time.Sleep(min(pause, left))
 		pause = min(2*pause, maxPause)
+		if between != nil {
+			between()
+		}
 	}
 }
 
@@ -424,7 +460,7 @@ func (l *Log) Unlock() error {
 	if l.f != nil && (l.stuck == nil || plant == "logfile/stuck-lets-go") {
 		err = l.f.Unlock()
 	}
-	<-l.mu
+	l.letGo()
 	return err
 }
 
@@ -493,7 +529,7 @@ func (l *Log) Append(changes []format.Change) error {
 // wraps errs.ErrClosed.
 func (l *Log) Close() error {
 	l.mu <- struct{}{}
-	defer func() { <-l.mu }()
+	defer l.letGo()
 	if l.closed {
 		return l.closedError()
 	}

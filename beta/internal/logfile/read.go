@@ -26,6 +26,7 @@ func (l *Log) load() (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	l.file = st
 	if st.Size == 0 {
 		l.empty = true
 		return 0, nil
@@ -112,10 +113,8 @@ func (l *Log) readOn(size int64) error {
 		l.end = off + n + format.MarkerSize
 		copy(l.last[:], b[n:])
 	}
-	// F6 goes here, where a follower stops: with the cheap look that
-	// FORMAT.md's "Reading the log" gives it, at a whole marker after the
-	// batch it stopped at that names it while the batch fails its checks,
-	// and then confirm, before it reports damage.
+	// A follower reads on in an order of its own, and looks at the batch it
+	// stops at (followOn, in follow.go).
 	return nil
 }
 
@@ -196,6 +195,29 @@ func (r *reader) read(f fsys.File, off, n, size int64) ([]byte, error) {
 		r.buf = make([]byte, want)
 	}
 	m, err := f.ReadAt(r.buf[:want], off)
+	r.buf, r.off = r.buf[:m], off
+	if int64(m) < n {
+		if err == nil {
+			err = io.ErrUnexpectedEOF // ReadAt broke its promise
+		}
+		return nil, err
+	}
+	return r.buf[:n], nil
+}
+
+// probe returns the file's n bytes from off, from the window when it holds
+// them, and otherwise by reading those n bytes alone into it, so nothing
+// past them is read. A follower probes a batch's head and the place for its
+// marker before it reads the batch. They're good until the next call. When
+// the file has been cut meanwhile, the error is io.EOF.
+func (r *reader) probe(f fsys.File, off, n int64) ([]byte, error) {
+	if off >= r.off && off+n <= r.off+int64(len(r.buf)) {
+		return r.buf[off-r.off : off-r.off+n], nil
+	}
+	if int64(cap(r.buf)) < n {
+		r.buf = make([]byte, n)
+	}
+	m, err := f.ReadAt(r.buf[:n], off)
 	r.buf, r.off = r.buf[:m], off
 	if int64(m) < n {
 		if err == nil {

@@ -7,6 +7,9 @@ package procs
 
 import (
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -80,6 +83,19 @@ type Options struct {
 	// its kill. A zero span means 10 to 200 milliseconds. A process that
 	// takes long to start loses none of its life to that.
 	WriterLife, ReaderLife Span
+
+	// WriterGap is how long a writer's slot stays empty once its writer has
+	// ended, before a new writer starts there, drawn evenly from the span.
+	// A zero span means no gap. With gaps long enough beside the lives,
+	// there are times with no writer at all, when a reader that keeps the
+	// database open finds the writer gone, and is the first to find what a
+	// killed writer left.
+	WriterGap Span
+
+	// Least is what a run's workload has to have counted before the run
+	// ends, by the names its processes count under (Writer.Count and
+	// Reader.Count), on top of the least work every run does (see Run).
+	Least map[string]int
 
 	// Seed seeds the run's random choices: each process's life, and the
 	// seed each child's Rand starts from. 0 means HYPERCRUX_PROCS_SEED when
@@ -178,12 +194,24 @@ type Report struct {
 
 	// Cut counts the reports a kill cut short, which the harness drops.
 	Cut int
+
+	// Counts is what the workload's processes counted, by name (Writer.Count
+	// and Reader.Count), or nil when they counted nothing.
+	Counts map[string]int
 }
 
 func (r Report) String() string {
-	return fmt.Sprintf("seed %d, %v: %d writers and %d readers started, %d and %d of them killed; "+
+	s := fmt.Sprintf("seed %d, %v: %d writers and %d readers started, %d and %d of them killed; "+
 		"%d commits begun: %d seen to succeed, %d failed, and %d under way when their writer was killed, %d of those in the file at the end; "+
 		"%d commits in the file at the end; the readers saw %d commits between them, and started again from the first %d times; %d reports cut short by a kill",
 		r.Seed, r.Took.Round(time.Millisecond), r.Writers, r.Readers, r.WritersKilled, r.ReadersKilled,
 		r.Begun, r.Done, r.Errors, r.UnderWay, r.UnderWayIn, r.Commits, r.Seen, r.Reads, r.Cut)
+	if len(r.Counts) > 0 {
+		var counts []string
+		for _, name := range slices.Sorted(maps.Keys(r.Counts)) {
+			counts = append(counts, fmt.Sprintf("%s %d", name, r.Counts[name]))
+		}
+		s += "; the workload counted " + strings.Join(counts, ", ")
+	}
+	return s
 }

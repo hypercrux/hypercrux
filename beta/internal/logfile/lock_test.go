@@ -207,9 +207,11 @@ func (p *proc) end(t *testing.T) {
 
 // TestTheLockTimesOutAcrossProcesses is the second part of F2's closing
 // test, with a short wait. While another process holds the write lock,
-// Lock waits the whole wait and fails with errs.ErrLockTimeout. Once the
-// other process lets go, Lock gets the lock and reads the batch the other
-// process committed.
+// Lock waits the whole wait and fails with errs.ErrLockTimeout. The other
+// process committed a batch before it held on to the lock, and Lock reads
+// on while it waits (F6), so it hands that batch to the Target meanwhile.
+// Once the other process lets go, Lock gets the lock, and the next commit
+// goes in after that batch.
 func TestTheLockTimesOutAcrossProcesses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
 	const wait = 300 * time.Millisecond
@@ -227,7 +229,7 @@ func TestTheLockTimesOutAcrossProcesses(t *testing.T) {
 	if took < wait || took > wait+5*time.Second {
 		t.Errorf("Lock gave up after %v, where %v is the wait", took, wait)
 	}
-	rec.holds(t)
+	rec.holds(t, helperChanges)
 
 	h.end(t)
 	commit(t, l, table("mine"))

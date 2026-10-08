@@ -82,3 +82,13 @@ hypercrux/scan-vector-kept ./beta/hypercrux
 hypercrux/neighbours-unlocked ./beta/hypercrux
 hypercrux/nearest-nil-for-none ./beta/hypercrux
 hypercrux/filter-ignored ./beta/hypercrux
+logfile/follow-before-marker ./beta/internal/logfile
+logfile/follow-keeps-unmarked ./beta/internal/logfile
+logfile/follow-without-mutex ./beta/internal/logfile
+logfile/follow-never-tries ./beta/internal/logfile
+logfile/follow-shrink-unseen ./beta/internal/logfile
+logfile/follow-path-unchecked ./beta/internal/logfile
+logfile/follow-no-confirm ./beta/internal/logfile
+logfile/follow-read-once ./beta/internal/logfile
+logfile/follow-stuck-checks ./beta/internal/logfile
+logfile/lock-waits-blind ./beta/internal/logfile

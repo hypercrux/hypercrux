@@ -5,7 +5,12 @@
 
 package logfile
 
-import "os"
+import (
+	"os"
+	"sync"
+
+	"github.com/hypercrux/hypercrux/beta/internal/format"
+)
 
 // A build with the hypercrux_planted tag can switch on one of this
 // package's planted bugs, named in HYPERCRUX_PLANT. scripts/planted.sh runs
@@ -72,13 +77,103 @@ import "os"
 //   - logfile/check-cuts-what-failed: a failure in the check cuts the end
 //     back, as a failed commit's does, so a batch the check was marking,
 //     whose commit may have succeeded, is lost.
+//
+// F6's, in following other processes:
+//
+//   - logfile/follow-before-marker: a follower applies a batch once it
+//     counts, without waiting for its marker, so it takes in a commit
+//     before it's on the drive, and a failed commit that's cut back.
+//   - logfile/follow-keeps-unmarked: a follower keeps a batch it found
+//     without its marker, and applies what it kept once a whole marker
+//     naming the batch's sequence number follows, without reading the
+//     batch again, so a failed commit's batch, cut back and written over
+//     by another of the same length, is taken for the one that replaced it.
+//   - logfile/follow-without-mutex: a follower reads on without the write
+//     lock's mutex, so it can read this process's own commit between its
+//     marker and Append's move of the read position, and apply it twice.
+//   - logfile/follow-never-tries: a follower that stops short of the end
+//     of the file never tries the lock, so when the writer has gone, the
+//     batch it left stays unmarked until another writer comes.
+//   - logfile/follow-shrink-unseen: a file shorter than the end of the log
+//     a follower has applied is taken for one with nothing new.
+//   - logfile/follow-path-unchecked: a follower doesn't compare the file at
+//     the path with its own, so after a compaction or a backup moved into
+//     place, it goes on reading the old file.
+//   - logfile/follow-no-confirm: a follower that finds a whole marker
+//     naming the batch it stopped at, while the batch fails its checks,
+//     takes no notice while another holds the lock, so damage under a busy
+//     writer is never reported.
+//   - logfile/follow-read-once: a follower that finds a whole marker after
+//     a batch that fails its checks takes that for what may be damage at
+//     once, without reading the batch again, so a read that caught a batch
+//     as its writer finished it costs a wait for the lock.
+//   - logfile/follow-stuck-checks: a stuck Log's follower tries the lock,
+//     which it holds already, checks the end of the log, writing what a
+//     stuck handle mustn't, and lets go of flock.
+//   - logfile/lock-waits-blind: a Lock that waits for flock reads nothing
+//     meanwhile, so while it waits, the reads in its process, which find
+//     the mutex held, miss every commit other processes make.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
 		"logfile/cut-what-counts", "logfile/sync-without-rewrite", "logfile/no-marker-again",
 		"logfile/cut-at-zeros", "logfile/damage-unconfirmed", "logfile/window-edge", "logfile/any-sequence-number", "logfile/compacted-held-only",
-		"logfile/failed-left-uncut", "logfile/cut-unsynced", "logfile/cut-without-marker", "logfile/stuck-lets-go", "logfile/check-cuts-what-failed":
+		"logfile/failed-left-uncut", "logfile/cut-unsynced", "logfile/cut-without-marker", "logfile/stuck-lets-go", "logfile/check-cuts-what-failed",
+		"logfile/follow-before-marker", "logfile/follow-keeps-unmarked", "logfile/follow-without-mutex", "logfile/follow-never-tries",
+		"logfile/follow-shrink-unseen", "logfile/follow-path-unchecked", "logfile/follow-no-confirm", "logfile/follow-read-once",
+		"logfile/follow-stuck-checks", "logfile/lock-waits-blind":
 		return p
 	}
 	return ""
 }()
+
+// kept is what logfile/follow-keeps-unmarked keeps for next time: for each
+// Log, the batch its follower last found without its marker, where it
+// starts.
+var kept sync.Map
+
+type keptBatch struct {
+	off int64
+	bt  format.Batch
+}
+
+// plantedKeep is logfile/follow-keeps-unmarked's: it reads the batch at
+// off, n bytes long in a file of size bytes, and keeps it when it counts.
+func (l *Log) plantedKeep(off, n, size int64, seq uint64) {
+	b, err := l.r.read(l.f, off, n, size)
+	if err != nil {
+		return
+	}
+	if bt, err := format.DecodeBatch(b, l.hdr.Gen, seq); err == nil {
+		kept.Store(l, keptBatch{off: off, bt: bt})
+	}
+}
+
+// keptAt returns the batch plantedKeep kept for l, when it starts at off.
+func keptAt(l *Log, off int64) (format.Batch, bool) {
+	v, ok := kept.Load(l)
+	if !ok {
+		return format.Batch{}, false
+	}
+	k := v.(keptBatch)
+	return k.bt, k.off == off
+}
+
+// plantedApply is logfile/follow-before-marker's: it applies the batch
+// seq at off, n bytes long in a file of size bytes, when it counts, without
+// its marker, and moves the read position past where the marker goes.
+func (l *Log) plantedApply(off, n, size int64, seq uint64) error {
+	b, err := l.r.read(l.f, off, n, size)
+	if err != nil {
+		return unread(err)
+	}
+	bt, err := format.DecodeBatch(b, l.hdr.Gen, seq)
+	if err != nil {
+		return nil
+	}
+	if err := l.t.Apply(seq, bt.Changes); err != nil {
+		return l.refused(off, seq, err)
+	}
+	l.seq, l.end = seq, off+n+format.MarkerSize
+	return nil
+}

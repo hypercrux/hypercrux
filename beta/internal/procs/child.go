@@ -126,6 +126,12 @@ func (p *proc) ID() int { return p.id }
 // a time.
 func (p *proc) Rand() *rand.Rand { return p.rng }
 
+// Count counts one event of the workload's own under the name what, such as
+// a reader's check of the end of the log, for the run's Report and for
+// Options.Least. A kill can cut the count's report short, and then it's
+// lost.
+func (p *proc) Count(what string) { p.rep.send(kindCount, strconv.Quote(what)) }
+
 // Writer is a writer process's account of its commits, kept by its work
 // through Begin, and Done or Failed. Each sends its report to the parent
 // before it returns, so the parent hears of a commit before any of it can

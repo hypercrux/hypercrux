@@ -39,6 +39,9 @@ type history struct {
 	killedUnderWay         int // writers killed with a commit under way
 	killedSeeing           int // readers killed once they had seen a commit
 	seen                   int // the commits the readers saw, each once for each reader
+
+	counts map[string]int // what the workload's processes counted, by name
+	least  map[string]int // Options.Least
 }
 
 // commit is a commit a writer began.
@@ -74,8 +77,11 @@ type sight struct {
 }
 
 func newHistory() *history {
-	return &history{begun: map[string]*commit{}, writers: map[int]*writerLog{}, readers: map[int]*readerLog{}, held: map[uint64]sight{}}
+	return &history{begun: map[string]*commit{}, writers: map[int]*writerLog{}, readers: map[int]*readerLog{}, held: map[uint64]sight{}, counts: map[string]int{}}
 }
+
+// tally notes one event that a process counted under the name what.
+func (h *history) tally(what string) { h.counts[what]++ }
 
 // writer returns writer id's log, made when it's the first report from it.
 func (h *history) writer(id int) *writerLog {
@@ -176,15 +182,27 @@ const (
 	leastReaderKills = 2  // readers killed once they had seen a commit
 )
 
-// enough reports whether the run has done the least it has to.
+// enough reports whether the run has done the least it has to, the
+// workload's own counts in Options.Least among it.
 func (h *history) enough() bool {
+	for what, n := range h.least {
+		if h.counts[what] < n {
+			return false
+		}
+	}
 	return h.done >= leastDone && h.killedUnderWay >= leastWriterKills && h.killedSeeing >= leastReaderKills
 }
 
 // lacks says what the run has done of the least it has to do.
 func (h *history) lacks() string {
-	return fmt.Sprintf("writers saw %s succeed, %s killed with a commit under way, and %s killed once they had seen a commit, where at least %d, %d and %d are wanted",
+	s := fmt.Sprintf("writers saw %s succeed, %s killed with a commit under way, and %s killed once they had seen a commit, where at least %d, %d and %d are wanted",
 		counted(h.done, "commit"), counted(h.killedUnderWay, "writer"), counted(h.killedSeeing, "reader"), leastDone, leastWriterKills, leastReaderKills)
+	for _, what := range slices.Sorted(maps.Keys(h.least)) {
+		if h.counts[what] < h.least[what] {
+			s += fmt.Sprintf("; the workload counted %q %s, short of the %d wanted", what, counted(h.counts[what], "time"), h.least[what])
+		}
+	}
+	return s
 }
 
 // counted is n things, such as "1 commit" or "2 commits".
@@ -273,6 +291,10 @@ func (h *history) inOrder() []*commit {
 func (h *history) count(rep *Report, final []string) {
 	rep.Begun, rep.Done, rep.Errors, rep.UnderWay = len(h.begun), h.done, h.errors, h.underWay
 	rep.Seen, rep.Commits = h.seen, len(final)
+	rep.Counts = nil
+	if len(h.counts) > 0 {
+		rep.Counts = maps.Clone(h.counts)
+	}
 	in := map[string]bool{}
 	for _, text := range final {
 		in[text] = true

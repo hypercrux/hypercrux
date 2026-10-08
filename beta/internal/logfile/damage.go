@@ -37,13 +37,10 @@ import (
 // be cut and another written in its place. So Open, when another holds the
 // lock, looks without it (suspect), and when it finds what may be damage,
 // it waits for the lock as a writer does and reads the file again holding
-// it (confirm). Damage is reported only if it's still there.
-
-// errReplaced means that another file has taken the database's path since
-// this Log opened the file it holds, a compaction's or a backup moved into
-// place, so what was read has to be read again from the file at the path.
-// Open does that.
-var errReplaced = errors.New("hypercrux: another file has taken the database's path")
+// it (confirm). Damage is reported only if it's still there. A follower
+// stops at every commit under way, and a search of the whole tail each time
+// would cost too much, so it looks at the batch it stopped at alone
+// (followOn, in follow.go), and confirms in the same way.
 
 // pastEnd is the look past the end of the log, step 1 of the check, in a
 // file of size bytes. It returns what shows damage there, or nil. The damage
@@ -249,7 +246,7 @@ func (l *Log) suspect(size int64) (*errs.Damage, error) {
 // was found. It doesn't wrap errs.ErrDamaged, since nothing confirmed the
 // damage.
 func (l *Log) confirm(deadline time.Time, d *errs.Damage) error {
-	if err := l.flock(deadline); err != nil {
+	if err := l.flock(deadline, nil); err != nil {
 		if errors.Is(err, errs.ErrLockTimeout) {
 			return fmt.Errorf("%w; it was needed to read the file again, since batch %d at offset %d may be damaged: %s", err, d.Batch, d.Offset, d.Reason)
 		}

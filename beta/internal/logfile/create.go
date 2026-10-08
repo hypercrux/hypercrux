@@ -132,6 +132,7 @@ func (l *Log) adopt(info fsys.Info) error {
 // database's header, and synced.
 type fresh struct {
 	f    fsys.File
+	info fsys.Info // what fstat said about it, which a rename keeps
 	name string
 	hdr  format.Header
 	head []byte
@@ -197,7 +198,7 @@ func (l *Log) newFile(perm fs.FileMode, uid, gid int) (*fresh, error) {
 			f.Close()
 			return nil, err
 		}
-		return &fresh{f: f, name: name, hdr: hdr, head: head}, nil
+		return &fresh{f: f, info: mine, name: name, hdr: hdr, head: head}, nil
 	}
 	return nil, fmt.Errorf("hypercrux: %s: no free name beside it for a new database file", l.path)
 }
@@ -206,6 +207,7 @@ func (l *Log) newFile(perm fs.FileMode, uid, gid int) (*fresh, error) {
 // it yet.
 func (l *Log) use(n *fresh) {
 	l.f = n.f
+	l.file = n.info
 	l.empty = false
 	l.hdr = n.hdr
 	copy(l.head[:], n.head)
