@@ -31,6 +31,14 @@ import (
 // columns. Every so often, every record's links both ways must agree too.
 // Only the message for a field named twice in two spellings may differ,
 // since 0.x reports whichever of the two its map gave first.
+//
+// Searches come between the steps, with choices of their own, so the steps
+// stay as they were before V1: random queries of each table's size and of
+// other sizes, now and then one that breaks the rules, a table that isn't
+// there, a k outside 1 to 10,000, or a filter on the key, which is SQL for
+// 0.x and a Filter for the store. Both must give the same error, or hits
+// that agree within conformance.DistanceBound. Every so often, a search of
+// every vector in each table must agree too.
 func TestTheStoreAgrees0x(t *testing.T) {
 	db, err := hc.Open(filepath.Join(t.TempDir(), "agree.db"))
 	if err != nil {
@@ -122,7 +130,11 @@ func TestTheStoreAgrees0x(t *testing.T) {
 		return store.Direction(r.IntN(3))
 	}
 	outcomes := map[string]int{}
+	rs := rand.New(rand.NewPCG(3, 0x61)) // the searches' choices
 	for step := 0; step < steps; step++ {
+		if rs.IntN(6) == 0 {
+			searchBoth(t, db, s, rs, tables, sizes, outcomes)
+		}
 		var desc string
 		var zeroxErr, err error
 		clash := false
@@ -271,19 +283,22 @@ func TestTheStoreAgrees0x(t *testing.T) {
 		if step%100 == 0 {
 			for _, tbl := range tables {
 				agreeOnTable(t, db, s, tbl)
+				agreeOnSearch(t, db, s, tbl, sizes[tbl])
 			}
 			agreeOnLinks(t, db, s, tables, ids)
 		}
 	}
 	for _, tbl := range tables {
 		agreeOnTable(t, db, s, tbl)
+		agreeOnSearch(t, db, s, tbl, sizes[tbl])
 	}
 	agreeOnLinks(t, db, s, tables, ids)
 	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "scan ok", "scan invalid",
 		"link ok", "link invalid", "link not found", "unlink ok", "unlink not found", "neighbours ok",
 		"neighbours invalid", "neighbours not found", "neighbours found some", "walk ok", "walk invalid",
-		"walk not found", "walk went further than one link", "delete ok", "delete not found", "drop ok",
-		"drop invalid", "drop not found"} {
+		"walk not found", "walk went further than one link", "nearest ok", "nearest invalid", "nearest not found",
+		"nearest found some", "nearest filtered", "delete ok", "delete not found", "drop ok", "drop invalid",
+		"drop not found"} {
 		if outcomes[o] < steps/500 {
 			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
 		}
@@ -291,6 +306,67 @@ func TestTheStoreAgrees0x(t *testing.T) {
 	if testing.Verbose() {
 		t.Logf("outcomes: %v", outcomes)
 	}
+}
+
+// searchBoth makes one random search on 0.x and on the store, which must
+// agree, with its choices from rs. sizes holds each table's vector size as
+// the step that last put into it left it, or 0.
+func searchBoth(t *testing.T, db *hc.DB, s *store.Store, rs *rand.Rand, tables []string, sizes map[string]int, outcomes map[string]int) {
+	t.Helper()
+	tbl := tables[rs.IntN(len(tables))]
+	if rs.IntN(15) == 0 {
+		tbl = []string{"Docs", "nosuch", "hc_x", ""}[rs.IntN(4)]
+	}
+	n := sizes[tbl]
+	if n == 0 || rs.IntN(12) == 0 {
+		n = 1 + rs.IntN(3)
+	}
+	q := make([]float32, n)
+	for i := range q {
+		q[i] = float32(rs.NormFloat64())
+	}
+	switch rs.IntN(20) {
+	case 0:
+		q = make([]float32, n)
+	case 1:
+		q[0] = float32(math.NaN())
+	case 2:
+		q = nil
+	}
+	k := 1 + rs.IntN(6)
+	if rs.IntN(15) == 0 {
+		k = []int{0, -1, store.MaxK, store.MaxK + 1}[rs.IntN(4)]
+	}
+	where, before := "", tbl+":"+[]string{"2", "4", "é"}[rs.IntN(3)]
+	var keep store.Filter
+	var args []any
+	if rs.IntN(3) == 0 {
+		where, args = "key < ?", []any{before}
+		keep = func(r store.Record) (bool, error) { return r.Key < before, nil }
+	}
+	want, zerr := db.Nearest(tbl, hc.Vector(q), k, where, args...)
+	got, err := s.Nearest(tbl, q, k, keep)
+	sameSearch(t, fmt.Sprintf("nearest %q %v %d %q", tbl, q, k, where), got, err, want, zerr)
+	outcomes["nearest "+kind(err)]++
+	if len(got) > 0 {
+		outcomes["nearest found some"]++
+		if where != "" {
+			outcomes["nearest filtered"]++
+		}
+	}
+}
+
+// agreeOnSearch compares a search of every vector in a table, with a query
+// of the table's size, on 0.x and on the store.
+func agreeOnSearch(t *testing.T, db *hc.DB, s *store.Store, tbl string, size int) {
+	t.Helper()
+	q := make([]float32, max(size, 1))
+	for i := range q {
+		q[i] = float32(i%3) - 0.5
+	}
+	want, zerr := db.Nearest(tbl, hc.Vector(q), store.MaxK, "")
+	got, err := s.Nearest(tbl, q, store.MaxK, nil)
+	sameSearch(t, fmt.Sprintf("a search of every vector in %s", tbl), got, err, want, zerr)
 }
 
 // sameLinks reports whether the store's links are 0.x's, in the same

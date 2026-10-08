@@ -20,6 +20,7 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
+	"github.com/hypercrux/hypercrux/beta/internal/vecmath"
 )
 
 // TestTransactions is S2's closing test. Random transactions run on the
@@ -52,7 +53,7 @@ const readers = 2
 func runTransactions(t *testing.T, seed uint64, n int) {
 	s, replica := New(), New()
 	committed := newModel()
-	g := &gen{r: rand.New(rand.NewPCG(seed, 0x52)), m: committed}
+	g := &gen{r: rand.New(rand.NewPCG(seed, 0x52)), m: committed, side: rand.New(rand.NewPCG(seed, 0x62))}
 	seen := &states{seen: map[string]bool{dump(s): true}}
 	stop := make(chan struct{})
 	done := make(chan readResult, readers)
@@ -90,8 +91,8 @@ func runTransactions(t *testing.T, seed uint64, n int) {
 		"link already there", "link applied", "unlink ok", "unlink not found", "unlink applied", "get ok", "get invalid",
 		"get not found", "scan ok", "scan invalid", "live scan", "live scan moved", "live scan ended",
 		"live scan at the end", "live scan across a statement rolled back", "neighbours ok", "neighbours found some",
-		"walk ok", "walk found some", "statement rolled back", "read before the first change", "commit",
-		"commit failed", "rollback"} {
+		"walk ok", "walk found some", "nearest ok", "nearest invalid", "nearest found some", "nearest filtered",
+		"statement rolled back", "read before the first change", "commit", "commit failed", "rollback"} {
 		if outcomes[o] < max(1, n/150) {
 			t.Errorf("%q came up %d times in %d transactions: %v", o, outcomes[o], n, outcomes)
 		}
@@ -145,6 +146,9 @@ func runTransaction(t *testing.T, g *gen, s, replica *Store, committed *model, s
 			changed = changed || err == nil
 			failed = failed || err != nil
 		}
+		if side := g.aside(); side.one(2) {
+			txSearch(t, side, tx, stmt, outcomes)
+		}
 		// A statement with a write that failed is taken back half the time,
 		// as SQL's are, and now and then one that worked is too. Otherwise
 		// its writes that worked stay, and the transaction carries on.
@@ -158,6 +162,9 @@ func runTransaction(t *testing.T, g *gen, s, replica *Store, committed *model, s
 				t.Fatalf("RollbackTo left %d changes, where the mark had %d", len(tx.changes), mark.changes)
 			}
 			compareAll(t, s, work)
+			if side := g.aside(); side.one(2) {
+				txSearch(t, side, tx, work, outcomes)
+			}
 		} else {
 			work = stmt
 			if g.one(4) {
@@ -363,6 +370,26 @@ func txRead(t *testing.T, g *gen, tx *Tx, m *model, live **liveScan, outcomes ma
 	}
 }
 
+// txSearch makes a random search through the transaction, which must see
+// the transaction's own changes and give what the model gives. Half the
+// searches are of a table with vectors, with a filter that lets some
+// through. Its choices are g's, which the caller makes aside.
+func txSearch(t *testing.T, g *gen, tx *Tx, m *model, outcomes map[string]int) {
+	t.Helper()
+	a := g.nearest()
+	if g.one(2) {
+		for _, name := range modelTables {
+			if v := g.heldVector(name); v != nil {
+				a = nearestArgs{table: name, q: g.values(len(v)), k: 1 + g.r.IntN(6), filter: pick(g, []string{"", "odd", "whole"})}
+				break
+			}
+		}
+	}
+	hits, err := searchModel(t, tx, m, a)
+	outcomes["nearest "+cmp.Or(kindOf(err), "ok")]++
+	noteSearch(a, hits, err, outcomes)
+}
+
 // readLinks reads the links of a random key through r, a transaction or
 // the store, or walks from it, which must give what the model gives.
 func readLinks(t *testing.T, g *gen, r Reader, m *model, outcomes map[string]int) {
@@ -463,7 +490,9 @@ func applyTo(t *testing.T, replica *Store, changes []format.Change) {
 // must come through Get, and each table's records through a scan of the
 // whole table, in byte order of key. Every fourth read, each record's links
 // both ways must come through Neighbours, each to a record in the store,
-// and a walk one link out of it must reach the records at their other ends.
+// and a walk one link out of it must reach the records at their other ends,
+// and a search of each table with a vector size must find every vector its
+// scan gives, as a search written plainly finds them.
 func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 	res := readResult{states: map[string]bool{}}
 	for ; ; res.reads++ {
@@ -522,6 +551,11 @@ func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 				if n != counts[name] {
 					return fmt.Errorf("a scan of %s gave %d records, of the %d it holds", name, n, counts[name])
 				}
+				if res.reads%4 == 0 {
+					if err := searchAlongside(r, name); err != nil {
+						return err
+					}
+				}
 			}
 			return nil
 		})
@@ -535,6 +569,39 @@ func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 		}
 		res.states[d] = true
 	}
+}
+
+// searchAlongside searches the table called name through r for every
+// vector it holds, and checks the hits against the vectors a scan of the
+// table gives, searched plainly.
+func searchAlongside(r Reader, name string) error {
+	tb, _ := r.Table(name)
+	if tb.Size == 0 {
+		return nil
+	}
+	q := make([]float32, tb.Size)
+	for i := range q {
+		q[i] = float32(i%3) - 0.5
+	}
+	hits, err := r.Nearest(name, q, MaxK, nil)
+	if err != nil {
+		return err
+	}
+	want := []Hit{}
+	c, err := r.Scan(name+":", "")
+	if err != nil {
+		return err
+	}
+	for rec, more := c.Next(); more; rec, more = c.Next() {
+		if rec.Vec != nil {
+			want = append(want, Hit{rec.Key, vecmath.Distance(vecmath.Dot(rec.Vec, q), vecmath.Norm(q), vecmath.Norm(rec.Vec))})
+		}
+	}
+	slices.SortFunc(want, func(x, y Hit) int { return cmp.Or(cmp.Compare(x.Distance, y.Distance), strings.Compare(x.Key, y.Key)) })
+	if !sameHits(hits, want) {
+		return fmt.Errorf("a search of %s gave %v, where its vectors give %v", name, hits, want)
+	}
+	return nil
 }
 
 // readResult is what a reader alongside the transactions did.

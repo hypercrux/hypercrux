@@ -33,7 +33,8 @@ import (
 // with the copy's lock and the undo list (S2). Every change to the store
 // goes through one of the small functions that call changing first:
 // newTable, add and setSize in store.go, put, unhash, list, unlist and drop
-// here, and link, unlink and cutHalf in links.go.
+// here, link, unlink and cutHalf in links.go, and takeSlot, fillSlot and
+// freeSlot in vectors.go.
 // changes.go says what the change lists hold, and applies a whole batch
 // from the log on top of apply (S3).
 
@@ -75,7 +76,7 @@ func (s *Store) putFields(dst []format.Change, key string, fields []format.Field
 	}
 	put := slices.Clone(fields)
 	slices.SortFunc(put, byName)
-	vec, err := keepAll(put)
+	vec, dot, err := s.keepAll(put)
 	if err != nil {
 		return dst, err
 	}
@@ -94,14 +95,14 @@ func (s *Store) putFields(dst []format.Change, key string, fields []format.Field
 		// given, as Zed and title do against zed and title.
 		slices.SortFunc(put, byName)
 	}
-	if err := t.check(tbl, key, added, rules.MaxFields, vec); err != nil {
+	if err := t.check(tbl, key, added, rules.MaxFields, len(vec)); err != nil {
 		return dst, err
 	}
 	if t == nil {
 		dst = append(dst, format.Change{Op: format.CreateTable, Table: tbl})
 		t = s.newTable(strings.Clone(tbl))
 	}
-	s.put(t, key, put, vec)
+	s.put(t, key, put, vec, dot)
 	return append(dst, format.Change{Op: format.Put, Key: key, Fields: put}), nil
 }
 
@@ -293,23 +294,23 @@ func (s *Store) applyPut(c format.Change) error {
 		return err
 	}
 	put := slices.Clone(c.Fields)
-	vec, err := keepAll(put)
+	vec, dot, err := s.keepAll(put)
 	if err != nil {
 		return err
 	}
-	if err := t.check(tbl, c.Key, added, rules.FormatMaxFields, vec); err != nil {
+	if err := t.check(tbl, c.Key, added, rules.FormatMaxFields, len(vec)); err != nil {
 		return err
 	}
-	s.put(t, c.Key, put, vec)
+	s.put(t, c.Key, put, vec, dot)
 	return nil
 }
 
 // check checks what a put does to the table t, which is nil when the put
 // creates it: added is how many fields it adds, most the most fields the
-// table may then hold, and vec the put's vector, if it has one. A put
-// through the API keeps rules.MaxFields, and a change list read from a
-// file the format's limit.
-func (t *table) check(name, key string, added, most int, vec []float32) error {
+// table may then hold, and dims how many values the put's vector has, or 0
+// when it has none. A put through the API keeps rules.MaxFields, and a
+// change list read from a file the format's limit.
+func (t *table) check(name, key string, added, most, dims int) error {
 	have, size := 0, 0
 	if t != nil {
 		have, size = len(t.fields), t.size
@@ -317,8 +318,8 @@ func (t *table) check(name, key string, added, most int, vec []float32) error {
 	if added > 0 && have+added > most {
 		return tooMany(name, have+added, most)
 	}
-	if vec != nil && size != 0 && len(vec) != size && plant != "store/size-unchecked" {
-		return fmt.Errorf("%w: table %s holds vectors of %d values, and %s has %d", errs.ErrInvalid, name, size, key, len(vec))
+	if dims != 0 && size != 0 && dims != size && plant != "store/size-unchecked" {
+		return fmt.Errorf("%w: table %s holds vectors of %d values, and %s has %d", errs.ErrInvalid, name, size, key, dims)
 	}
 	return nil
 }
@@ -329,18 +330,20 @@ func tooMany(table string, n, most int) error {
 
 // put makes a put that's been checked. Its fields are in byte order of
 // name, each spelt as the table spells it or new to the table, with the
-// values the store keeps, and vec is its vector, if it has one.
-func (s *Store) put(t *table, key string, fields []format.Field, vec []float32) {
+// values the store keeps. vec is its vector's values, as checkVector
+// decoded them, with dot, their dot product with themselves, or nil when the
+// put gives no vector.
+func (s *Store) put(t *table, key string, fields []format.Field, vec []float32, dot float64) {
 	r := s.records[key]
 	if r == nil {
-		r = &record{key: strings.Clone(key), table: t}
+		r = &record{key: strings.Clone(key), table: t, slot: -1}
 		s.changing(undo{op: undoNoRecord, name: r.key})
 		s.records[r.key] = r
 		s.list(r)
 	} else {
 		// A new record goes whole when its put is undone, so only a
-		// record that was there needs its fields and vector kept.
-		s.changing(undo{op: undoRecord, record: r, fields: r.fields, vec: r.vec})
+		// record that was there needs its fields and its slot kept.
+		s.changing(undo{op: undoRecord, record: r, fields: r.fields, n: r.slot})
 	}
 	set := make([]FieldValue, 0, len(fields))
 	for _, f := range fields {
@@ -349,10 +352,7 @@ func (s *Store) put(t *table, key string, fields []format.Field, vec []float32) 
 			p = s.add(t, strings.Clone(f.Name))
 		}
 		if p == t.vec {
-			r.vec = vec // nil when the put clears the vector
-			if vec != nil && t.size == 0 {
-				s.setSize(t, len(vec))
-			}
+			s.setVector(t, r, vec, dot) // vec is nil when the put sets the vector to null
 			continue
 		}
 		set = append(set, FieldValue{Index: p, Value: f.Value})
@@ -400,15 +400,17 @@ func (s *Store) delete(key string) error {
 }
 
 // remove takes a record out of the store, for a delete: its links out at
-// their other ends, then the record out of the hash table, and its key out
-// of its table's keys. So a rollback, which goes newest first, puts the
-// record back before its links. V1 frees its slot here, with undo entries
-// of its own.
+// their other ends, then the record out of the hash table, its key out of
+// its table's keys, and its vector's slot out of use. So a rollback, which
+// goes newest first, puts the record back before its links.
 func (s *Store) remove(r *record) {
 	s.cut(r, nil)
 	s.unhash(r)
 	if plant != "store/delete-keeps-key" {
 		s.unlist(r)
+	}
+	if r.slot >= 0 && plant != "store/deleted-vector-found" {
+		s.freeSlot(r.table, r)
 	}
 }
 
@@ -442,11 +444,11 @@ func (s *Store) drop(name string) error {
 	}
 	// The table's own keys give its records, which leave the hash table,
 	// each after its links have left the records that stay: links from
-	// other tables into it, and from it out to other tables. The keys stay
-	// as they are, with the table, and the table and its records keep
-	// everything they hold, links among themselves included, so undoing
-	// the drop is putting them back in the maps and putting back the other
-	// ends of their links.
+	// other tables into it, and from it out to other tables. The keys and
+	// the vector array stay as they are, with the table, and the table and
+	// its records keep everything they hold, links among themselves
+	// included, so undoing the drop is putting them back in the maps and
+	// putting back the other ends of their links.
 	if plant != "store/drop-keeps-records" {
 		for r := range t.keys.records {
 			s.cut(r, t)
@@ -487,20 +489,27 @@ func unique(n int, name func(int) string) error {
 
 // keepAll checks each value of a put by 0.x's rules, in order, and puts in
 // its place the value the store keeps. It returns the put's vector, if it
-// has one.
-func keepAll(fields []format.Field) ([]float32, error) {
+// has one, as checkVector gives it: its values, in the store's buffer, and
+// their dot product with themselves.
+func (s *Store) keepAll(fields []format.Field) ([]float32, float64, error) {
 	var vec []float32
+	var dot float64
 	for i := range fields {
-		v, f, err := keep(fields[i].Name, fields[i].Value)
+		f := &fields[i]
+		if rules.IsVec(f.Name) && f.Value.Kind() == value.KindVector {
+			var err error
+			if vec, dot, err = s.checkVector(f.Value); err != nil {
+				return nil, 0, err
+			}
+			continue
+		}
+		v, err := keep(f.Name, f.Value)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
-		fields[i].Value = v
-		if f != nil {
-			vec = f
-		}
+		f.Value = v
 	}
-	return vec, nil
+	return vec, dot, nil
 }
 
 // keep checks a value for the field called name by 0.x's rules: the vector
@@ -508,42 +517,37 @@ func keepAll(fields []format.Field) ([]float32, error) {
 // valid UTF-8, and reals are finite. Text and bytes also have to fit the
 // format, which gives their length as a u32 (see fits). It returns the
 // value the store keeps, with a copy of its text or bytes of its own, so
-// the store never holds on to a decoded batch, and for a vector its values
-// as float32s.
-func keep(name string, v value.Value) (value.Value, []float32, error) {
+// the store never holds on to a decoded batch. A vector in the vector field
+// is checkVector's to check, and the store keeps its values in the table's
+// array, and never the value.
+func keep(name string, v value.Value) (value.Value, error) {
 	if rules.IsVec(name) {
 		switch v.Kind() {
-		case value.KindNull:
-			return v, nil, nil
-		case value.KindVector:
-			f := v.Vector()
-			if err := rules.Vector(f); err != nil {
-				return v, nil, err
-			}
-			return v, f, nil
+		case value.KindNull, value.KindVector:
+			return v, nil
 		}
-		return v, nil, fmt.Errorf("%w: the vector field %s holds a vector or null, and this value is of kind %s", errs.ErrInvalid, name, v.Kind())
+		return v, fmt.Errorf("%w: the vector field %s holds a vector or null, and this value is of kind %s", errs.ErrInvalid, name, v.Kind())
 	}
 	switch v.Kind() {
 	case value.KindReal:
-		return v, nil, rules.Real(name, v.Real())
+		return v, rules.Real(name, v.Real())
 	case value.KindText:
 		if err := fits(name, len(v.Raw())); err != nil {
-			return v, nil, err
+			return v, err
 		}
 		if err := rules.Text(name, v.Text()); err != nil {
-			return v, nil, err
+			return v, err
 		}
-		return value.Text(strings.Clone(v.Text())), nil, nil
+		return value.Text(strings.Clone(v.Text())), nil
 	case value.KindBytes:
 		if err := fits(name, len(v.Raw())); err != nil {
-			return v, nil, err
+			return v, err
 		}
-		return value.Bytes(strings.Clone(v.Raw())), nil, nil
+		return value.Bytes(strings.Clone(v.Raw())), nil
 	case value.KindVector:
-		return v, nil, rules.VectorElsewhere(name)
+		return v, rules.VectorElsewhere(name)
 	}
-	return v, nil, nil
+	return v, nil
 }
 
 // fits checks the length of a text or bytes value for the field called

@@ -23,6 +23,7 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
+	"github.com/hypercrux/hypercrux/beta/internal/vecmath"
 )
 
 // The model is the plainest thing that does the job: maps, with field
@@ -265,6 +266,146 @@ func referenceWalk(links map[Link]bool, start string, dir Direction, typ string,
 	return steps
 }
 
+// nearestArgs are a search's arguments, with which of them break the rules
+// whatever the state, as the generator made them. filter names the Filter
+// the search gets, as filterFor makes it.
+type nearestArgs struct {
+	table              string
+	badTable, badQuery bool
+	q                  []float32
+	k                  int
+	filter             string
+}
+
+func (a nearestArgs) String() string {
+	return fmt.Sprintf("nearest %q %v %d %q", a.table, a.q, a.k, a.filter)
+}
+
+// The filters a search gets, by name. "" is none, which lets every record
+// through; "none" lets none through; "odd" lets through the keys that end
+// in a byte with an odd value; "whole" the records whose field n holds a
+// whole number; and "fails" fails at its first call.
+var filters = []string{"", "", "", "none", "odd", "whole", "fails"}
+
+var errFilter = errors.New("the filter fails")
+
+// lets reports whether the filter named f lets the model's record through,
+// and false with errFilter for "fails".
+func lets(f, key string, rec map[string]value.Value) (bool, error) {
+	switch f {
+	case "", "none":
+		return f == "", nil
+	case "odd":
+		return key[len(key)-1]%2 == 1, nil
+	case "whole":
+		return rec["n"].Kind() == value.KindInt, nil
+	}
+	return false, errFilter
+}
+
+// nearest returns the hits a search should give, the kind of error it
+// should give, and how many times it should call its filter. It's the
+// search written plainly: every record of the table with a vector, the ones
+// the filter lets through, each with its distance worked out by vecmath's
+// Dot, Norm and Distance, all of them sorted by distance and then key, and
+// the first k. vecmath's own tests hold those against plain arithmetic, so
+// these are the bits the store must give. The checks come in 0.x's order:
+// the table's name, the query, k, the table, then the query's size. The
+// hits are nil when the table has no vector size, and otherwise a list
+// that isn't nil, as 0.x gives them. The filter is called once for each
+// record with a vector, and a filter that fails stops the search at its
+// first call.
+func (m *model) nearest(a nearestArgs) ([]Hit, string, int) {
+	if a.badTable || a.badQuery || a.k < 1 || a.k > MaxK {
+		return nil, "invalid", 0
+	}
+	mt := m.tables[a.table]
+	switch {
+	case mt == nil:
+		return nil, "not found", 0
+	case mt.size == 0:
+		return nil, "", 0
+	case len(a.q) != mt.size:
+		return nil, "invalid", 0
+	}
+	hits, calls := []Hit{}, 0
+	for key, rec := range m.records {
+		v, ok := rec["vec"]
+		if tableOfKey(key) != a.table || !ok {
+			continue
+		}
+		if a.filter != "" {
+			calls++
+		}
+		ok, err := lets(a.filter, key, rec)
+		if err != nil {
+			return nil, kindOf(err), 1
+		}
+		if ok {
+			f := v.Vector()
+			hits = append(hits, Hit{key, vecmath.Distance(vecmath.Dot(f, a.q), vecmath.Norm(a.q), vecmath.Norm(f))})
+		}
+	}
+	slices.SortFunc(hits, func(x, y Hit) int { return cmp.Or(cmp.Compare(x.Distance, y.Distance), strings.Compare(x.Key, y.Key)) })
+	return hits[:min(a.k, len(hits))], "", calls
+}
+
+// filterFor returns the Filter named a.filter for a search through r,
+// which counts its calls in calls. Each record it's handed must be the one
+// the model holds, with its vector, of the table's size.
+func filterFor(t *testing.T, r Reader, m *model, a nearestArgs, calls *int) Filter {
+	if a.filter == "" {
+		return nil
+	}
+	tb, _ := r.Table(a.table)
+	n := tb.Find("n")
+	return func(rec Record) (bool, error) {
+		*calls++
+		if len(rec.Vec) != tb.Size || cap(rec.Vec) != len(rec.Vec) || tableOfKey(rec.Key) != a.table {
+			t.Fatalf("the search's filter was handed %s with the vector %v, in a table of size %d", rec.Key, rec.Vec, tb.Size)
+		}
+		compareRecord(t, r, m, rec)
+		if a.filter == "whole" {
+			return rec.Field(n).Kind() == value.KindInt, nil
+		}
+		return lets(a.filter, rec.Key, nil)
+	}
+}
+
+// sameHits reports whether two searches gave the same hits, bit for bit,
+// in the same order, with nil for nil.
+func sameHits(a, b []Hit) bool {
+	return (a == nil) == (b == nil) && slices.EqualFunc(a, b, func(x, y Hit) bool {
+		return x.Key == y.Key && math.Float64bits(x.Distance) == math.Float64bits(y.Distance)
+	})
+}
+
+// tied reports whether two hits in a row are as far as each other, so the
+// order of their keys decides theirs.
+func tied(hits []Hit) bool {
+	for i := 1; i < len(hits); i++ {
+		if hits[i].Distance == hits[i-1].Distance {
+			return true
+		}
+	}
+	return false
+}
+
+// searchModel runs a search on r and on the model, and fails the test
+// unless both give the same error kind, the same hits, and the same number
+// of calls to the filter. It returns the hits and the error.
+func searchModel(t *testing.T, r Reader, m *model, a nearestArgs) ([]Hit, error) {
+	t.Helper()
+	calls := 0
+	hits, err := r.Nearest(a.table, a.q, a.k, filterFor(t, r, m, a, &calls))
+	want, kind, wantCalls := m.nearest(a)
+	if got := kindOf(err); got != kind || err == nil && (!sameHits(hits, want) || calls != wantCalls) {
+		t.Fatalf("%v gave %v, %v, calling its filter %d times, where the model gives %v, %q, with %d calls",
+			a, hits, err, calls, want, kind, wantCalls)
+	}
+	return hits, err
+}
+
 // sortedLinks returns the model's links in byte order of the key each is
 // from, then type, then the key it's to.
 func (m *model) sortedLinks() []Link {
@@ -331,6 +472,19 @@ var (
 type gen struct {
 	r *rand.Rand
 	m *model
+	// side, when it's set, makes the choices for vectors and searches that
+	// V1 added, so the choices made with r stay as they were before V1, and
+	// so do the steps the earlier tasks' tests take.
+	side *rand.Rand
+}
+
+// aside returns a generator over the same model that makes its choices
+// with g's side source, or with g's own when g has none.
+func (g *gen) aside() *gen {
+	if g.side == nil {
+		return g
+	}
+	return &gen{r: g.side, m: g.m}
 }
 
 func (g *gen) one(in int) bool { return g.r.IntN(in) == 0 }
@@ -347,21 +501,21 @@ func (g *gen) key() (string, bool) {
 
 // vector returns a value for the vector field, mostly a vector of the
 // size the model's table has, and whether it breaks a rule whatever the
-// state. A vector of another size is the model's to judge.
+// state. A vector of another size is the model's to judge. Now and then
+// it's a vector another record of the table holds already, so a search
+// finds the two as far as each other; that choice is aside's, so it leaves
+// the choices made with g.r as they were.
 func (g *gen) vector(tbl string) (value.Value, bool) {
 	size := 1 + g.r.IntN(4)
 	if t := g.m.tables[tbl]; t != nil && t.size != 0 && !g.one(15) {
 		size = t.size
 	}
-	v := make([]float32, size)
-	for i := range v {
-		if g.one(4) {
-			v[i] = pick(g, awkwardFloats)
-		} else {
-			v[i] = float32(g.r.NormFloat64())
+	v := g.values(size)
+	if side := g.aside(); side.one(6) {
+		if h := side.heldVector(tbl); len(h) == size {
+			v = h
 		}
 	}
-	v[g.r.IntN(size)] = 1 // never all zero, unless made so below
 	switch g.r.IntN(30) {
 	case 0, 1, 2:
 		return value.Null(), false
@@ -376,6 +530,78 @@ func (g *gen) vector(tbl string) (value.Value, bool) {
 		return value.Text("[1, 2]"), true
 	}
 	return value.Vector(v), false
+}
+
+// values returns size values for a vector, a quarter of them awkward and
+// the rest random, and never all zero.
+func (g *gen) values(size int) []float32 {
+	v := make([]float32, size)
+	for i := range v {
+		if g.one(4) {
+			v[i] = pick(g, awkwardFloats)
+		} else {
+			v[i] = float32(g.r.NormFloat64())
+		}
+	}
+	v[g.r.IntN(size)] = 1
+	return v
+}
+
+// heldVector returns the vector of a record of the model's table tbl,
+// picked at random, or nil when none of its records has one.
+func (g *gen) heldVector(tbl string) []float32 {
+	var vecs []value.Value
+	for _, key := range slices.Sorted(maps.Keys(g.m.records)) {
+		if v, ok := g.m.records[key]["vec"]; ok && tableOfKey(key) == tbl {
+			vecs = append(vecs, v)
+		}
+	}
+	if vecs == nil {
+		return nil
+	}
+	return pick(g, vecs).Vector()
+}
+
+// nearest returns a search's arguments: mostly one of the model's tables
+// with a query of its size, and now and then a table, a query or a k that
+// breaks the rules, a table that isn't there, or a query of another size.
+// A third of the queries are vectors that records of the table hold, so a
+// search finds those at a distance of 0, and ties them when two records
+// hold the same one. A k past the records there are gives every one. The
+// tests call it on aside's generator.
+func (g *gen) nearest() nearestArgs {
+	a := nearestArgs{table: pick(g, modelTables), filter: pick(g, filters), k: 1 + g.r.IntN(6)}
+	switch {
+	case g.one(20):
+		a.table, a.badTable = pick(g, badTables), true
+	case g.one(15):
+		a.table = "nosuch"
+	}
+	size := 1 + g.r.IntN(4)
+	if t := g.m.tables[a.table]; t != nil && t.size != 0 && !g.one(15) {
+		size = t.size
+	}
+	a.q = g.values(size)
+	if v := g.heldVector(a.table); v != nil && len(v) == size && g.one(3) {
+		a.q = v
+	}
+	switch g.r.IntN(25) {
+	case 0:
+		a.q, a.badQuery = nil, true
+	case 1:
+		a.q, a.badQuery = make([]float32, size), true
+	case 2:
+		a.q[g.r.IntN(size)], a.badQuery = float32(math.Inf(-1)), true
+	case 3:
+		a.q[g.r.IntN(size)], a.badQuery = float32(math.NaN()), true
+	}
+	switch g.r.IntN(20) {
+	case 0:
+		a.k = pick(g, []int{0, -1, MaxK + 1})
+	case 1:
+		a.k = MaxK
+	}
+	return a
 }
 
 // put returns a put's key and fields, and whether something in it breaks
@@ -623,7 +849,7 @@ func TestTheModel(t *testing.T) {
 func runModel(t *testing.T, seed uint64, steps int) {
 	s, replica := New(), New()
 	m := newModel()
-	g := &gen{r: rand.New(rand.NewPCG(seed, 0x51)), m: m}
+	g := &gen{r: rand.New(rand.NewPCG(seed, 0x51)), m: m, side: rand.New(rand.NewPCG(seed, 0x61))}
 	var changes []format.Change
 	outcomes := map[string]int{}
 	var live, ended *liveScan // a cursor open over the steps, and the last one that ended
@@ -643,6 +869,13 @@ func runModel(t *testing.T, seed uint64, steps int) {
 		before := len(changes)
 		var desc, want, got string
 		var err error
+		if side := g.aside(); side.one(7) {
+			// A search, besides the step, with choices of its own.
+			a := side.nearest()
+			hits, err := searchModel(t, s, m, a)
+			outcomes["nearest "+cmp.Or(kindOf(err), "ok")]++
+			noteSearch(a, hits, err, outcomes)
+		}
 		switch w := g.r.IntN(100); {
 		case w < 34:
 			key, fields, bad := g.put()
@@ -820,14 +1053,36 @@ func runModel(t *testing.T, seed uint64, steps int) {
 		"live scan", "live scan moved", "live scan ended", "ended scan still ended", "link ok", "link invalid",
 		"link not found", "link already there", "unlink ok", "unlink not found", "unlink of several types",
 		"neighbours ok", "neighbours invalid", "neighbours not found", "neighbours found some", "walk ok", "walk invalid",
-		"walk not found", "walk went further than one link", "delete ok", "delete invalid", "delete not found",
-		"delete with links", "drop ok", "drop invalid", "drop not found", "drop with links"} {
+		"walk not found", "walk went further than one link", "nearest ok", "nearest invalid", "nearest not found",
+		"nearest with no size", "nearest found some", "nearest gave ties", "nearest filtered", "nearest that the filter stopped",
+		"delete ok", "delete invalid", "delete not found", "delete with links", "drop ok", "drop invalid", "drop not found",
+		"drop with links"} {
 		if outcomes[o] < steps/1000 {
 			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
 		}
 	}
 	if testing.Verbose() && seed == 1 {
 		t.Logf("outcomes: %v", outcomes)
+	}
+}
+
+// noteSearch counts what a search that agreed with the model came to, for
+// the tests' lists of what has to come up.
+func noteSearch(a nearestArgs, hits []Hit, err error, outcomes map[string]int) {
+	switch {
+	case errors.Is(err, errFilter):
+		outcomes["nearest that the filter stopped"]++
+	case err != nil:
+	case hits == nil:
+		outcomes["nearest with no size"]++
+	case len(hits) > 0:
+		outcomes["nearest found some"]++
+		if tied(hits) {
+			outcomes["nearest gave ties"]++
+		}
+		if a.filter != "" {
+			outcomes["nearest filtered"]++
+		}
 	}
 }
 
@@ -926,6 +1181,18 @@ func compareAll(t *testing.T, s *Store, m *model) {
 		}
 		compareRecord(t, s, m, r)
 	}
+	// Every table's vector array, through a search that reaches every
+	// vector in it.
+	for name, mt := range m.tables {
+		if mt.size == 0 {
+			continue
+		}
+		q := make([]float32, mt.size)
+		for i := range q {
+			q[i] = float32(i%3) - 0.5
+		}
+		searchModel(t, s, m, nearestArgs{table: name, q: q, k: MaxK})
+	}
 	// Every link the records hold out of them is the model's, and the model
 	// has no more. checkInvariants has checked that the links in mirror
 	// them.
@@ -976,6 +1243,7 @@ func checkInvariants(t *testing.T, s *Store) {
 		if tb.vec != vec || tb.size < 0 || tb.size > 0 && vec < 0 {
 			t.Fatalf("table %s has the vector field at %d and size %d, with the fields %q", name, tb.vec, tb.size, tb.fields)
 		}
+		checkVectors(t, s, name, tb)
 	}
 	for key, r := range s.records {
 		tb := s.tables[tableOfKey(key)]
@@ -987,14 +1255,85 @@ func checkInvariants(t *testing.T, s *Store) {
 				t.Fatalf("record %s has the fields %v, in a table with the fields %q", key, r.fields, tb.fields)
 			}
 		}
-		if r.vec != nil && len(r.vec) != tb.size {
-			t.Fatalf("record %s has a vector of %d values, in a table of size %d", key, len(r.vec), tb.size)
+		if r.slot != -1 && (r.slot < 0 || r.slot >= len(tb.vecs.owners) || tb.vecs.owners[r.slot] != r) {
+			t.Fatalf("record %s names slot %d of table %s's array, of %d slots", key, r.slot, tb.name, len(tb.vecs.owners))
 		}
 		checkLinks(t, s, r, true)
 		checkLinks(t, s, r, false)
 	}
 	if held != len(s.records) {
 		t.Fatalf("the tables' keys hold %d keys, and the hash table %d records", held, len(s.records))
+	}
+}
+
+// checkVectors checks one table's vector array: its shape and its blocks,
+// as vectors.go sets them out, and its slots, and that it keeps no record
+// past its last slot, alive for nothing. A slot in use holds a vector
+// that keeps the rules, with the norm vecmath gives it, bit for bit, and a
+// record of the table that's in the store and names the slot. A free slot
+// is on the free list once, or, while a transaction is open, freed by the
+// transaction and waiting for its commit. A table without a vector size has
+// an empty array.
+func checkVectors(t *testing.T, s *Store, name string, tb *table) {
+	t.Helper()
+	a := &tb.vecs
+	if tb.size == 0 {
+		if a.shift != 0 || a.blocks != nil || a.norms != nil || a.owners != nil || a.free != nil {
+			t.Fatalf("table %s has no vector size, and an array of %d blocks and %d slots", name, len(a.blocks), len(a.owners))
+		}
+		return
+	}
+	per := 1 << a.shift
+	if a.shift != blockShift(tb.size) || per > 1 && per*tb.size*4 > blockBytes || 2*per*tb.size*4 <= blockBytes ||
+		len(a.norms) != len(a.owners) {
+		t.Fatalf("table %s of size %d has the shift %d, %d norms and %d slots", name, tb.size, a.shift, len(a.norms), len(a.owners))
+	}
+	room := 0
+	for bi, b := range a.blocks {
+		slots := len(b) / tb.size
+		if cap(b) != len(b) || len(b) != slots*tb.size || slots == 0 || slots > per || slots&(slots-1) != 0 ||
+			bi > 0 && (slots != per || len(a.blocks[0]) != per*tb.size) {
+			t.Fatalf("table %s's block %d holds %d values, for slots of %d values, %d to a full block", name, bi, len(b), tb.size, per)
+		}
+		room += slots
+	}
+	if room < len(a.owners) {
+		t.Fatalf("table %s's blocks have room for %d slots, and it has %d", name, room, len(a.owners))
+	}
+	for i, r := range a.owners[len(a.owners):cap(a.owners)] {
+		if r != nil {
+			t.Fatalf("table %s's array keeps %s past its %d slots, at %d", name, r.key, len(a.owners), len(a.owners)+i)
+		}
+	}
+	freed := map[int]bool{} // the slots the open transaction has freed
+	if s.tx != nil {
+		for _, u := range s.tx.undo {
+			if u.op == undoFreedSlot && u.table == tb {
+				freed[u.n] = true
+			}
+		}
+	}
+	listed := map[int]bool{}
+	for _, i := range a.free {
+		if i < 0 || i >= len(a.owners) || a.owners[i] != nil || listed[i] || freed[i] {
+			t.Fatalf("table %s's free list holds slot %d twice, or in use, or waiting for the commit: %v", name, i, a.free)
+		}
+		listed[i] = true
+	}
+	for i, r := range a.owners {
+		if r == nil {
+			if !listed[i] && !freed[i] {
+				t.Fatalf("table %s's slot %d is free and on no list", name, i)
+			}
+			continue
+		}
+		if s.records[r.key] != r || r.table != tb || r.slot != i {
+			t.Fatalf("table %s's slot %d holds the vector of %s, whose slot is %d, in table %s", name, i, r.key, r.slot, r.table.name)
+		}
+		v := tb.vector(i)
+		if err := rules.Vector(v); err != nil || math.Float64bits(a.norms[i]) != math.Float64bits(vecmath.Norm(v)) {
+			t.Fatalf("table %s's slot %d holds %v, with the norm %v: %v", name, i, v, a.norms[i], err)
+		}
 	}
 }
 
@@ -1080,8 +1419,10 @@ func dump(s *Store) string {
 	sort.Strings(keys)
 	// Each record's line is written by hand, without fmt, since the tests
 	// that compare stores write thousands of them: its key, each field's
-	// place and value, its vector's bits, and each of its links out and in
-	// as its type and the key at the other end, each after its length.
+	// place and value, its vector's bits and its norm's, and each of its
+	// links out and in as its type and the key at the other end, each after
+	// its length. Slots' numbers aren't there, since stores that hold the
+	// same records may hold them in other slots.
 	for _, key := range keys {
 		r := s.records[key]
 		b.WriteString(strconv.Quote(key))
@@ -1092,12 +1433,14 @@ func dump(s *Store) string {
 			b.WriteByte('=')
 			dumpValue(&b, f.Value)
 		}
-		if r.vec != nil {
+		if r.slot >= 0 {
 			b.WriteString(" vec=")
-			for _, x := range r.vec {
+			for _, x := range r.table.vector(r.slot) {
 				b.WriteString(strconv.FormatUint(uint64(math.Float32bits(x)), 16))
 				b.WriteByte(',')
 			}
+			b.WriteString(" norm=")
+			b.WriteString(strconv.FormatUint(math.Float64bits(r.table.vecs.norms[r.slot]), 16))
 		}
 		for _, l := range []*links{&r.out, &r.in} {
 			b.WriteString(" |")

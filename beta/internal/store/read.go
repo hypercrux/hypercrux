@@ -120,7 +120,10 @@ type Record struct {
 	Fields []FieldValue
 	// Vec is the record's vector, or nil when it has none. It's the
 	// record's slot in its table's vector array (V1), shared with the
-	// store, so it holds as long as the rest of the record does.
+	// store, with its capacity cut at its length. A later put of another
+	// vector writes over it, so like the rest of what a read hands out it's
+	// good until the read ends, or inside a transaction until its next
+	// change.
 	Vec []float32
 }
 

@@ -155,16 +155,17 @@ func (s *Store) changing(u undo) {
 // even when a panic cut its change short. A rollback walks the list newest
 // first, so each entry finds the store as its own change left it.
 //
-// S4 added the kinds for each table's keys, and S5 the kinds for the links.
-// V1 adds kinds for the vector arrays.
+// S4 added the kinds for each table's keys, S5 the kinds for the links, and
+// V1 the kinds for the vector arrays.
 type undo struct {
 	op     undoOp
 	name   string       // undoNoTable: the table's name; undoNoRecord: the key
-	table  *table       // undoHadTable, undoFields, undoSize, undoNoKey, undoHadKey
-	record *record      // undoHadRecord, undoRecord, undoNoKey, undoHadKey, and the record whose list the links' kinds change
-	n      int          // undoFields: how many fields the table had; undoSize: its size
+	table  *table       // undoHadTable, undoFields, undoSize, undoNoKey, undoHadKey, and the table whose array the slots' kinds change
+	record *record      // undoHadRecord, undoRecord, undoNoKey, undoHadKey, undoFreedSlot, and the record whose list the links' kinds change
+	n      int          // undoFields: how many fields the table had; undoSize: its size; undoRecord: the record's slot; the slots' kinds: the slot
 	fields []FieldValue // undoRecord: the record's fields
-	vec    []float32    // undoRecord: the record's vector
+	vec    []float32    // undoVector: the slot's values
+	norm   float64      // undoVector: the slot's norm
 	half   half         // undoNoLink, undoHadLink: the link's type and the record it's to; undoHadOut, undoHadIn: the half
 }
 
@@ -174,16 +175,20 @@ const (
 	undoNoTable   undoOp = iota + 1 // no table was called name
 	undoHadTable                    // table was in the store, whole
 	undoFields                      // table had its first n fields only
-	undoSize                        // table had the vector size n
+	undoSize                        // table had the vector size n, and an empty array when n is 0
 	undoNoRecord                    // no record had the key name
 	undoHadRecord                   // record was in the store, whole
-	undoRecord                      // record held fields and vec
+	undoRecord                      // record held fields, and its vector in slot n, or none when n is -1
 	undoNoKey                       // table's keys didn't hold record's key
 	undoHadKey                      // table's keys held record's key, with record
 	undoNoLink                      // there was no link of half's type from record to half's record
 	undoHadLink                     // there was that link, with both its halves
 	undoHadOut                      // record's links out held half
 	undoHadIn                       // record's links in held half
+	undoNewSlot                     // table's array had n slots
+	undoTookSlot                    // slot n of table's array was free, last on its free list
+	undoFreedSlot                   // slot n of table's array held record's vector, as it still does
+	undoVector                      // slot n of table's array held vec, with the norm norm
 )
 
 // back puts back the state one entry records. Each table's keys are put
@@ -238,12 +243,33 @@ func (s *Store) back(u undo) {
 		}
 	case undoSize:
 		u.table.size = u.n
+		if u.n == 0 {
+			// The table's first vector is taken back, and so is every slot
+			// after it, since they're newer: the array goes back to empty,
+			// and the next first vector sets its shape again.
+			u.table.vecs = vectors{}
+		}
 	case undoNoRecord:
 		delete(s.records, u.name)
 	case undoHadRecord:
 		s.records[u.record.key] = u.record
 	case undoRecord:
-		u.record.fields, u.record.vec = u.fields, u.vec
+		u.record.fields, u.record.slot = u.fields, u.n
+	case undoNewSlot:
+		a := &u.table.vecs
+		clear(a.owners[u.n:]) // so the array keeps no record alive
+		a.owners, a.norms = a.owners[:u.n], a.norms[:u.n]
+	case undoTookSlot:
+		a := &u.table.vecs
+		a.owners[u.n] = nil
+		a.free = append(a.free, u.n)
+	case undoFreedSlot:
+		u.table.vecs.owners[u.n] = u.record
+	case undoVector:
+		copy(u.table.vector(u.n), u.vec)
+		if plant != "store/norm-not-undone" {
+			u.table.vecs.norms[u.n] = u.norm
+		}
 	default:
 		panic(fmt.Sprintf("store: an undo entry of kind %d", u.op))
 	}
@@ -309,8 +335,25 @@ func (tx *Tx) Commit(write func(changes []format.Change) error) error {
 			return err
 		}
 	}
+	tx.release()
 	tx.end()
 	return nil
+}
+
+// release puts each slot the transaction freed on its table's free list,
+// once nothing can take the transaction back (vectors.go). Until then a
+// freed slot is on no list, so no vector takes it while a rollback might
+// give it back to its record. A slot of a table that the transaction then
+// dropped goes on that table's list, which goes with the table.
+func (tx *Tx) release() {
+	if plant == "store/freed-slot-taken-at-once" {
+		return // they're on the lists already
+	}
+	for _, u := range tx.undo {
+		if u.op == undoFreedSlot {
+			u.table.vecs.free = append(u.table.vecs.free, u.n)
+		}
+	}
 }
 
 // handOn hands write the change list, and rolls the transaction back if

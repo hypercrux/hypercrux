@@ -6,7 +6,6 @@
 package store
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -15,13 +14,13 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
 )
 
-// Store is the in-memory copy of a database. So far it holds the records
-// with their fields, and each table's field list and vector size (S1), each
-// table's keys in byte order, which Scan reads (S4), and each record's links
-// both ways, which Neighbours and Walk read (S5). Its writes give the change
-// lists the log writes, it takes the batches the log reads whole or not at
-// all, and its Snapshot gives the copy as a compacted part (S3). The vector
-// arrays come with V1.
+// Store is the in-memory copy of a database. It holds the records with their
+// fields, and each table's field list and vector size (S1), each table's
+// keys in byte order, which Scan reads (S4), each record's links both ways,
+// which Neighbours and Walk read (S5), and each table's vector array, which
+// Nearest searches (V1, vectors.go). Its writes give the change lists the
+// log writes, it takes the batches the log reads whole or not at all, and
+// its Snapshot gives the copy as a compacted part (S3).
 //
 // Many goroutines share a Store (S2). Reads go through Read, under the
 // copy's lock held shared, and writes through a transaction from Begin,
@@ -64,6 +63,11 @@ type Store struct {
 	// so a run of links of one type, as a compacted file gives them, makes
 	// one call to unique.Make. Only writes use it.
 	lastType linkType
+	// buf holds the values of the vector a put is checking, decoded, until
+	// the put writes them into the vector's slot (checkVector). Each put
+	// uses it again, so a vector costs no allocation of its own. Only writes
+	// use it.
+	buf []float32
 }
 
 var _ Reader = (*Store)(nil)
@@ -91,7 +95,10 @@ type table struct {
 	// keys are the keys of the table's records in byte order, each with its
 	// record (S4). A drop leaves them as they are, so the table goes whole.
 	keys keyOrder
-	// V1 keeps the table's vector array here.
+	// vecs is the table's vector array, which holds its records' vectors
+	// (V1, vectors.go). It's empty while size is 0. A drop leaves it as it
+	// is, so it goes with the table.
+	vecs vectors
 }
 
 // newTable adds an empty table called name, which the store hasn't got.
@@ -116,10 +123,12 @@ func (s *Store) add(t *table, name string) int {
 	return p
 }
 
-// setSize sets a table's vector size.
+// setSize sets a table's vector size, which is 0, and with it the shape of
+// its vector array, which is empty.
 func (s *Store) setSize(t *table, size int) {
 	s.changing(undo{op: undoSize, table: t, n: t.size})
 	t.size = size
+	t.vecs.shift = blockShift(size)
 }
 
 // record is one record.
@@ -139,10 +148,11 @@ type record struct {
 	// the slice whole and never changes one in place, so a slice a read
 	// handed out stays as it was.
 	fields []FieldValue
-	// vec is the record's vector, or nil. It stands in for V1's slot: V1
-	// keeps the vector in the table's vector array, and the record holds
-	// the slot's number here.
-	vec []float32
+	// slot is the number of the record's slot in its table's vector array,
+	// which holds its vector, or -1 when it has none (V1). A delete leaves
+	// it as it is, since nothing reads a record that has gone, and undoing
+	// the delete gives the slot back to the record.
+	slot int
 }
 
 // Table returns the shape of the table called name, or false when there's
@@ -196,17 +206,16 @@ func (s *Store) existing(key string) (*record, error) {
 }
 
 // read gives the record as Reader hands it out, sharing the store's
-// memory. The slices can't grow into the store's.
+// memory: its Vec is its slot. The slices can't grow into the store's.
 func (r *record) read() Record {
-	return Record{Key: r.key, Fields: r.fields[:len(r.fields):len(r.fields)], Vec: r.vec[:len(r.vec):len(r.vec)]}
+	if r.slot < 0 {
+		return r.readVec(nil)
+	}
+	return r.readVec(r.table.vector(r.slot))
 }
 
-// notYet is the error of a method whose task hasn't written it yet.
-func notYet(method, task string) error {
-	return fmt.Errorf("store: %s comes with task %s: %w", method, task, errors.ErrUnsupported)
-}
-
-// Nearest comes with V1.
-func (s *Store) Nearest(table string, q []float32, k int, keep Filter) ([]Hit, error) {
-	return nil, notYet("Nearest", "V1")
+// readVec gives the record as read does, with v, its slot's values, which
+// the caller has found already.
+func (r *record) readVec(v []float32) Record {
+	return Record{Key: r.key, Fields: r.fields[:len(r.fields):len(r.fields)], Vec: v}
 }

@@ -56,7 +56,7 @@ func TestChangeLists(t *testing.T) {
 func runChangeLists(t *testing.T, seed uint64, n int) {
 	a, b := New(), New()
 	committed := newModel()
-	g := &gen{r: rand.New(rand.NewPCG(seed, 0x53)), m: committed}
+	g := &gen{r: rand.New(rand.NewPCG(seed, 0x53)), m: committed, side: rand.New(rand.NewPCG(seed, 0x63))}
 	seen := &states{seen: map[string]bool{dump(a): true}}
 	outcomes := map[string]int{}
 	var opening [][]format.Change // the batches in the file when B opens it
@@ -415,7 +415,7 @@ func checkSnapshot(t *testing.T, m *model, snap []format.Change) {
 // sameStores checks that got holds what want holds. Through the read API,
 // every table and key the workload can name must give the same answer from
 // both, its links and a walk from it included, and so must a scan of each
-// table and the snapshot. Then the whole of both must match, each table's
+// table, a search of each table, and the snapshot. Then the whole of both must match, each table's
 // keys and each record's lists of links included, so nothing the read API
 // can't see differs either.
 func sameStores(t *testing.T, name string, want, got *Store) {
@@ -459,6 +459,20 @@ func sameStores(t *testing.T, name string, want, got *Store) {
 				gs, gerr := scanAll(g, tbl+":")
 				if errText(werr) != errText(gerr) || !slices.EqualFunc(ws, gs, sameRecord) {
 					return fmt.Errorf("a scan of %s gives %+v, %v, where it should give %+v, %v", tbl, gs, gerr, ws, werr)
+				}
+				// A search of every vector, with queries of each size the
+				// generator makes, so a table's size and every distance
+				// must agree too.
+				for size := 1; size <= 4; size++ {
+					q := make([]float32, size)
+					for i := range q {
+						q[i] = float32(i%3) - 0.5
+					}
+					wh, werr := w.Nearest(tbl, q, MaxK, nil)
+					gh, gerr := g.Nearest(tbl, q, MaxK, nil)
+					if errText(werr) != errText(gerr) || !sameHits(wh, gh) {
+						return fmt.Errorf("a search of %s gives %v, %v, where it should give %v, %v", tbl, gh, gerr, wh, werr)
+					}
 				}
 			}
 			if ws, gs := collect(w), collect(g); !slices.EqualFunc(ws, gs, equalChange) {

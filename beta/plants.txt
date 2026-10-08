@@ -64,3 +64,11 @@ logfile/damage-unconfirmed ./beta/internal/logfile
 logfile/window-edge ./beta/internal/logfile
 logfile/any-sequence-number ./beta/internal/logfile
 logfile/compacted-held-only ./beta/internal/logfile
+store/freed-slot-taken-at-once ./beta/internal/store
+store/overwrite-not-kept ./beta/internal/store
+store/norm-not-undone ./beta/internal/store
+store/deleted-vector-found ./beta/internal/store
+store/ties-by-slot ./beta/internal/store
+store/filter-after-distance ./beta/internal/store
+store/top-k-first-seen ./beta/internal/store
+store/nearest-table-first ./beta/internal/store

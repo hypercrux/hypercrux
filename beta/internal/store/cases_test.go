@@ -607,20 +607,31 @@ func TestPutLeavesItsSliceAlone(t *testing.T) {
 	}
 }
 
-// TestReadsShareNothingThatChanges: what a read hands out stays as it was
-// through later writes, and appending to it never reaches the store.
+// TestReadsShareNothingThatChanges: a table's fields and a record's fields,
+// as a read hands them out, stay as they were through later writes, and
+// appending to them never reaches the store. A record's vector is its slot
+// in the table's vector array (V1), which a later put of another vector
+// writes over, as Reader allows: what a read hands out is good until the
+// store changes. Appending to it never reaches the store either, nor the
+// slot after it.
 func TestReadsShareNothingThatChanges(t *testing.T) {
 	s := store.New()
 	ok(t, putGo(s, "docs:1", fields{"a": 1, "b": 2, "vec": []float32{1, 2}}))
+	ok(t, putGo(s, "docs:2", fields{"vec": []float32{5, 6}}))
 	tb, _ := s.Table("docs")
 	r := must[store.Record](t)(s.Get("docs:1"))
 	_ = append(tb.Fields, "x")
 	_ = append(r.Fields, store.FieldValue{Index: 9, Value: value.Int(9)})
 	_ = append(r.Vec, 9)
+	if r2 := must[store.Record](t)(s.Get("docs:2")); !slices.Equal(r2.Vec, []float32{5, 6}) {
+		t.Fatalf("appending to docs:1's vector changed docs:2's to %v", r2.Vec)
+	}
 	ok(t, putGo(s, "docs:1", fields{"a": 10, "c": 3, "vec": []float32{3, 4}}))
-	if !slices.Equal(tb.Fields, []string{"a", "b", "vec"}) || r.Field(0) != value.Int(1) || r.Field(1) != value.Int(2) ||
-		!slices.Equal(r.Vec, []float32{1, 2}) {
+	if !slices.Equal(tb.Fields, []string{"a", "b", "vec"}) || r.Field(0) != value.Int(1) || r.Field(1) != value.Int(2) {
 		t.Fatalf("a later put changed what the reads gave: %q %v", tb.Fields, r)
+	}
+	if !slices.Equal(r.Vec, []float32{3, 4}) {
+		t.Fatalf("the vector a read gave is %v, where its slot holds the later put's", r.Vec)
 	}
 	tb2, _ := s.Table("docs")
 	if !slices.Equal(tb2.Fields, []string{"a", "b", "vec", "c"}) {
@@ -772,12 +783,4 @@ func TestTheStoreKeepsItsOwnStrings(t *testing.T) {
 			t.Errorf("the store keeps %q inside the batch", kept)
 		}
 	}
-}
-
-// TestWhatComesLater checks that the part of Reader a later task writes
-// says so.
-func TestWhatComesLater(t *testing.T) {
-	s := store.New()
-	_, err := s.Nearest("docs", []float32{1}, 1, nil)
-	wantErr(t, err, errors.ErrUnsupported)
 }

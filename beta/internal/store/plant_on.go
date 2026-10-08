@@ -77,6 +77,27 @@ import "os"
 //   - store/snapshot-links-by-table: the snapshot gives the links in byte
 //     order of their tables' names, users before users2, instead of the
 //     order of their keys.
+//   - store/freed-slot-taken-at-once: a slot that a delete or a vector set
+//     to null frees inside a transaction goes on the free list at once,
+//     where a vector the transaction puts can take it before a rollback
+//     gives it back to its record.
+//   - store/overwrite-not-kept: a vector written over in its slot keeps no
+//     copy of the old values in its undo entry, so a rollback leaves the
+//     new ones.
+//   - store/norm-not-undone: a rollback of a vector written over puts back
+//     its values and leaves the new vector's norm.
+//   - store/deleted-vector-found: a delete leaves its record's slot in use,
+//     so a search still finds the record.
+//   - store/ties-by-slot: a search breaks a tie in distance by slot instead
+//     of by key.
+//   - store/filter-after-distance: a search works out each distance first
+//     and calls the Filter only for the records near enough to join the
+//     closest k, so it's called fewer times than there are vectors, and
+//     after their dot products.
+//   - store/top-k-first-seen: a search keeps the first k vectors it meets
+//     instead of the closest k.
+//   - store/nearest-table-first: Nearest looks for the table before it
+//     checks k, so a bad k on a table that isn't there gives not found.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "store/nulls-kept", "store/drop-keeps-records", "store/spelt-as-given", "store/size-unchecked",
@@ -87,7 +108,10 @@ var plant = func() string {
 		"store/delete-keeps-key", "store/join-out-of-order", "store/after-included",
 		"store/cursor-keeps-its-place", "store/prefix-table-unchecked", "store/link-added-twice",
 		"store/unlink-one-end", "store/unlink-types-reversed", "store/links-in-kept", "store/link-undone-at-one-end",
-		"store/both-not-merged", "store/walk-unsorted", "store/walk-start-included", "store/snapshot-links-by-table":
+		"store/both-not-merged", "store/walk-unsorted", "store/walk-start-included", "store/snapshot-links-by-table",
+		"store/freed-slot-taken-at-once", "store/overwrite-not-kept", "store/norm-not-undone",
+		"store/deleted-vector-found", "store/ties-by-slot", "store/filter-after-distance", "store/top-k-first-seen",
+		"store/nearest-table-first":
 		return p
 	}
 	return ""

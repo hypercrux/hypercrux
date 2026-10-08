@@ -113,14 +113,16 @@ func (s *Store) inOrder(t *table) iter.Seq[*record] {
 // carries them: every field that holds a value, the vector among them, each
 // spelt as its table spells it, in byte order of name. The record holds its
 // fields in its table's order, which can differ from byte order, since a
-// later put's new fields join the end of the list.
+// later put's new fields join the end of the list. The vector is a copy of
+// its slot's values, so the snapshot holds nothing that later changes to
+// the store change.
 func (r *record) snapshot(dst []format.Field) []format.Field {
 	t := r.table
 	for _, f := range r.fields {
 		dst = append(dst, format.Field{Name: t.fields[f.Index], Value: f.Value})
 	}
-	if r.vec != nil && plant != "store/snapshot-no-vectors" {
-		dst = append(dst, format.Field{Name: t.fields[t.vec], Value: value.Vector(r.vec)})
+	if r.slot >= 0 && plant != "store/snapshot-no-vectors" {
+		dst = append(dst, format.Field{Name: t.fields[t.vec], Value: value.Vector(t.vector(r.slot))})
 	}
 	if plant != "store/snapshot-fields-unsorted" {
 		slices.SortFunc(dst, byName)

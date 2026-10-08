@@ -508,8 +508,11 @@ type writer interface {
 // A link adds a link, an unlink takes one or several out, and a delete or a
 // drop takes out every link of the records it takes, both ways: links
 // between two of them, from a record to itself, and to and from records
-// that stay. After a rollback the store must be as it was, and after a
-// commit as it was before that rollback.
+// that stay. A vector can be written over in its slot, take a slot, free
+// one, or go with its table, and a slot freed must stay free until the
+// commit. After a rollback the store must be as it was, vectors' bits and
+// norms included, and after a commit as it was before that rollback, with
+// the slots freed on the free list.
 func TestUndoEachChange(t *testing.T) {
 	f := func(name string, v value.Value) format.Field { return format.Field{Name: name, Value: v} }
 	vec := func(x ...float32) value.Value { return value.Vector(x) }
@@ -634,6 +637,78 @@ func TestUndoEachChange(t *testing.T) {
 			return w.Delete("pics:1")
 		}},
 	}
+	// The vector arrays (V1): a slot written over, taken, freed and taken
+	// again, a first block that grows and blocks after it, and a table whose
+	// array goes with it.
+	big := func(x float32) value.Value { // a vector of 32,768 values, 8 to a block
+		v := make([]float32, 32768)
+		for i := range v {
+			v[i] = x + float32(i%7)
+		}
+		return value.Vector(v)
+	}
+	cases = append(cases, []struct {
+		name  string
+		write func(w writer) error
+	}{
+		{"a put that changes a vector", func(w writer) error { return w.Put("docs:1", []format.Field{f("vec", vec(0, -1))}) }},
+		{"a vector changed twice", func(w writer) error {
+			if err := w.Put("docs:1", []format.Field{f("vec", vec(0, -1))}); err != nil {
+				return err
+			}
+			return w.Put("docs:1", []format.Field{f("vec", vec(3, 4))})
+		}},
+		{"a record's first vector", func(w writer) error { return w.Put("docs:2", []format.Field{f("vec", vec(3, 4))}) }},
+		{"a delete of a record with a vector, and a vector for another", func(w writer) error {
+			if err := w.Delete("docs:1"); err != nil {
+				return err
+			}
+			return w.Put("docs:2", []format.Field{f("vec", vec(5, 6))})
+		}},
+		{"a vector cleared, and a vector for another record", func(w writer) error {
+			if err := w.Put("docs:1", []format.Field{f("vec", value.Null())}); err != nil {
+				return err
+			}
+			return w.Put("docs:3", []format.Field{f("vec", vec(7, 8))})
+		}},
+		{"a vector cleared and given back", func(w writer) error {
+			if err := w.Put("docs:1", []format.Field{f("vec", value.Null())}); err != nil {
+				return err
+			}
+			return w.Put("docs:1", []format.Field{f("vec", vec(9, 9))})
+		}},
+		{"a delete of a record with a vector, and a new record with its key", func(w writer) error {
+			if err := w.Delete("docs:1"); err != nil {
+				return err
+			}
+			return w.Put("docs:1", []format.Field{f("vec", vec(1, 1))})
+		}},
+		{"a drop of a table with vectors, and one of the same name of another size", func(w writer) error {
+			if err := w.Drop("docs"); err != nil {
+				return err
+			}
+			return w.Put("docs:1", []format.Field{f("vec", vec(1, 2, 3))})
+		}},
+		{"vectors in several blocks, written, cleared and deleted", func(w writer) error {
+			for i := range 20 {
+				if err := w.Put(fmt.Sprintf("big:%02d", i), []format.Field{f("vec", big(float32(i)))}); err != nil {
+					return err
+				}
+			}
+			for i := 0; i < 20; i += 3 {
+				if err := w.Delete(fmt.Sprintf("big:%02d", i)); err != nil {
+					return err
+				}
+				if err := w.Put(fmt.Sprintf("big:%02d", i+1), []format.Field{f("vec", value.Null())}); err != nil {
+					return err
+				}
+				if err := w.Put(fmt.Sprintf("big:x%d", i), []format.Field{f("vec", big(-float32(i)))}); err != nil {
+					return err
+				}
+			}
+			return w.Put("big:05", []format.Field{f("vec", big(100))})
+		}},
+	}...)
 	all := func(w writer) error {
 		for _, c := range cases[:6] { // the puts: the rest undo what they do
 			if err := c.write(w); err != nil {
@@ -844,18 +919,12 @@ func TestCommit(t *testing.T) {
 
 // TestATransactionThatHasEnded: once Commit or Rollback has ended a
 // transaction, its methods fail with ErrClosed, a cursor it gave gives no
-// more records, and Rollback and RollbackTo do nothing. While it's open,
-// the read that a later task writes says so, and its snapshot holds its
-// changes.
+// more records, and Rollback and RollbackTo do nothing. While it's open, its
+// snapshot holds its changes.
 func TestATransactionThatHasEnded(t *testing.T) {
 	s := newStoreN(t)
 	tx := begin(t, s)
 	m := tx.Mark()
-	for _, err := range readsToCome(tx) {
-		if !errors.Is(err, errors.ErrUnsupported) {
-			t.Errorf("a read for a later task gave %v", err)
-		}
-	}
 	ok(t, setN(tx, 2))
 	var snap []format.Change
 	for c := range tx.Snapshot() {
@@ -880,9 +949,8 @@ func TestATransactionThatHasEnded(t *testing.T) {
 		if rec, more := cur.Next(); more {
 			t.Errorf("a cursor gave %v after its transaction ended", rec.Key)
 		}
-		closed := append(readsToCome(tx),
-			tx.Put("docs:1", nil), tx.Delete("docs:1"), tx.Drop("docs"), tx.Apply(format.Change{Op: format.Delete, Key: "docs:1"}),
-			tx.Link("docs:1", "x", "docs:1"), tx.Unlink("docs:1", "", "docs:1"), tx.Commit(nil))
+		closed := []error{tx.Put("docs:1", nil), tx.Delete("docs:1"), tx.Drop("docs"), tx.Apply(format.Change{Op: format.Delete, Key: "docs:1"}),
+			tx.Link("docs:1", "x", "docs:1"), tx.Unlink("docs:1", "", "docs:1"), tx.Commit(nil)}
 		_, err = tx.Get("docs:1")
 		closed = append(closed, err)
 		_, err = tx.Scan("docs:", "")
@@ -890,6 +958,8 @@ func TestATransactionThatHasEnded(t *testing.T) {
 		_, err = tx.Neighbours("docs:1", Out, "")
 		closed = append(closed, err)
 		_, err = tx.Walk("docs:1", Out, "", 1)
+		closed = append(closed, err)
+		_, err = tx.Nearest("docs", []float32{1}, 1, nil)
 		closed = append(closed, err)
 		for j, err := range closed {
 			if !errors.Is(err, errs.ErrClosed) {
@@ -912,12 +982,6 @@ func TestATransactionThatHasEnded(t *testing.T) {
 		}()
 		wantN(t, readN(s), 2)
 	}
-}
-
-// readsToCome makes the transaction's reads that later tasks write.
-func readsToCome(tx *Tx) []error {
-	_, nearest := tx.Nearest("docs", []float32{1}, 1, nil)
-	return []error{nearest}
 }
 
 // TestDirectWritesWaitTheirTurn: the store's own writes, which have it to
