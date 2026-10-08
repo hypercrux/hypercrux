@@ -373,25 +373,32 @@ can take the lock, because the writer is gone. The check, in this order:
      damage;
    - when its changes are malformed or break the rules for a change on its
      own, that's damage too;
-   - otherwise a writer left it there and died, before or after the batch's
-     sync, with nothing or a torn marker after it. The batch is written
-     again in place, with the marker before it, synced, and marked. It's
-     written again because after a failed sync, Linux can mark its pages
-     clean, and a sync on its own could then report success without the
-     batch ever reaching the disk. The marker before it may have been
-     written after the last sync that worked, so the same goes for its
-     page. Before the first batch in the file comes the header instead,
-     which was synced when the database was made.
+   - otherwise a writer left it there, having died or stuck after a failed
+     commit, before or after the batch's sync, with nothing or a torn marker
+     after it. The batch is written again in place, with the marker before
+     it, synced, and marked. It's written again because after a failed sync,
+     Linux can mark its pages clean, and a sync on its own could then report
+     success without the batch ever reaching the disk. The marker before it
+     may have been written after the last sync that worked, so the same goes
+     for its page. Before the first batch in the file comes the header
+     instead, which was synced when the database was made.
 
    Changes that break the rules for the state they apply to are found once
    the batch is marked, since only marked batches are applied, and they're
    damage then.
-3. Cuts off everything after the last marker, and syncs the cut.
+3. Cuts off everything after the last marker, as a writer cuts back a
+   failed commit (see Writing): it writes the last marker again in place and
+   syncs, then cuts and syncs the cut. Before the first batch in the file
+   comes the header instead, and only the cut and its sync are made.
 
-A failure while writing the batch again, syncing it or marking it is
-handled like a failed commit (see Writing). In a compacted file, step 1
-stops the check whenever the log ends before the compacted part does, so a
-cut never reaches into the compacted part.
+A failure while writing the batch again, syncing it, marking it or cutting
+stops the check, and the writer lets go of the lock, leaving the end of the
+log for the next check. That check finds the same end, or a cut that's
+complete with the last marker on the drive, and starts again. Each step
+writes only what the file holds already, so it can be made again, and a
+batch whose commit may have succeeded is never cut. In a compacted file,
+step 1 stops the check whenever the log ends before the compacted part
+does, so a cut never reaches into the compacted part.
 
 What the check finds after the last marked batch, and what follows:
 
@@ -399,7 +406,7 @@ What the check finds after the last marked batch, and what follows:
 |---|---|---|
 | Nothing | The log is whole | Nothing |
 | Zeros, or the start of a batch, and no whole marker further on naming the next sequence number or a later one | A commit a crash cut short | It's cut off |
-| A batch that counts, with changes that keep the rules for a change on its own, and nothing or a torn marker after it | A writer died after writing it | It's written again with the marker before it, synced and marked, and anything after it is cut off |
+| A batch that counts, with changes that keep the rules for a change on its own, and nothing or a torn marker after it | A writer died after writing it, or stuck after a failed commit | It's written again with the marker before it, synced and marked, and anything after it is cut off |
 | A batch that counts, then a whole marker naming another batch | Damage | Reported |
 | A batch that counts, with changes that are malformed or break the rules for a change on its own | Damage, or a format this build doesn't know | Reported |
 | A batch the check has just marked, with changes that break the rules for the state they apply to | Damage, or a format this build doesn't know | Reported, and the marker stays |
@@ -425,9 +432,17 @@ One process writes at a time. A writer:
 3. appends its batch, syncs the file, and appends the marker.
 
 If appending, syncing or writing the marker fails, the writer cuts the file
-back to just after the last marker and syncs it, before it lets go of the
-lock. If that fails too, it keeps the lock and writes nothing more until
-the database is closed, so no other process can write meanwhile.
+back to just after the last marker before it lets go of the lock. It writes
+the last marker again in place and syncs, since a failed sync can mark the
+marker's page clean without it reaching the drive while reads go on seeing
+it; then it cuts the file and syncs the cut. With the sync before the cut,
+a writer that stops partway leaves either the end it was cutting, which the
+next check cuts again, or the last marker on the drive. If any of that
+fails, the writer keeps the lock and writes nothing more until the database
+is closed, so no other process can write meanwhile. The next writer's check
+then deals with what's left as with what a crash leaves: it marks the
+failed batch when it counts, since the commit's outcome is unknown, and
+cuts it otherwise.
 
 **Creating a database.** A new database starts as a file holding only its
 header, written beside the database under a name of its own, the

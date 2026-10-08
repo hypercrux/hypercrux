@@ -231,11 +231,13 @@ A commit:
 
 If a check fails, the undo list puts the copy back and nothing reaches the
 file. If the append, the sync or the marker fails, the writer makes the
-batch unusable before releasing the lock: it cuts the file back to just
-after the last marker and syncs. If that fails, the writer keeps the write
-lock and refuses further writes, so no process can write until it closes the
-database. Either way the undo list puts the copy back. A power cut can still
-land between a failed sync and the cut, so an error from a commit means its
+batch unusable before releasing the lock: it writes the last marker again
+and syncs, then cuts the file back to just after it and syncs the cut. If
+that fails, the writer keeps the write lock and refuses further writes, so
+no process can write until it closes the database. Either way the undo list
+puts the copy back. A power cut can still land between a failed sync and the
+cut, but then no caller is left to see the error. So an error from a commit
+means the commit isn't in the file, unless the handle is stuck, when its
 outcome is unknown.
 
 Each sync of a growing file also commits its new size, which can cost more

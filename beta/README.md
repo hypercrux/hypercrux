@@ -11,6 +11,11 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 
 ## What's here so far
 
+- `bench/`: 0.1's benchmarks on 0.x and on the Beta side by side, through
+  their public packages on the same data, plus opening 100,000 records on
+  both. What the Beta can't run yet is skipped, naming its task.
+  `sh scripts/record-beta-bench.sh` writes `test/results/beta-bench.txt`,
+  with the middle run on each engine beside the Beta's targets.
 - `conformance/`: 0.x's tests that don't depend on SQLite, written against a
   small `Engine` interface so the same tests run on 0.x and on the Beta.
 - `conformance/zerox/`: the adapter for 0.x. Its test runs the whole suite on
@@ -65,7 +70,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   it, and cuts off what a crash left half written. Before anything is cut or
   written again, it looks past the end of the log for damage, which it
   reports after a read holding the lock, cutting nothing. Damaged files for
-  each kind are in its `testdata/damaged`.
+  each kind are in its `testdata/damaged`. A commit that fails is cut back
+  out of the file before the lock goes, and when that fails too, the handle
+  keeps the lock until it's closed.
 - `internal/procs/`: the many-process harness. It runs writer and reader
   processes on one database, copies of the test binary, kills them with
   SIGKILL at random moments and starts new ones in their place. Then it
@@ -80,8 +87,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `internal/store/`: the in-memory copy, with its read API, `Reader`. It
   holds the records with their fields, each table's field list, each table's
   keys in byte order, which `Scan` reads through a `Cursor`, and each
-  record's links both ways, which `Neighbours` reads and `Walk` follows. Its
-  writes give the change lists the log writes, `ApplyBatch` and
+  record's links both ways, which `Neighbours` reads and `Walk` follows, and
+  each table's vectors in an array of their own, which `Nearest` searches.
+  Its writes give the change lists the log writes, `ApplyBatch` and
   `LoadBatch` take a batch the log has read whole or not at all, and
   `Snapshot` gives the copy as a compacted part. Reads share it through
   `Read`, and writes go through a transaction from `Begin`, which holds
@@ -121,6 +129,7 @@ sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
 sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
 HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds
 HYPERCRUX_PROCS_TIME=10m go test ./beta/internal/procs   # many processes for 10 minutes a run
+sh scripts/record-beta-bench.sh   # both engines' benchmarks; needs the machine to itself
 ```
 
 ## CI

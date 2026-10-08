@@ -55,24 +55,24 @@ work in, and all 133 hours are done after R4.
 | 15 | S3 Change lists | 2 | done, [S3.md](S3.md), with T2 and T3 |
 | 16 | S4 Key order and `Scan` | 3 | done, [S4.md](S4.md), with G1 and F3 |
 | 17 | S5 Links and walks | 4 | done, [S5.md](S5.md), with T4 and F4 |
-| 18 | V1 Vector arrays and `Nearest` | 4 | next, [V1.md](V1.md) |
-| 19 | T5 Benchmarks | 2 | next, [T5.md](T5.md) |
+| 18 | V1 Vector arrays and `Nearest` | 4 | done, [V1.md](V1.md), with T5 and F5 |
+| 19 | T5 Benchmarks | 2 | done, [T5.md](T5.md), first recorded run in `test/results/beta-bench.txt` |
 | 20 | G1 Slice 1: `Put` and `Get` | 2 | done, [G1.md](G1.md) |
-| 21 | G2 Slice 2, the first working version | 2 | |
+| 21 | G2 Slice 2, the first working version | 2 | next, [G2.md](G2.md) |
 | 22 | T1 Fault layer for data | 3 | done, [T1.md](T1.md) |
 | 23 | T2 Fault layer for names | 2 | done, [T2.md](T2.md) |
 | 24 | T3 Crash-point driver | 3 | done, [T3.md](T3.md) |
 | 25 | T4 Many-process harness | 3 | done, [T4.md](T4.md) |
 | 26 | F3 Crash recovery | 4 | done, [F3.md](F3.md) |
 | 27 | F4 Damage | 2 | done, [F4.md](F4.md) |
-| 28 | F5 Failed commits | 2 | next, [F5.md](F5.md) |
-| 29 | F6 Following other processes | 3 | |
+| 28 | F5 Failed commits | 2 | done, [F5.md](F5.md) |
+| 29 | F6 Following other processes | 3 | next, [F6.md](F6.md) |
 | 30 | F8 Compaction | 3 | |
 | 31 | F9 Reloading | 2 | |
 | 32 | F7 File rules and growth | 2 | |
 | 33 | Q1 Values and functions | 4 | |
 | 34 | Q2 Dates | 2 | |
-| 35 | Q3 Parser | 5 | |
+| 35 | Q3 Parser | 5 | next, [Q3.md](Q3.md), ahead of Q1 and Q2 |
 | 36 | Q4 Operators | 2 | |
 | 37 | Q5 Planner | 5 | |
 | 38 | Q6 SQL writes | 2 | |
@@ -88,7 +88,7 @@ work in, and all 133 hours are done after R4.
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
 
-Hours done so far: 66 of 133. The five early tasks, P1 to P5, S1 to S5, F1 to F4, G1 and T1 to T4 are done. The next round is V1, T5 and F5. T5's agent writes the benchmarks and checks them with short runs; the coordinator makes the recorded run once the round is merged and nothing else is running, since timings need the machine to itself. G2, the first working version, can follow in the round after, beside F6.
+Hours done so far: 74 of 133. The five early tasks, P1 to P5, S1 to S5, V1, F1 to F5, G1 and T1 to T5 are done. The next round is G2, F6 and Q3. G2 brings the first working version; its timings against the targets come from the coordinator's recorded run once the round is merged and the machine is quiet. Q3 goes ahead of Q1 and Q2, since their closing tests replay the corpus's SQL text, which needs the parser. F8 and F7 work in the log as F6 does, so they wait for the round after. The public package's reads follow other processes once F9 joins following and reloading to them.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.
