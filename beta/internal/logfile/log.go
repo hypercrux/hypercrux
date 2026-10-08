@@ -37,10 +37,13 @@ import (
 // database, holding the lock, Due says when one is due, a waiter for the
 // lock waits past its deadline while a compaction runs (takeMutex and
 // flock), and the holder of the lock removes a leftover NAME.compact once
-// the inode check has passed (lockFile, and checkLocked).
+// the inode check has passed (lockFile, and checkLocked). F9's reloading is
+// in reload.go: when another file has taken the path, Open, Lock (reopen)
+// and Reload read it from its start, after the Target has dropped what it
+// held and a garbage collection has run (drop), and a Target that's a
+// Reloader hears when the log is done with the new file (loaded).
 //
 //   - F7, the file rules: in Open, before anything else.
-//   - F9, reloading: in reopen, between the reset and the read.
 
 // DefaultWait is how long Lock waits for the write lock, as 0.x does.
 const DefaultWait = 10 * time.Second
@@ -57,12 +60,14 @@ const maxTries = 100
 
 // Target is where the log hands what it reads: the in-memory copy, which
 // the public package joins to the log (G1), or a test's recorder. The log
-// calls it from Open, Lock and Follow, on the goroutine that called them,
-// one call at a time. Lock and Follow call it holding the write lock's
-// mutex. An Update in the public package begins its transaction after Lock
-// and ends it before Unlock (G1), holding the mutex throughout, so no call
-// comes while an Update's transaction is open, and a transaction the
-// Target begins for a batch never waits for one (follow.go).
+// calls it from Open, Lock, Follow and Reload, on the goroutine that called
+// them, one call at a time. Lock, Follow and Reload call it holding the
+// write lock's mutex. An Update in the public package begins its
+// transaction after Lock and ends it before Unlock (G1), holding the mutex
+// throughout, so no call comes while an Update's transaction is open, and a
+// transaction the Target begins for a batch never waits for one
+// (follow.go). A Target that's a Reloader also hears when the log is done
+// with a file it read from its start after a Reset (reload.go).
 type Target interface {
 	// Apply applies one marked batch: its sequence number, and its
 	// changes, in order. The changes are the Target's to keep: nothing
@@ -77,7 +82,9 @@ type Target interface {
 
 	// Reset drops everything applied so far, since another file has taken
 	// the database's path, a compaction's or a backup moved into place.
-	// The batches of that file follow, from its first.
+	// The batches of that file follow, from its first. The log runs a
+	// garbage collection straight after it, before it reads the new file,
+	// so a Target that lets go of what it held lets memory go too.
 	Reset()
 }
 
@@ -160,6 +167,7 @@ type Log struct {
 	locked bool   // the write lock is held, both halves
 	stuck  error  // set when the lock stays held until Close; every Lock and Append returns it
 	tidied bool   // leftover .new- files have been looked for
+	owed   bool   // the Target has been reset since the last Loaded, which it's owed (reload.go)
 	closed bool   // Close has been called
 	batch  []byte // a commit's batch and marker, built in the same buffer each time
 	retry  int64  // after a compaction that failed, the end of the log the next waits for (Due), or 0
@@ -204,51 +212,59 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	if l.wait <= 0 {
 		l.wait = DefaultWait
 	}
-	var deadline time.Time // for the wait for the write lock, when Open has to read again holding it
 	// F7 goes first: the path made real, with every symbolic link
 	// resolved, and a file with more than one name, or one that isn't a
 	// regular file, refused.
+	err := l.open()
+	// When another file took the path while Open read, the Target was reset
+	// on the way, and a Reloader is owed a Loaded (reload.go).
+	l.loaded(err)
+	if err != nil {
+		return nil, err
+	}
+	l.publish()
+	return l, nil
+}
+
+// open is Open's work: it opens the file at the path, or creates one when
+// nothing's there, and reads and checks it, starting again on the file at
+// the path while other files keep taking it. On an error, l holds no file
+// that's open.
+func (l *Log) open() error {
+	var deadline time.Time // for the wait for the write lock, when Open has to read again holding it
 	for range maxTries {
-		f, err := files.Open(path)
+		f, err := l.fsys.Open(l.path)
 		if errors.Is(err, fs.ErrNotExist) {
 			err = l.create()
 			if errors.Is(err, errAppeared) {
 				continue // another creator's database is there now: open that
 			}
-			if err != nil {
-				return nil, err
-			}
-			l.publish()
-			return l, nil
+			return err
 		}
 		if err != nil {
-			return nil, err
+			return err
 		}
 		l.f = f
 		size, err := l.load()
-		if err != nil {
-			f.Close()
-			return nil, err
+		if err == nil {
+			// The look past the end of the log, whether or not Open gets the
+			// lock, and the check of the end once it holds it (damage.go).
+			err = l.openCheck(size, &deadline)
 		}
-		// The look past the end of the log, whether or not Open gets the
-		// lock, and the check of the end once it holds it (damage.go).
-		err = l.openCheck(size, &deadline)
 		if errors.Is(err, ErrReplaced) {
 			// Another file took the path before Open held the lock: read that
-			// one from its start instead.
+			// one from its start instead, as a reload does (reload.go).
 			f.Close()
 			l.f = nil
-			l.t.Reset()
+			l.drop()
 			continue
 		}
 		if err != nil {
 			f.Close()
-			return nil, err
 		}
-		l.publish()
-		return l, nil
+		return err
 	}
-	return nil, fmt.Errorf("hypercrux: %s: a file kept appearing at the path and going again while it was opened", path)
+	return fmt.Errorf("hypercrux: %s: a file kept appearing at the path and going again while it was opened", l.path)
 }
 
 // Lock takes the write lock: the mutex inside the process, then flock on
@@ -264,11 +280,12 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 // Holding both, it checks by device and inode number that the file it
 // locked is still the one at the path. When another file has taken the
 // path, a compaction's or a backup moved into place, Lock lets go of the
-// old file, calls the Target's Reset, reads the new file from its start,
-// and takes the lock there instead: the commit starts again on the new
-// file. Once the file it locked is the one at the path, it removes a
-// leftover NAME.compact, which a compaction left when its process died,
-// unless it's locked. An empty file at the path becomes a database now, as
+// old file, calls the Target's Reset, runs a garbage collection, reads the
+// new file from its start, tells a Reloader so (Loaded), and takes the lock
+// there instead: the commit starts again on the new file (reload.go). Once
+// the file it locked is the one at the path, it removes a leftover
+// NAME.compact, which a compaction left when its process died, unless
+// it's locked. An empty file at the path becomes a database now, as
 // FORMAT.md's "Creating a database" says. Then Lock checks that what this
 // Log has read is still in the file, as FORMAT.md's "Writing" asks, reads
 // on to the end of the log, handing each new marked batch to the Target,
@@ -469,23 +486,26 @@ func (l *Log) atPath() (fsys.Info, bool, error) {
 }
 
 // reopen opens the file at the path, once another file has taken it, and
-// reads it from its start, after the Target drops what it had. When it
-// fails, l has no file, and the next Lock tries again.
+// reads it from its start, after the Target has dropped what it had and a
+// garbage collection has run, so the process doesn't hold the old copy and
+// the new one at once (drop). Then a Reloader hears that the log is done
+// with the new file's log, before Lock waits for flock on it, so it keeps
+// its readers off no longer than the read takes (reload.go). When it fails,
+// l has no file, and the next Lock tries again.
 func (l *Log) reopen() error {
 	f, err := l.fsys.Open(l.path)
 	if err != nil {
 		return err
 	}
 	l.f = f
-	l.t.Reset()
-	// F9 goes here: a garbage collection between the reset and the read,
-	// so the process doesn't hold the old copy and the new one at once.
-	if _, err := l.load(); err != nil {
+	l.drop()
+	_, err = l.load()
+	if err != nil {
 		l.f = nil
 		f.Close()
-		return err
 	}
-	return nil
+	l.loaded(err)
+	return err
 }
 
 // Unlock lets go of the write lock, in the reverse order: flock, then the

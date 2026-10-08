@@ -6,6 +6,7 @@
 package procs
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,6 +20,17 @@ func fail(w int) step               { return func(h *history) *Failure { return 
 func killed(id int) step            { return func(h *history) *Failure { h.gone(id, true); return nil } }
 func saw(r int, seq uint64, text string) step {
 	return func(h *history) *Failure { return h.saw(r, seq, text) }
+}
+func inEra(r, n int) step { return func(h *history) *Failure { return h.moved(r, n) } }
+
+// restore is a backup that holds backup moved into place over a file that
+// holds gone.
+func restore(backup, gone []string) step {
+	return func(h *history) *Failure {
+		h.restoring(backup)
+		h.restored(gone)
+		return nil
+	}
 }
 
 // replay gives h the steps in turn, and then checks it against final. It
@@ -72,6 +84,65 @@ func TestTheChecksFindEachProblem(t *testing.T) {
 		case f != nil:
 			t.Logf("%s: %v: %s", c.name, f.Problem, f.Reason)
 		}
+	}
+}
+
+// TestTheChecksFindEachProblemByEra: a history with backups moved into
+// place, made of reports by hand, finds each problem era by era, and
+// nothing in a run that's right, where a restore loses commits that
+// succeeded, and a reader that read the replaced file saw them.
+func TestTheChecksFindEachProblemByEra(t *testing.T) {
+	// a, b and c succeed in era 0; the backup holds a and b; d succeeds in
+	// era 1.
+	before := []step{begin(1, "a"), succeed(1), begin(1, "b"), succeed(1), begin(2, "c"), succeed(2), begin(2, "x"), killed(2)}
+	for _, c := range []struct {
+		name  string
+		steps []step
+		final []string
+		want  Problem
+	}{
+		{"a run that's right", []step{saw(3, 1, "a"), saw(3, 2, "b"), saw(3, 3, "c"), saw(4, 1, "a"), restore([]string{"a", "b"}, []string{"a", "b", "c"}),
+			inEra(3, 1), saw(3, 1, "a"), saw(3, 2, "b"), begin(5, "d"), succeed(5), saw(3, 3, "d"), saw(4, 2, "b"), inEra(4, 1), saw(4, 1, "a")},
+			[]string{"a", "b", "d"}, 0},
+		{"a commit that succeeded after the restore isn't in the file", []step{restore([]string{"a", "b"}, []string{"a", "b", "c"}), begin(5, "d"), succeed(5)},
+			[]string{"a", "b"}, Missing},
+		{"the file at the end doesn't start with the backup", []step{restore([]string{"a", "b"}, []string{"a", "b", "c"})}, []string{"a", "c"}, Disagree},
+		{"the file at the end is shorter than the backup", []step{restore([]string{"a", "b"}, []string{"a", "b", "c"})}, []string{"a"}, Lost},
+		{"a reader in the new era finds another commit than the backup holds", []step{restore([]string{"a", "b"}, []string{"a", "b", "c"}), inEra(3, 1), saw(3, 1, "a"), saw(3, 2, "x")},
+			[]string{"a", "b"}, Disagree},
+		{"two readers in the new era disagree", []step{restore([]string{"a"}, []string{"a", "b"}), inEra(3, 1), saw(3, 1, "a"), saw(3, 2, "c"), inEra(4, 1), saw(4, 1, "a"), saw(4, 2, "x")},
+			nil, Disagree},
+		{"a reader saw past what the replaced file held", []step{saw(3, 1, "a"), saw(3, 2, "b"), saw(3, 3, "c"), restore([]string{"a"}, []string{"a", "b"})},
+			[]string{"a"}, Lost},
+		{"a reader disagrees with the replaced file", []step{saw(3, 1, "a"), saw(3, 2, "x"), restore([]string{"a"}, []string{"a", "b"})},
+			[]string{"a"}, Disagree},
+		{"a backup isn't the start of the file it was copied from", []step{restore([]string{"a", "c"}, []string{"a", "b", "c"})}, []string{"a", "c"}, Disagree},
+		{"the replaced file holds a commit twice", []step{restore([]string{"a"}, []string{"a", "b", "a"})}, []string{"a"}, Twice},
+		{"the replaced file holds a writer's commits out of order", []step{restore(nil, []string{"b", "a", "c"})}, nil, OutOfOrder},
+		{"a backup holds a commit no writer began", []step{restore([]string{"a", "made up"}, []string{"a", "made up"})}, []string{"a", "made up"}, NotBegun},
+		{"a reader goes back an era", []step{restore([]string{"a"}, []string{"a"}), inEra(3, 1), inEra(3, 1)}, []string{"a"}, OutOfOrder},
+		{"a reader reads an era no restore began", []step{restore([]string{"a"}, []string{"a"}), inEra(3, 2)}, []string{"a"}, Failed},
+	} {
+		f := replay(newHistory(), append(slices.Clone(before), c.steps...), c.final)
+		switch {
+		case c.want == 0 && f != nil:
+			t.Errorf("%s: %v: %s", c.name, f.Problem, f.Reason)
+		case c.want != 0 && f == nil:
+			t.Errorf("%s: nothing found, where %v is wanted", c.name, c.want)
+		case c.want != 0 && f.Problem != c.want:
+			t.Errorf("%s: %v found, where %v is wanted: %s", c.name, f.Problem, c.want, f.Reason)
+		case f != nil:
+			t.Logf("%s: %v: %s", c.name, f.Problem, f.Reason)
+		}
+	}
+	h := newHistory()
+	if f := replay(h, append(slices.Clone(before), restore([]string{"a"}, []string{"a", "b", "c"}), restore([]string{"a", "d"}, []string{"a", "d", "e"})), []string{"a", "d"}); f == nil || f.Problem != NotBegun {
+		t.Fatalf("two restores over commits nobody began: %v", f)
+	}
+	var rep Report
+	h.count(&rep, []string{"a", "d"})
+	if rep.Restores != 2 || rep.Lost != 3 {
+		t.Errorf("two restores, which lost b, c and e, count %d restores and %d lost", rep.Restores, rep.Lost)
 	}
 }
 

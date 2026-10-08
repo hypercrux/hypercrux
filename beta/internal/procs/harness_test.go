@@ -22,7 +22,9 @@ import (
 var (
 	failingWriter = Workload{Name: "a writer that fails", Read: toyRead, Final: toyFinal,
 		Write: func(w *Writer) error {
-			w.Begin("one commit")
+			// A commit of its own, so the run never hears two writers begin
+			// the same commit before it hears the first one fail.
+			w.Begin("one commit by writer " + strconv.Itoa(w.ID()))
 			return errors.New("the drive is on fire")
 		}}
 	panickingWriter = Workload{Name: "a writer that panics", Read: toyRead, Final: toyFinal,
@@ -88,6 +90,8 @@ func TestOptionsThatCantBeUsed(t *testing.T) {
 		{"a gap that ends before it starts", toy, Options{Path: path, WriterGap: Span{Min: time.Second, Max: time.Millisecond}}},
 		{"a least count below 0", toy, Options{Path: path, Least: map[string]int{"checks": -1}}},
 		{"a least count without a name", toy, Options{Path: path, Least: map[string]int{"": 1}}},
+		{"restores without a Backup and a Restore", toy, Options{Path: path, Restores: Span{Max: time.Millisecond}}},
+		{"restores that end before they start", realReloaded, Options{Path: path, Restores: Span{Min: time.Second, Max: time.Millisecond}}},
 	} {
 		if _, err := Run(c.w, c.o); err == nil || errors.As(err, new(*Failure)) {
 			t.Errorf("%s: Run gives %v", c.name, err)

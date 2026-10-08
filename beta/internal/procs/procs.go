@@ -53,6 +53,21 @@ type Workload struct {
 	// returns every commit the file holds, in order, as Read hands them to a
 	// Reader. The readers still running then have to come to the same end.
 	Final func(path string) ([]string, error)
+
+	// Backup and Restore are for a run that moves backups into place
+	// (Options.Restores), in the run's own process, as Final is. Backup
+	// copies the database at path to the new file at to, beside it, as the
+	// database stands at one commit, holding the write lock while it copies,
+	// and marks the copy as the file of era era, so that a reader that reads
+	// it can say which era it reads (Reader.Restart). It returns the commits
+	// the copy holds, in order, as Final returns them.
+	Backup func(path, to string, era int) ([]string, error)
+
+	// Restore moves the backup at from into place at path, as a backup is
+	// put back, holding the write lock of the file at the path while it does,
+	// and returns the commits that file held, in order. Those past the
+	// backup's are lost with it.
+	Restore func(from, path string) ([]string, error)
 }
 
 // Options says how a run goes. The zero value, with a Path, is a run of 2
@@ -97,6 +112,18 @@ type Options struct {
 	// Reader.Count), on top of the least work every run does (see Run).
 	Least map[string]int
 
+	// Restores, when it isn't zero, has the run take a backup of the database
+	// at random moments, and move it into place a while later, with the
+	// workload's Backup and Restore, one backup at a time, until the run's
+	// time is up. Each wait, from the start of the run or the last restore to
+	// the next backup, and from a backup to its restore, is drawn from the
+	// span. Each restore begins a new era of the log, numbered from 1, era 0
+	// being the database before any: the file at the path then holds the
+	// backup's commits, and the commits after them in it aren't the ones the
+	// replaced file held. The checks are made era by era (see Run). A run
+	// with restores goes on until it has made 2.
+	Restores Span
+
 	// Seed seeds the run's random choices: each process's life, and the
 	// seed each child's Rand starts from. 0 means HYPERCRUX_PROCS_SEED when
 	// that's set, and a seed of the run's own otherwise. The report and
@@ -130,7 +157,7 @@ const (
 	// first commit, or from the file at the end.
 	Lost
 	// Missing: a commit its writer saw succeed isn't in the file at the
-	// end.
+	// end, nor among the commits a restore lost.
 	Missing
 	// Behind: a reader still running at the end didn't come to the end of
 	// the file in time.
@@ -156,7 +183,9 @@ func (p Problem) String() string {
 
 // Failure is the first problem a run found. Its reason names processes as
 // writer 3 or reader 4, by the numbers Writer.ID and Reader.ID give, and
-// commits by their sequence numbers, from 1.
+// commits by their sequence numbers, from 1, and in a run that has moved
+// backups into place, their eras (Options.Restores), in which places in the
+// log, and the problems about them, are an era's own.
 type Failure struct {
 	Problem Problem
 	Reason  string
@@ -198,6 +227,10 @@ type Report struct {
 	// Counts is what the workload's processes counted, by name (Writer.Count
 	// and Reader.Count), or nil when they counted nothing.
 	Counts map[string]int
+
+	// Restores counts the backups moved into place (Options.Restores), and
+	// Lost the commits the files they replaced held past the backup's.
+	Restores, Lost int
 }
 
 func (r Report) String() string {
@@ -206,6 +239,9 @@ func (r Report) String() string {
 		"%d commits in the file at the end; the readers saw %d commits between them, and started again from the first %d times; %d reports cut short by a kill",
 		r.Seed, r.Took.Round(time.Millisecond), r.Writers, r.Readers, r.WritersKilled, r.ReadersKilled,
 		r.Begun, r.Done, r.Errors, r.UnderWay, r.UnderWayIn, r.Commits, r.Seen, r.Reads, r.Cut)
+	if r.Restores > 0 {
+		s += fmt.Sprintf("; %d backups moved into place, which lost %d commits the files they replaced held past them", r.Restores, r.Lost)
+	}
 	if len(r.Counts) > 0 {
 		var counts []string
 		for _, name := range slices.Sorted(maps.Keys(r.Counts)) {

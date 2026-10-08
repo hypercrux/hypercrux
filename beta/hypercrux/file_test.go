@@ -22,6 +22,7 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 	"github.com/hypercrux/hypercrux/beta/internal/logfile"
+	"github.com/hypercrux/hypercrux/beta/internal/store"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
@@ -523,8 +524,9 @@ func (nothing) Reset()                              {}
 // whose changes break the rules for the state they apply to, as no store
 // would write them. Opening the file fails with damage naming the batch.
 // A DB that has the file open already finds the batch at its next Update,
-// which fails the same way, and its copy takes none of the batch: the
-// change before the bad one doesn't go in either.
+// which fails the same way, and at each read, which follows the file first
+// (F9), and its copy takes none of the batch: the change before the bad one
+// doesn't go in either.
 func TestABatchThatBreaksTheRulesIsDamage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.hcx")
 	n := func(i int64) []format.Field { return []format.Field{{Name: "n", Value: value.Int(i)}} }
@@ -542,14 +544,19 @@ func TestABatchThatBreaksTheRulesIsDamage(t *testing.T) {
 		}
 	}
 	isDamage("an Update after the bad batch", db.Update(func(*hc.Tx) error { return nil }))
-	if f, err := db.Get("docs:1"); err != nil || f["n"] != int64(1) {
-		t.Fatalf("after the bad batch, docs:1 gives %v, %v", f, err)
-	}
-	_, err := db.Get("docs:2")
-	wantErr(t, err, hc.ErrNotFound) // the change before the bad one stayed out too
-	if rep, err := db.Check(); err != nil || rep.Records != 1 {
-		t.Fatalf("after the bad batch, Check gives %+v, %v", rep, err)
-	}
+	_, err := db.Get("docs:1")
+	isDamage("a read after the bad batch", err)
+	_, err = db.Check()
+	isDamage("Check after the bad batch", err)
+	ok(t, hc.ReadTheCopy(db, func(r store.Reader) error {
+		if rec, err := r.Get("docs:1"); err != nil || rec.Field(0) != value.Int(1) {
+			t.Errorf("after the bad batch, the copy has docs:1 as %v, %v", rec, err)
+		}
+		if _, err := r.Get("docs:2"); !errors.Is(err, hc.ErrNotFound) {
+			t.Errorf("after the bad batch, the copy has docs:2, with %v: the change before the bad one went in", err)
+		}
+		return nil
+	}))
 	_, err = hc.Open(path)
 	isDamage("opening the file", err)
 }

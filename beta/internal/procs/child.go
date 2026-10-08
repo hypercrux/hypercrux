@@ -193,11 +193,13 @@ func (w *Writer) Failed(err error) {
 //
 // The parent hears of each commit the reader sees for the first time. What
 // the parent checks across readers, and against the file at the end, is
-// Run's.
+// Run's. In a run that moves backups into place, each check is within an
+// era, the era of the file the reader says it reads (Restart).
 type Reader struct {
 	proc
 	kept []string // what each commit the reader has seen holds, by sequence number less 1
 	next uint64   // the sequence number the next commit has to have
+	era  int      // the era of the file the reader reads (Restart)
 }
 
 // Reset says the reader is starting again from the first commit, as one
@@ -215,6 +217,25 @@ func (r *Reader) Reset() {
 	}
 	r.next = 1
 	r.rep.send(kindReset)
+}
+
+// Restart says the reader is starting again from the first commit, in the
+// file of era era: 0 for the database before any backup was moved into
+// place, and n once the nth has been (Options.Restores). In the reader's own
+// era it's Reset. A later era sets the log back to the backup's commits, so
+// the reader's sight starts again there: what it saw in the era before may
+// be gone, or differ past the backup's commits. An era before the reader's
+// own is a problem, since the file at the path only ever moves on.
+func (r *Reader) Restart(era int) {
+	switch {
+	case era == r.era:
+		r.Reset()
+	case era < r.era:
+		r.rep.problem(OutOfOrder, "reader %d read the file of era %d after one of era %d", r.id, era, r.era)
+	default:
+		r.era, r.kept, r.next = era, nil, 1
+		r.rep.send(kindEra, strconv.Itoa(era))
+	}
 }
 
 // Apply says the reader has found commit seq, holding commit, in its place

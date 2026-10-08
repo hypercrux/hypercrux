@@ -31,6 +31,55 @@ func TestAReaderReportsWhatItSeesFirst(t *testing.T) {
 	}
 }
 
+// TestAReaderRestartsInAnEra: Restart in the reader's own era is Reset, and
+// in a later era it reports the era and starts the reader's sight again, so
+// a commit that differs from the era before is no problem, and a read in the
+// new era that comes less far than the one before isn't either. Within the
+// new era the checks go on as before.
+func TestAReaderRestartsInAnEra(t *testing.T) {
+	rep, out := testReporter()
+	r := &Reader{proc: proc{id: 7, rep: rep}, next: 1}
+	r.Restart(0)
+	r.Apply(1, "a")
+	r.Apply(2, "b")
+	r.Restart(0)
+	r.Apply(1, "a")
+	r.Apply(2, "b")
+	r.Restart(1)
+	r.Apply(1, "a")
+	r.Restart(1)
+	r.Apply(1, "a")
+	r.Apply(2, "x")
+	r.Restart(3)
+	want := []string{"reset", `saw 1 "a"`, `saw 2 "b"`, "reset", "era 1", `saw 1 "a"`, "reset", `saw 2 "x"`, "era 3"}
+	if got := sent(t, out); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("the reader reported %q", got)
+	}
+	for _, c := range []struct {
+		name    string
+		do      func(r *Reader)
+		problem Problem
+	}{
+		{"an era before its own", func(r *Reader) { r.Restart(2); r.Restart(1) }, OutOfOrder},
+		{"a commit changed within an era", func(r *Reader) { r.Restart(1); r.Apply(1, "a"); r.Restart(1); r.Apply(1, "x") }, Disagree},
+		{"a commit lost within an era", func(r *Reader) { r.Restart(1); r.Apply(1, "a"); r.Restart(1); r.Restart(1) }, Lost},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			rep, out := testReporter()
+			r := &Reader{proc: proc{id: 7, rep: rep}, next: 1}
+			if code := ends(func() { c.do(r) }); code != exitFailed {
+				t.Fatalf("the process ended with %d, where the reader should have ended it with %d", code, exitFailed)
+			}
+			got := sent(t, out)
+			rp, err := parseReport(got[len(got)-1])
+			if err != nil || rp.kind != kindProblem || rp.problem != c.problem {
+				t.Fatalf("the reader's last report was %q, with %v, where a problem %v is wanted", got[len(got)-1], err, c.problem)
+			}
+			t.Log(rp.text)
+		})
+	}
+}
+
 // TestAReaderChecksItsOwnSight: a reader handed a commit out of order, a
 // commit that changed between two reads, or a read from the first commit
 // that comes to an end short of what it had seen, reports the problem and

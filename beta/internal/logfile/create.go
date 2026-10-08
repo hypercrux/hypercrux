@@ -76,7 +76,8 @@ func (l *Log) create() error {
 // fill deals with the empty file l.f, holding its lock, once it has
 // checked that it's still the one at the path. When it's still empty, it
 // becomes a database (adopt). When something has written into it in place
-// since it was read, which HyperCrux never does, it's read again as it is.
+// since it was read, which HyperCrux never does, it's read again as it is,
+// as a reload reads a file from its start (drop, and loaded, in reload.go).
 // On an error, l holds no flock, unless stuck is set.
 func (l *Log) fill(info fsys.Info) error {
 	if info.Size == 0 {
@@ -86,14 +87,15 @@ func (l *Log) fill(info fsys.Info) error {
 		}
 		return err
 	}
-	l.t.Reset()
-	if _, err := l.load(); err != nil {
+	l.drop()
+	_, err := l.load()
+	if err != nil {
 		l.f.Unlock()
 		l.f.Close()
 		l.f = nil
-		return err
 	}
-	return nil
+	l.loaded(err)
+	return err
 }
 
 // adopt makes a database of the empty file l.f, whose lock is held, as

@@ -17,8 +17,14 @@
 // the file. A commit a writer saw succeed is in the file, and one under way
 // when its writer was killed is there whole or not at all.
 //
+// A run can also take a backup of the database at random moments and move it
+// into place a while later. Each restore begins an era of the log, and the
+// checks are made era by era: each reader against the file of the era it
+// reads, and a commit that succeeded against the file at the end, unless a
+// restore lost it.
+//
 // T4 built it, with a toy log in its tests and a run on the real log. F6
 // passes its closing test through it, with readers that follow the log, and
-// F9 with compactions and a backup moved into place. Like the rest of
-// beta/, it builds only on Linux.
+// F9 with compactions and backups moved into place, which F9 added. Like the
+// rest of beta/, it builds only on Linux.
 package procs

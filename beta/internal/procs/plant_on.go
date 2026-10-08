@@ -20,9 +20,16 @@ import "os"
 //     marker down before its batch, where it belongs after it, so another
 //     process can find the marker while the batch's place still holds
 //     zeros.
+//
+// F9's, in the harness's own checks:
+//
+//   - procs/replaced-eras-unchecked: the check at the end of a run holds only
+//     the last era to its file, and leaves out the eras that a restore
+//     replaced, so a reader that saw a commit of such an era that its file
+//     never held, or held otherwise, goes unreported.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
-	case "procs/marker-before-batch":
+	case "procs/marker-before-batch", "procs/replaced-eras-unchecked":
 		return p
 	}
 	return ""

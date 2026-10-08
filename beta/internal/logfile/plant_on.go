@@ -142,6 +142,18 @@ import (
 //     NAME.compact before it checks that the file it locked is the one at
 //     the path, so a writer holding the lock of a file that another has
 //     replaced can remove the file of a compaction under way.
+//
+// F9's, in reloading:
+//
+//   - logfile/reload-without-collecting: a reload reads the new file
+//     without a garbage collection after the Target's Reset, so the old copy
+//     is still in memory, uncollected, while the new one fills it again.
+//   - logfile/reload-waits-for-the-mutex: Reload waits for the write lock's
+//     mutex, holding fol, so a read waits for an Update's function, and a
+//     follower waits for a mutex a read inside the Update holds it up for.
+//   - logfile/reload-unchecked: Reload reads the new file's log and stops
+//     there, without the check Open makes, so a batch a killed writer left
+//     at its end stays unmarked, and damage past its end goes unreported.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -153,7 +165,8 @@ var plant = func() string {
 		"logfile/follow-stuck-checks", "logfile/lock-waits-blind",
 		"logfile/compact-rename-before-sync", "logfile/compact-no-folder-sync", "logfile/compact-folder-sync-ignored",
 		"logfile/compact-lets-go-early", "logfile/compact-wait-ignored", "logfile/compact-left-behind", "logfile/compact-one-batch",
-		"logfile/compact-locked-removed", "logfile/compact-leftover-before-inode-check":
+		"logfile/compact-locked-removed", "logfile/compact-leftover-before-inode-check",
+		"logfile/reload-without-collecting", "logfile/reload-waits-for-the-mutex", "logfile/reload-unchecked":
 		return p
 	}
 	return ""

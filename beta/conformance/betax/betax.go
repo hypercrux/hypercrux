@@ -39,7 +39,7 @@ func (Engine) ParseVector(s string) (c.Vector, error) {
 // Skip names the tests that are still out of reach, each with the task
 // that makes it pass. beta/SQL.md names every test in the suite as one the
 // Beta must pass, so the list shrinks as the tasks are done, and is empty
-// once G4 and F9 are.
+// once G4 is.
 func (Engine) Skip() map[string]string { return maps.Clone(later) }
 
 // later holds the tests that wait for a later task, by name, with the task
@@ -55,7 +55,6 @@ var later = map[string]string{
 	"PlainSQLFollowsTheRules":      "waits for task G4, which brings SQL, after G2's Link and Neighbours",
 	"UpdateIsAllOrNothing":         "waits for task G4, which brings walk() in SQL, after G2's Link and Nearest",
 	"KilledWritersNeverLeaveAMess": "waits for task G4, which brings Query, after G2's links and F3's check of the end of the log",
-	"ProcessesShareAFile":          "waits for task F9, which has the public package's reads follow other processes' commits, after F6's following",
 }
 
 // hcHandle is what *hc.DB and *hc.Tx have in common.

@@ -49,3 +49,15 @@ func (e Engine) write(tx *store.Tx, s query.Statement, args []value.Value) (int6
 // through SQL() and the methods alike. A test calls it before it hands db
 // to anything else.
 func UseEngine(db *DB, e Engine) { db.engine = e }
+
+// ReadTheCopy runs fn on db's copy as it is, inside the copy's Read, without
+// following the file and whatever a reload left, for a test that looks at
+// what a read through db doesn't show: the copy after damage, or after a
+// reload that failed.
+func ReadTheCopy(db *DB, fn func(r store.Reader) error) error {
+	s, err := db.current()
+	if err != nil {
+		return err
+	}
+	return s.Read(fn)
+}

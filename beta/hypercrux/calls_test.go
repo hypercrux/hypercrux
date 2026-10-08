@@ -298,12 +298,11 @@ func TestCloseWaitsForAnUpdate(t *testing.T) {
 }
 
 // TestTwoHandlesOnOneFile opens one file twice, as two processes would,
-// each with its own log and copy, as far as G1 goes: each Update catches
-// up with the other's commits under the write lock before its function
-// runs, so read-modify-write cycles from both lose nothing, and the lock
-// keeps the two apart. A handle's reads outside an Update see the other's
-// commits only once an Update of its own has caught up; following the
-// other handle's commits as they come is F6's.
+// each with its own log and copy. Each handle's reads see the other's
+// commits before its next read, since every read through a DB follows the
+// file first (F9). Each Update catches up with the other's commits under
+// the write lock before its function runs, so read-modify-write cycles from
+// both lose nothing, and the lock keeps the two apart.
 func TestTwoHandlesOnOneFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.hcx")
 	a := open(t, path)
@@ -312,19 +311,23 @@ func TestTwoHandlesOnOneFile(t *testing.T) {
 	t.Cleanup(func() { b.Close() })
 
 	ok(t, a.Put("docs:1", hc.Fields{"n": 1}))
+	if f, err := b.Get("docs:1"); err != nil || f["n"] != int64(1) {
+		t.Errorf("b's next read after a's commit gives %v, %v", f, err)
+	}
 	ok(t, b.Update(func(tx *hc.Tx) error {
 		if f, err := tx.Get("docs:1"); err != nil || f["n"] != int64(1) {
 			t.Errorf("b's Update didn't catch up with a's commit: %v, %v", f, err)
 		}
 		return tx.Put("docs:2", hc.Fields{"n": 2})
 	}))
-	if f, err := b.Get("docs:1"); err != nil || f["n"] != int64(1) {
-		t.Errorf("after its Update, b's copy has %v, %v for a's commit", f, err)
+	if f, err := a.Get("docs:2"); err != nil || f["n"] != int64(2) {
+		t.Errorf("a's next read after b's commit gives %v, %v", f, err)
 	}
-	ok(t, a.Update(func(tx *hc.Tx) error {
-		_, err := tx.Get("docs:2")
-		return err
-	}))
+	for _, h := range []*hc.DB{a, b} {
+		if rep, err := h.Check(); err != nil || rep.Records != 2 {
+			t.Errorf("a handle's Check gives %+v, %v after both commits", rep, err)
+		}
+	}
 
 	// The lock keeps them apart: while a's Update runs, b waits, and gives
 	// up after its wait.
@@ -390,10 +393,6 @@ func TestTwoHandlesOnOneFile(t *testing.T) {
 	if committed[0] == 0 || committed[1] == 0 {
 		t.Fatalf("the two handles committed %d and %d adds, so they didn't take turns", committed[0], committed[1])
 	}
-	// Each handle catches up with the other's last commits in an Update
-	// with no changes, which commits nothing.
-	ok(t, a.Update(func(*hc.Tx) error { return nil }))
-	ok(t, b.Update(func(*hc.Tx) error { return nil }))
 	c := open(t, path)
 	rep, err := c.Check()
 	ok(t, err)

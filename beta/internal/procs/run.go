@@ -62,12 +62,24 @@ const (
 // as they go (Reader), and the parent checks the readers against each
 // other as their reports come in. The run stops at the first problem.
 //
+// With o.Restores, the run also takes a backup of the database at random
+// moments, in its own process, and moves it into place a while later, one
+// backup at a time, while the run's time lasts (F9). Each restore begins an
+// era of the log, and the checks above are made era by era: a reader sees
+// every commit of each era it reads in order, in the file of that era, which
+// begins with the backup's commits; and a commit its writer saw succeed is in
+// the file at the end, unless a restore lost it, as the replaced file held
+// it past the backup's commits. The end of the run waits for a backup or a
+// restore under way, and the readers still running then have to come to the
+// end of the file of the last era.
+//
 // The run goes on past Time until it has done enough to mean something:
 // 10 commits that writers saw succeed, 3 writers killed with a commit under
-// way, 2 readers killed once they had seen a commit, and the counts in
-// o.Least. A slow machine makes fewer commits in the time, so the run waits
-// for them, and fails with the problem Idle only after a minute without
-// them, or ten times Time when that's longer.
+// way, 2 readers killed once they had seen a commit, 2 restores when
+// o.Restores asks for them, and the counts in o.Least. A slow machine makes
+// fewer commits in the time, so the run waits for them, and fails with the
+// problem Idle only after a minute without them, or ten times Time when
+// that's longer.
 //
 // Run returns a *Failure for the first problem it finds, and a plain
 // error when the workload or the options can't be used, or a child can't
@@ -106,6 +118,11 @@ type run struct {
 	final     []string  // the commits the file held at the end
 	finalAt   time.Time // when Final started reading the file, and then when it had read it
 	finalBusy bool      // Final is reading the file
+
+	restoring bool      // the workload's Backup or Restore is running
+	restoreAt time.Time // when it started
+	backedUp  bool      // a backup waits to be moved into place
+	backup    []string  // the commits it holds
 
 	rep  Report
 	fail *Failure
@@ -167,13 +184,17 @@ type event struct {
 type eventKind uint8
 
 const (
-	evLine    eventKind = iota // a report from kid
-	evCut                      // a report from kid that a kill cut short
-	evDrained                  // the end of kid's reports
-	evExited                   // kid has ended
-	evKill                     // kid's life is over
-	evFinal                    // Final has read the file
-	evStart                    // a writer's slot has been empty for its gap
+	evLine     eventKind = iota // a report from kid
+	evCut                       // a report from kid that a kill cut short
+	evDrained                   // the end of kid's reports
+	evExited                    // kid has ended
+	evKill                      // kid's life is over
+	evFinal                     // Final has read the file
+	evStart                     // a writer's slot has been empty for its gap
+	evBackup                    // the time has come to take a backup
+	evBackedUp                  // Backup has returned, with the commits in final and its error
+	evRestore                   // the time has come to move the backup into place
+	evRestored                  // Restore has returned, with the commits the replaced file held in final and its error
 )
 
 func newRun(w Workload, o Options) (*run, error) {
@@ -215,6 +236,14 @@ func newRun(w Workload, o Options) (*run, error) {
 	if g := o.WriterGap; g != (Span{}) && (g.Min < 0 || g.Max < g.Min || g.Max == 0) {
 		return nil, fmt.Errorf("procs: a writer's gap of %v to %v, where none, or a span from 0 or more to more than 0, is wanted", g.Min, g.Max)
 	}
+	if g := o.Restores; g != (Span{}) {
+		switch {
+		case g.Min < 0 || g.Max < g.Min || g.Max == 0:
+			return nil, fmt.Errorf("procs: restores %v to %v apart, where none, or a span from 0 or more to more than 0, is wanted", g.Min, g.Max)
+		case w.Backup == nil || w.Restore == nil:
+			return nil, errors.New("procs: a run with restores needs a Workload with a Backup and a Restore")
+		}
+	}
 	for what, n := range o.Least {
 		if what == "" || n < 0 {
 			return nil, fmt.Errorf("procs: Options.Least wants %d counts of %q, where a name and a number from 0 are wanted", n, what)
@@ -237,6 +266,9 @@ func newRun(w Workload, o Options) (*run, error) {
 	}
 	h := newHistory()
 	h.least = o.Least
+	if o.Restores != (Span{}) {
+		h.restores = leastRestores
+	}
 	return &run{
 		w: w, o: o, exe: exe, seed: seed, rng: rand.New(rand.NewPCG(seed, 0x70726f6373)), h: h,
 		waits:  waits{start: startWait, kill: killWait, final: finalWait, catchUp: catchUpWait, idle: max(idleWait, 10*o.Time)},
@@ -257,9 +289,12 @@ func (r *run) run() (Report, error) {
 			r.start(slot)
 		}
 	}
+	if r.o.Restores != (Span{}) {
+		r.after(r.o.Restores, evBackup)
+	}
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
-	for r.phase != stopping || len(r.kids) > 0 || r.finalBusy {
+	for r.phase != stopping || len(r.kids) > 0 || r.finalBusy || r.restoring {
 		select {
 		case ev := <-r.events:
 			r.handle(ev)
@@ -268,6 +303,7 @@ func (r *run) run() (Report, error) {
 		}
 	}
 	close(r.quit)
+	os.Remove(r.backupPath()) // a backup still waiting for its restore
 	r.rep.Seed, r.rep.Took = r.seed, time.Since(r.began)
 	if r.fail == nil && r.err == nil {
 		r.fail = r.h.check(r.final)
@@ -321,8 +357,65 @@ func (r *run) handle(ev event) {
 		if r.phase == running && r.slots[ev.slot] == nil {
 			r.start(ev.slot)
 		}
+	case evBackup:
+		if r.phase == running && !r.restoring && !r.backedUp {
+			r.restoring, r.restoreAt = true, time.Now()
+			era := r.h.last() + 1
+			go func() {
+				commits, err := r.w.Backup(r.o.Path, r.backupPath(), era)
+				r.send(event{kind: evBackedUp, final: commits, err: err})
+			}()
+		}
+	case evBackedUp:
+		if !r.restoring {
+			return // the run stopped waiting for it
+		}
+		r.restoring = false
+		switch {
+		case ev.err != nil:
+			r.found(Failed, "Backup failed: %v", ev.err)
+		case r.phase == running:
+			r.backup, r.backedUp = ev.final, true
+			r.after(r.o.Restores, evRestore)
+		}
+	case evRestore:
+		if r.phase == running && r.backedUp && !r.restoring {
+			r.restoring, r.restoreAt = true, time.Now()
+			// The new era begins before the backup goes into place, so a
+			// reader's report of it, which can come before Restore returns,
+			// always finds it begun.
+			r.h.restoring(r.backup)
+			r.backup, r.backedUp = nil, false
+			go func() {
+				gone, err := r.w.Restore(r.backupPath(), r.o.Path)
+				r.send(event{kind: evRestored, final: gone, err: err})
+			}()
+		}
+	case evRestored:
+		if !r.restoring {
+			return
+		}
+		r.restoring = false
+		if ev.err != nil {
+			r.found(Failed, "Restore failed: %v", ev.err)
+			return
+		}
+		r.h.restored(ev.final)
+		if r.phase == running {
+			r.after(r.o.Restores, evBackup)
+		}
 	}
 }
+
+// after sends the loop an event of the kind kind once a wait drawn from
+// span has gone by, unless the loop has ended by then.
+func (r *run) after(span Span, kind eventKind) {
+	d := span.Min + time.Duration(r.rng.Int64N(int64(span.Max-span.Min)+1))
+	time.AfterFunc(d, func() { r.send(event{kind: kind}) })
+}
+
+// backupPath is where a backup waits for its restore, beside the database.
+func (r *run) backupPath() string { return r.o.Path + ".backup" }
 
 // report deals with one report from k.
 func (r *run) report(k *kid, line string) {
@@ -353,12 +446,18 @@ func (r *run) report(k *kid, line string) {
 		default:
 			r.problem(r.h.ended(k.id, failed))
 		}
-	case kindReset, kindSaw:
+	case kindReset, kindSaw, kindEra:
 		switch {
 		case writer:
 			r.found(Failed, "%v sent a reader's report, %q", k, line)
 		case rp.kind == kindReset:
 			r.rep.Reads++
+		case rp.kind == kindEra:
+			r.rep.Reads++
+			r.problem(r.h.moved(k.id, rp.era))
+			if r.phase == catchingUp && r.caughtUp() {
+				r.stop()
+			}
 		default:
 			r.problem(r.h.saw(k.id, rp.seq, rp.text))
 			if r.phase == catchingUp && r.caughtUp() {
@@ -396,6 +495,10 @@ func (r *run) tick() {
 		r.found(Failed, "Final hadn't returned %v after it started reading the file", r.waits.final)
 		r.finalBusy = false // and what it returns later is dropped
 	}
+	if r.restoring && time.Since(r.restoreAt) > r.waits.final {
+		r.found(Failed, "the workload's Backup or Restore hadn't returned %v after it started", r.waits.final)
+		r.restoring = false // and what it returns later is dropped
+	}
 	switch r.phase {
 	case running:
 		for _, k := range r.kids {
@@ -417,6 +520,9 @@ func (r *run) tick() {
 			if k.role == roleWriter {
 				return
 			}
+		}
+		if r.restoring {
+			return // Final reads the file once the backup or the restore under way is done
 		}
 		r.phase, r.finalBusy, r.finalAt = finalRead, true, time.Now()
 		go func() {
@@ -460,10 +566,10 @@ func (r *run) read(final []string, err error) {
 }
 
 // caughtUp reports whether every reader still running has seen every
-// commit the file held at the end.
+// commit the file held at the end, in the last era.
 func (r *run) caughtUp() bool {
 	for _, k := range r.kids {
-		if rd := r.h.readers[k.id]; k.role == roleReader && (rd == nil || rd.seen < uint64(len(r.final))) {
+		if rd := r.h.readers[k.id]; k.role == roleReader && (rd == nil || rd.era != r.h.last() || rd.seen < uint64(len(r.final))) {
 			return false
 		}
 	}
@@ -471,20 +577,29 @@ func (r *run) caughtUp() bool {
 }
 
 // behind names the readers that haven't seen every commit the file held
-// at the end.
+// at the end, in the last era.
 func (r *run) behind() string {
 	var b []string
 	for _, k := range r.kids {
 		var seen uint64
+		era := 0
 		if rd := r.h.readers[k.id]; rd != nil {
-			seen = rd.seen
+			seen, era = rd.seen, rd.era
 		}
-		if k.role == roleReader && seen < uint64(len(r.final)) {
+		switch {
+		case k.role != roleReader || era == r.h.last() && seen >= uint64(len(r.final)):
+		case r.h.last() == 0:
 			b = append(b, fmt.Sprintf("%v had seen %d", k, seen))
+		default:
+			b = append(b, fmt.Sprintf("%v had seen %d of era %d", k, seen, era))
 		}
 	}
 	slices.Sort(b)
-	return fmt.Sprintf("of the %d commits the file held at the end, %s", len(r.final), strings.Join(b, ", "))
+	end := "the file held at the end"
+	if r.h.last() > 0 {
+		end = fmt.Sprintf("the file of era %d held at the end", r.h.last())
+	}
+	return fmt.Sprintf("of the %d commits %s, %s", len(r.final), end, strings.Join(b, ", "))
 }
 
 // stop kills every process, and the run ends once they've all ended.

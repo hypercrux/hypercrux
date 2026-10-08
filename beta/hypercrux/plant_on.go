@@ -56,13 +56,28 @@ import (
 //     statement.
 //   - hypercrux/sql-wraps-invalid: an error through SQL() still wraps
 //     ErrInvalid, where 0.x's wraps nothing.
+//
+// F9's, in reads that follow other processes and reload:
+//
+//   - hypercrux/reads-never-follow: a read through the database reads the
+//     copy as it is, without following the file, so it sees other
+//     processes' commits only after an Update of its own.
+//   - hypercrux/reload-unheld: a reload doesn't hold the reads off, so a read
+//     made while it fills the new copy sees part of the new file.
+//   - hypercrux/reload-keeps-the-old-copy: a reload keeps the old copy until
+//     the new file has been read, so the garbage collection before the read
+//     can't take it, and memory holds the two at once.
+//   - hypercrux/failed-reload-read: after a reload that failed, a read that
+//     finds an Update holding the write lock reads the copy, which holds part
+//     of the new file, where it should give the reload's error.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
 		"hypercrux/scan-limit-first", "hypercrux/scan-vector-kept", "hypercrux/neighbours-unlocked",
 		"hypercrux/nearest-nil-for-none", "hypercrux/filter-ignored",
 		"hypercrux/blob-shared", "hypercrux/time-layout", "hypercrux/tx-dropped", "hypercrux/row-kept",
-		"hypercrux/rows-pulled-late", "hypercrux/write-kept", "hypercrux/sql-wraps-invalid":
+		"hypercrux/rows-pulled-late", "hypercrux/write-kept", "hypercrux/sql-wraps-invalid",
+		"hypercrux/reads-never-follow", "hypercrux/reload-unheld", "hypercrux/reload-keeps-the-old-copy", "hypercrux/failed-reload-read":
 		return p
 	}
 	return ""

@@ -18,11 +18,12 @@
 // What works so far, on DB and Tx alike, through the file: Open, Close,
 // Update, Get, Put, Delete and TableOf (task G1), and Scan, Drop, Link,
 // Unlink, Neighbours, Walk and Nearest without a filter (task G2). Check
-// only counts until task G7. A DB reads other processes' commits when an
-// Update of its own takes the write lock; following them between Updates
-// is for tasks F6 and F9. The helpers that hold no state work as 0.x's do:
-// ParseDirection, ParseVector, DecodeVector, and the methods of Vector,
-// Direction and Link.
+// only counts until task G7. Each read through a DB follows what other
+// processes commit, and reloads the file when a compaction or a backup moved
+// into place has put another at the path (tasks F6 and F9); Compact, and the
+// compaction a commit sets off, wait for task G5. The helpers that hold no
+// state work as 0.x's do: ParseDirection, ParseVector, DecodeVector, and the
+// methods of Vector, Direction and Link.
 //
 // Query, QueryRow, Exec and SQL() go through the package's database/sql
 // driver (task G3), which parses each statement and takes its arguments,

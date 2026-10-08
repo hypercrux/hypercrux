@@ -83,9 +83,10 @@ import (
 // this Log read the file it holds, a compaction's or a backup moved into
 // place, so what was read has to be read again from the file at the path.
 // Open reads that one from its start, and Lock moves to it before it
-// commits. Follow reports it, and reads nothing: the reload is the caller's
-// (F9). Follow reports it too for a file that was empty when it was read
-// and has been written into in place since.
+// commits. Follow reports it, and reads nothing: the caller reloads with
+// Reload, then follows again (reload.go). Follow reports it too for a file
+// that was empty when it was read and has been written into in place since,
+// and for a Log whose last reload failed, which holds no file.
 var ErrReplaced = errors.New("hypercrux: another file has taken the database's path")
 
 // replaced is the error that wraps ErrReplaced, with the path.
@@ -150,8 +151,8 @@ func (l *Log) publish() {
 // Follow's errors:
 //
 //   - another file at the path: an error that wraps ErrReplaced. Nothing is
-//     read, and the Log stays on the file it holds, until a reload (F9) or
-//     a Lock, which moves to the new file by itself;
+//     read, and the Log stays on the file it holds, until Reload, or a Lock,
+//     which moves to the new file by itself (reload.go);
 //   - a file shorter than the end of the log this process has applied:
 //     damage, since nothing before the end of a marker is ever cut, so the
 //     file was copied over or cut;
@@ -222,7 +223,7 @@ func (l *Log) follow() (*errs.Damage, error) {
 	case l.closed:
 		return nil, l.closedError()
 	case l.f == nil:
-		return nil, l.replaced() // a switch to another file failed, so the file at the path is still to be read
+		return nil, l.replaced() // a switch to another file, or a reload, failed, so the file at the path is still to be read
 	}
 	there, err := l.fsys.Stat(l.path)
 	switch {

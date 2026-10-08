@@ -59,6 +59,8 @@ func TestReportsReadBack(t *testing.T) {
 	var want []report
 	rep.send(kindStart, "4242")
 	want = append(want, report{kind: kindStart, pid: 4242})
+	rep.send(kindEra, "3")
+	want = append(want, report{kind: kindEra, era: 3})
 	for i, text := range texts {
 		rep.send(kindBegin, strconv.Quote(text))
 		rep.send(kindDone)
@@ -116,6 +118,7 @@ func TestReportsThatDontReadBack(t *testing.T) {
 	for _, line := range []string{
 		"", "start", "start x", "begin a", `begin "a`, "done now", "reset 1", "end 0", "saw", "saw 1", `saw 0 "a"`, `saw x "a"`, "saw 1 a",
 		`problem 0 "a"`, `problem 10 "a"`, `problem x "a"`, `fail`, `finish "a"`, `Begin "a"`, "count", "count a", `count "a`,
+		"era", "era 0", "era -1", "era x", "era 1 2",
 	} {
 		if rp, err := parseReport(line); err == nil {
 			t.Errorf("%q reads as %+v", line, rp)

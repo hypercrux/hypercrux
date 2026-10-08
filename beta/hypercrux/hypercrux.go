@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
@@ -89,13 +90,26 @@ func notYet(what, task string) error {
 // DB is an open HyperCrux database. It's safe for use by many goroutines,
 // and many processes on one machine can open the same file at once. Each
 // process holds the whole database in memory and keeps up with what the
-// others commit.
+// others commit: each read through a DB first reads what other processes
+// have committed since, and when a compaction in another process, or a
+// backup moved into place, has put another file at the path, reads that file
+// from its start, dropping the old copy first so memory doesn't hold both.
+// Reads in this process wait meanwhile, about as long as Open takes.
 type DB struct {
 	path string
 	// mem is the in-memory copy, or nil once the database is closed, and in
 	// a DB that was never opened. The log's Reset puts a new one in its
 	// place (target), so a call loads it once and works on what it loaded.
 	mem atomic.Pointer[store.Store]
+	// gate keeps reads through db off the copy while a reload fills a new
+	// one: a reload holds it alone, from the log's Reset until it has read
+	// the new file, and a read holds it shared while it looks at the copy
+	// (glue.go).
+	gate sync.RWMutex
+	// unread is the error of the last reload, when it failed: the copy then
+	// holds part of the file at the path, and every read through db gives the
+	// error until a reload works. gate guards it.
+	unread error
 	// log is the file, with the write lock.
 	log *logfile.Log
 	// sql is the handle SQL gives, over the Beta's driver, made in Open

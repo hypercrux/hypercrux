@@ -43,6 +43,7 @@ const (
 	kindFail    = "fail"    // the child's work has failed: the error
 	kindEnd     = "end"     // the child's work has returned nil, and the child is ending
 	kindCount   = "count"   // the child counted an event of its workload's own: its name
+	kindEra     = "era"     // a reader is starting again from the first commit, in the file of a later era: the era's number
 )
 
 // reporter writes a child's reports. Its methods are safe to call from
@@ -92,6 +93,7 @@ type report struct {
 	seq     uint64  // a saw's
 	problem Problem // a problem's
 	text    string  // what a commit holds, or an error, a problem's reason, or what a count counts
+	era     int     // an era's
 }
 
 // parseReport reads back one line a child wrote, without its newline.
@@ -102,6 +104,10 @@ func parseReport(line string) (report, error) {
 	switch kind {
 	case kindStart:
 		rp.pid, err = strconv.Atoi(rest)
+	case kindEra:
+		if rp.era, err = strconv.Atoi(rest); err == nil && rp.era < 1 {
+			err = fmt.Errorf("era %d, where a reader starts in era 0 and only moves on", rp.era)
+		}
 	case kindDone, kindReset, kindEnd:
 		if rest != "" {
 			err = errors.New("there's more after its kind")

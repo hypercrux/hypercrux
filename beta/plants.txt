@@ -134,3 +134,11 @@ hypercrux/row-kept ./beta/hypercrux
 hypercrux/rows-pulled-late ./beta/hypercrux
 hypercrux/write-kept ./beta/hypercrux
 hypercrux/sql-wraps-invalid ./beta/hypercrux
+logfile/reload-without-collecting ./beta/internal/logfile
+logfile/reload-waits-for-the-mutex ./beta/internal/logfile
+logfile/reload-unchecked ./beta/internal/logfile
+hypercrux/reads-never-follow ./beta/hypercrux
+hypercrux/reload-unheld ./beta/hypercrux
+hypercrux/reload-keeps-the-old-copy ./beta/hypercrux
+hypercrux/failed-reload-read ./beta/hypercrux
+procs/replaced-eras-unchecked ./beta/internal/procs
