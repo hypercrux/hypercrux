@@ -366,12 +366,21 @@ this order:
 2. Looks at the first batch after the last marked one. If it counts:
    - when a whole marker that names another batch follows it, that's
      damage;
-   - when its changes are malformed or break the rules, that's damage too;
+   - when its changes are malformed or break the rules for a change on its
+     own, that's damage too;
    - otherwise a writer left it there and died, before or after the batch's
      sync, with nothing or a torn marker after it. The batch is written
-     again in place, synced, and marked. It's written again because after a
-     failed sync, Linux can mark its pages clean, and a sync on its own could
-     then report success without the batch ever reaching the disk.
+     again in place, with the marker before it, synced, and marked. It's
+     written again because after a failed sync, Linux can mark its pages
+     clean, and a sync on its own could then report success without the
+     batch ever reaching the disk. The marker before it may have been
+     written after the last sync that worked, so the same goes for its
+     page. Before the first batch in the file comes the header instead,
+     which was synced when the database was made.
+
+   Changes that break the rules for the state they apply to are found once
+   the batch is marked, since only marked batches are applied, and they're
+   damage then.
 3. Cuts off everything after the last marker, and syncs the cut.
 
 A failure while writing the batch again, syncing it or marking it is
@@ -385,14 +394,15 @@ What the check finds after the last marked batch, and what follows:
 |---|---|---|
 | Nothing | The log is whole | Nothing |
 | Zeros, or the start of a batch, and no whole marker further on naming the next sequence number or a later one | A commit a crash cut short | It's cut off |
-| A batch that counts, with valid changes, and nothing or a torn marker after it | A writer died after writing it | It's written again, synced and marked, and anything after it is cut off |
+| A batch that counts, with changes that keep the rules for a change on its own, and nothing or a torn marker after it | A writer died after writing it | It's written again with the marker before it, synced and marked, and anything after it is cut off |
 | A batch that counts, then a whole marker naming another batch | Damage | Reported |
-| A batch that counts, with changes that are malformed or break the rules | Damage, or a format this build doesn't know | Reported |
+| A batch that counts, with changes that are malformed or break the rules for a change on its own | Damage, or a format this build doesn't know | Reported |
+| A batch the check has just marked, with changes that break the rules for the state they apply to | Damage, or a format this build doesn't know | Reported, and the marker stays |
 | A whole marker further on, naming the next sequence number or a later one | Damage, once a read under the write lock agrees | Reported |
 | In a compacted file, a log that ends before the compacted part does | Damage | Reported |
 
-Damage is reported and nothing is changed: opening fails, reads return a
-damage error, and `hypercrux check` names the batch.
+Once damage is found, nothing more is written: opening fails, reads return
+a damage error, and `hypercrux check` names the batch.
 
 ## Writing
 

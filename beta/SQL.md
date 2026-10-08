@@ -932,6 +932,10 @@ On purpose, and outside the corpus:
   second.
 - Rows without ORDER BY come in key order, where 0.x's order depends on
   SQLite's plan.
+- A `Put` that fails inside an `Update` that goes on to commit leaves the
+  table as it was. 0.x keeps the new fields the `Put` named, since it adds
+  them before it checks the vector's size, so `SELECT *` can show a column
+  there that the Beta's table hasn't got.
 
 ## The named tests
 

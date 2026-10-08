@@ -16,7 +16,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `conformance/zerox/`: the adapter for 0.x. Its test runs the whole suite on
   0.x.
 - `conformance/betax/`: the adapter for the Beta, zerox's code over the
-  Beta's package. Its test runs the whole suite on the Beta from task G1 on.
+  Beta's package. Its tests run the suite on the Beta, once as it is and once
+  with the file opened afresh before every read, and skip by name the tests
+  that wait for later tasks.
 - `conformance/cmdtest/`: 0.x's tests of the `hypercrux` command, run from
   outside against the binary `HYPERCRUX_BIN` names, or against 0.x's command,
   built for the test, when it's unset. `HYPERCRUX_CMD_SKIP` lists sections to
@@ -30,15 +32,18 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
   reading, checking and writing the log.
 - `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
-  0.x's API. The helpers that hold no state work already, and the rest are
-  stubs that name the task that makes them work.
+  0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete` and `TableOf`
+  work through the file, and `Check` counts. The helpers that hold no state
+  work already, and the rest are stubs that name the task that makes them
+  work.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/crash/`: the crash-point driver. It runs a workload of commits
   on the fault layer's disk with the power cut in every write, with every
   call failing, and with copies of the file taken mid-commit, and checks
   after each that the database opens at the last commit that succeeded or
-  the one under way. Its tests drive a toy log with a planted bug.
+  the one under way. Its tests drive a toy log with a planted bug, and
+  `internal/logfile`'s tests drive the real log.
 - `internal/fault/`: the crash tests' fault layer, a disk held in memory
   behind `fsys.FS` and `fsys.File`. A simulated power cut keeps, loses or
   tears each sector written since the last sync, and keeps the changes to
@@ -54,14 +59,17 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   fault layers wrap, and the real ones, `OS`, through Go's `syscall`
   package.
 - `internal/logfile/`: the database file: creating a database, reading its
-  log on opening, and commits under the write lock, a mutex then `flock`,
-  each with its batch, a sync and its marker.
+  log on opening, commits under the write lock, a mutex then `flock`, each
+  with its batch, a sync and its marker, and the check of the end of the
+  log, which writes again and marks a batch whose writer died before marking
+  it, and cuts off what a crash left half written.
 - `internal/query/`: SQL. For now, the operator iterator, `Rows`.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
 - `internal/store/`: the in-memory copy, with its read API, `Reader`. So
-  far it holds the records with their fields and each table's field list.
+  far it holds the records with their fields, each table's field list, and
+  each table's keys in byte order, which `Scan` reads through a `Cursor`.
   Its writes give the change lists the log writes, `ApplyBatch` and
   `LoadBatch` take a batch the log has read whole or not at all, and
   `Snapshot` gives the copy as a compacted part. Reads share it through
@@ -133,3 +141,5 @@ task that plants a bug.
 - **Rules:** a link type that starts with a zero byte, and a put that would
   take a table past 1,999 fields, give `ErrInvalid`. 0.x refuses both too,
   with a plain error.
+- **A write that fails** changes nothing, even inside an `Update` that goes
+  on to commit. 0.x keeps the new fields a failed `Put` named.

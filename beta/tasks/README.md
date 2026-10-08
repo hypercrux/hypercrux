@@ -53,18 +53,18 @@ work in, and all 133 hours are done after R4.
 | 13 | F2 Log and write lock | 3 | done, [F2.md](F2.md) |
 | 14 | S2 Transactions | 3 | done, [S2.md](S2.md), with F2 and T1 |
 | 15 | S3 Change lists | 2 | done, [S3.md](S3.md), with T2 and T3 |
-| 16 | S4 Key order and `Scan` | 3 | next, [S4.md](S4.md) |
-| 17 | S5 Links and walks | 4 | |
+| 16 | S4 Key order and `Scan` | 3 | done, [S4.md](S4.md), with G1 and F3 |
+| 17 | S5 Links and walks | 4 | next, [S5.md](S5.md) |
 | 18 | V1 Vector arrays and `Nearest` | 4 | |
 | 19 | T5 Benchmarks | 2 | |
-| 20 | G1 Slice 1: `Put` and `Get` | 2 | next, [G1.md](G1.md) |
+| 20 | G1 Slice 1: `Put` and `Get` | 2 | done, [G1.md](G1.md) |
 | 21 | G2 Slice 2, the first working version | 2 | |
 | 22 | T1 Fault layer for data | 3 | done, [T1.md](T1.md) |
 | 23 | T2 Fault layer for names | 2 | done, [T2.md](T2.md) |
 | 24 | T3 Crash-point driver | 3 | done, [T3.md](T3.md) |
-| 25 | T4 Many-process harness | 3 | |
-| 26 | F3 Crash recovery | 4 | next, [F3.md](F3.md) |
-| 27 | F4 Damage | 2 | |
+| 25 | T4 Many-process harness | 3 | next, [T4.md](T4.md) |
+| 26 | F3 Crash recovery | 4 | done, [F3.md](F3.md) |
+| 27 | F4 Damage | 2 | next, [F4.md](F4.md) |
 | 28 | F5 Failed commits | 2 | |
 | 29 | F6 Following other processes | 3 | |
 | 30 | F8 Compaction | 3 | |
@@ -88,7 +88,7 @@ work in, and all 133 hours are done after R4.
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
 
-Hours done so far: 48 of 133. The five early tasks, P1 to P5, S1 to S3, F1, F2 and T1 to T3 are done. The next round is S4, G1 and F3. V1 waits, since it works in the store as S4 does, and T5's timings need the machine to itself.
+Hours done so far: 57 of 133. The five early tasks, P1 to P5, S1 to S4, F1 to F3, G1 and T1 to T3 are done. The next round is S5, T4 and F4. V1 waits for S5, since both work in the store. T5 can run beside V1 in the round after, with its recorded run made once the other agents have finished, since its timings need the machine to itself. G2, the first working version, can follow in the round after that.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.

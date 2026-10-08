@@ -284,10 +284,12 @@ batch that fails ends the log. A header of zeros ends it straight away, so
 an ordinary check never reads through a run of zeros.
 
 A complete batch without its marker, left by a writer that died after its
-sync, is written again in place, synced and marked, and a torn marker is
-rewritten in place. The batch is written again because after a failed sync
-Linux can mark its pages clean, and a sync on its own could then report
-success without the batch ever reaching the disk.
+sync, is written again in place with the marker before it, synced and
+marked, and a torn marker is rewritten in place. The batch is written again
+because after a failed sync Linux can mark its pages clean, and a sync on
+its own could then report success without the batch ever reaching the disk.
+The marker before it may have been written after the last sync that worked,
+so the same goes for its page.
 
 Everything from the first failed batch on is cut off, and the cut is synced.
 If a commit was made past a failed batch, that's damage in the middle of the
