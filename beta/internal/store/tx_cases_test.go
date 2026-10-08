@@ -766,7 +766,8 @@ func TestCommit(t *testing.T) {
 
 // TestATransactionThatHasEnded: once Commit or Rollback has ended a
 // transaction, its methods fail with ErrClosed, and Rollback and RollbackTo
-// do nothing. While it's open, the reads that later tasks write say so.
+// do nothing. While it's open, the reads that later tasks write say so, and
+// its snapshot holds its changes.
 func TestATransactionThatHasEnded(t *testing.T) {
 	s := newStoreN(t)
 	tx := begin(t, s)
@@ -776,16 +777,18 @@ func TestATransactionThatHasEnded(t *testing.T) {
 			t.Errorf("a read for a later task gave %v", err)
 		}
 	}
-	func() {
-		defer func() {
-			if p, _ := recover().(error); !errors.Is(p, errors.ErrUnsupported) {
-				t.Errorf("ranging over the snapshot, which S3 writes, gave the panic %v", p)
-			}
-		}()
-		for range tx.Snapshot() {
-		}
-	}()
 	ok(t, setN(tx, 2))
+	var snap []format.Change
+	for c := range tx.Snapshot() {
+		snap = append(snap, c)
+	}
+	want := []format.Change{
+		{Op: format.CreateTable, Table: "docs", Names: []string{"n"}},
+		{Op: format.Put, Key: "docs:1", Fields: []format.Field{{Name: "n", Value: value.Int(2)}}},
+	}
+	if !slices.EqualFunc(snap, want, equalChange) {
+		t.Fatalf("the transaction's snapshot gave %v", snap)
+	}
 	for i, end := range []func(){func() { ok(t, tx.Commit(nil)) }, func() { tx.Rollback() }} {
 		if i > 0 {
 			tx = begin(t, s)

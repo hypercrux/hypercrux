@@ -8,19 +8,19 @@ package store
 import (
 	"errors"
 	"fmt"
-	"iter"
 	"sync"
 	"sync/atomic"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
-	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
 )
 
 // Store is the in-memory copy of a database. So far it holds the records
 // with their fields, and each table's field list and vector size (S1).
-// Each table's keys in order come with S4, the links with S5 and the
-// vector arrays with V1.
+// Its writes give the change lists the log writes, it takes the batches the
+// log reads whole or not at all, and its Snapshot gives the copy as a
+// compacted part (S3). Each table's keys in order come with S4, the links
+// with S5 and the vector arrays with V1.
 //
 // Many goroutines share a Store (S2). Reads go through Read, under the
 // copy's lock held shared, and writes through a transaction from Begin,
@@ -190,9 +190,4 @@ func (s *Store) Walk(key string, dir Direction, typ string, depth int) ([]Step, 
 // Nearest comes with V1.
 func (s *Store) Nearest(table string, q []float32, k int, keep Filter) ([]Hit, error) {
 	return nil, notYet("Nearest", "V1")
-}
-
-// Snapshot comes with S3. Until then, ranging over what it returns panics.
-func (s *Store) Snapshot() iter.Seq[format.Change] {
-	return func(func(format.Change) bool) { panic(notYet("Snapshot", "S3")) }
 }

@@ -22,3 +22,10 @@ fault/torn-with-zeros ./beta/internal/fault
 fault/clean-pages-written ./beta/internal/fault
 fault/second-open-locks ./beta/internal/fault
 fault/nth-plus-one ./beta/internal/fault
+store/batch-half-applied ./beta/internal/store
+store/unused-fields-taken ./beta/internal/store
+store/applied-slices-shared ./beta/internal/store
+store/snapshot-in-map-order ./beta/internal/store
+store/snapshot-fields-unsorted ./beta/internal/store
+store/snapshot-no-vectors ./beta/internal/store
+store/snapshot-size-left-out ./beta/internal/store

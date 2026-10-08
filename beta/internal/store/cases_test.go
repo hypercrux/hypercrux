@@ -752,11 +752,4 @@ func TestWhatComesLater(t *testing.T) {
 	wantErr(t, err, errors.ErrUnsupported)
 	_, err = s.Nearest("docs", []float32{1}, 1, nil)
 	wantErr(t, err, errors.ErrUnsupported)
-	defer func() {
-		if p := recover(); p == nil {
-			t.Error("ranging over the snapshot didn't panic")
-		}
-	}()
-	for range s.Snapshot() {
-	}
 }

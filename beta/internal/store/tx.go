@@ -8,6 +8,7 @@ package store
 import (
 	"fmt"
 	"iter"
+	"slices"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -33,8 +34,8 @@ import (
 // SQL's writes (Q6) mark the start of each statement with Mark, and a
 // statement that fails takes its own changes back with RollbackTo, while
 // the transaction carries on. A batch applied from the log (S3, F6) is a
-// transaction of Apply calls, committed with no write, or rolled back
-// whole at the first change that fails.
+// transaction of its changes, committed with no write, or rolled back
+// whole at the first change that fails: Store.ApplyBatch, in changes.go.
 
 // Tx is a transaction on the store: the writes of one Update, or one batch
 // applied from the log. Its changes go straight into the copy. An undo list
@@ -348,12 +349,18 @@ func (tx *Tx) Drop(name string) error {
 }
 
 // Apply is Store.Apply inside the transaction: one change of a change list,
-// such as a batch the log has read, which joins the transaction's change
-// list too. S3 applies whole lists with it.
+// such as an import's CreateTable with a table's whole shape, which joins
+// the transaction's change list too. The list keeps copies of the change's
+// Names and Fields, so the caller can use its slices again, as a snapshot
+// does with a Put's Fields. A batch from the log goes in whole through
+// Store.ApplyBatch instead.
 func (tx *Tx) Apply(c format.Change) error {
 	return tx.write(func(dst []format.Change) ([]format.Change, error) {
 		if err := tx.s.apply(c); err != nil {
 			return dst, err
+		}
+		if plant != "store/applied-slices-shared" {
+			c.Names, c.Fields = clip(slices.Clone(c.Names)), clip(slices.Clone(c.Fields))
 		}
 		return append(dst, c), nil
 	})

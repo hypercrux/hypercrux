@@ -8,6 +8,7 @@ package store
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 
@@ -31,7 +32,8 @@ import (
 // code with the copy's lock and the undo list (S2). Every change to the
 // store goes through one of the small functions that call changing first:
 // newTable, add and setSize in store.go, and put, remove and drop here.
-// Emitting change lists and applying them whole are S3's.
+// changes.go says what the change lists hold, and applies a whole batch
+// from the log on top of apply (S3).
 
 // Put merges fields into the record with this key, and creates the record
 // if it isn't there. The fields given take their values, a null clears a
@@ -144,18 +146,26 @@ func (s *Store) direct(op string) {
 // CreateTable needs a name no table has, and a Put a table that exists. A
 // Put spells each field the table has as the table does, gives its fields
 // in byte order of name, and keeps the rules Put keeps. A Delete needs its
-// record, and a Drop its table. On an error nothing changes. The errors
-// wrap errs.ErrInvalid, or errs.ErrNotFound for a missing record or table,
-// and the log reports any of them as damage.
+// record, and a Drop its table. A change that sets a field of
+// format.Change its Op doesn't use is refused, as format.AppendBatch
+// refuses it. On an error nothing changes. The errors wrap errs.ErrInvalid,
+// or errs.ErrNotFound for a missing record or table. ApplyBatch and
+// LoadBatch apply a whole batch from the log, and report any of them as
+// damage.
 //
 // Link and Unlink come with S5, and until then give an error that matches
-// errors.ErrUnsupported. S3 applies whole change lists on top of Apply.
+// errors.ErrUnsupported.
 func (s *Store) Apply(c format.Change) error {
 	s.direct("Apply")
 	return s.apply(c)
 }
 
 func (s *Store) apply(c format.Change) error {
+	if plant != "store/unused-fields-taken" {
+		if err := unused(&c); err != nil {
+			return err
+		}
+	}
 	switch c.Op {
 	case format.CreateTable:
 		return s.applyCreate(c)
@@ -169,6 +179,53 @@ func (s *Store) apply(c format.Change) error {
 		return notYet("Apply for "+c.Op.String(), "S5")
 	}
 	return fmt.Errorf("%w: a change of kind %v", errs.ErrInvalid, c.Op)
+}
+
+// unused refuses a change that sets a field of format.Change its Op doesn't
+// use, which format.AppendBatch refuses too, so a transaction's Apply never
+// puts one in its change list. A change of an Op that isn't one of the six
+// is apply's to refuse.
+func unused(c *format.Change) error {
+	var table, size, names, key, fields, link bool // what the Op uses
+	switch c.Op {
+	case format.CreateTable:
+		table, size, names = true, true, true
+	case format.Put:
+		key, fields = true, true
+	case format.Delete:
+		key = true
+	case format.Link, format.Unlink:
+		key, link = true, true
+	case format.Drop:
+		table = true
+	default:
+		return nil
+	}
+	var set []string
+	for _, f := range []struct {
+		name      string
+		set, used bool
+	}{
+		{"Table", c.Table != "", table},
+		{"Size", c.Size != 0, size},
+		{"Names", len(c.Names) != 0, names},
+		{"Key", c.Key != "", key},
+		{"Fields", len(c.Fields) != 0, fields},
+		{"Type", c.Type != "", link},
+		{"To", c.To != "", link},
+	} {
+		if f.set && !f.used {
+			set = append(set, f.name)
+		}
+	}
+	if set == nil {
+		return nil
+	}
+	a := "a"
+	if c.Op == format.Unlink {
+		a = "an"
+	}
+	return fmt.Errorf("%w: %s %v change that sets %s, which it doesn't use", errs.ErrInvalid, a, c.Op, strings.Join(set, " and "))
 }
 
 func (s *Store) applyCreate(c format.Change) error {
@@ -412,9 +469,11 @@ func keepAll(fields []format.Field) ([]float32, error) {
 
 // keep checks a value for the field called name by 0.x's rules: the vector
 // field holds a vector or null, no other field holds a vector, text is
-// valid UTF-8, and reals are finite. It returns the value the store keeps,
-// with a copy of its text or bytes of its own, so the store never holds on
-// to a decoded batch, and for a vector its values as float32s.
+// valid UTF-8, and reals are finite. Text and bytes also have to fit the
+// format, which gives their length as a u32 (see fits). It returns the
+// value the store keeps, with a copy of its text or bytes of its own, so
+// the store never holds on to a decoded batch, and for a vector its values
+// as float32s.
 func keep(name string, v value.Value) (value.Value, []float32, error) {
 	if rules.IsVec(name) {
 		switch v.Kind() {
@@ -433,14 +492,31 @@ func keep(name string, v value.Value) (value.Value, []float32, error) {
 	case value.KindReal:
 		return v, nil, rules.Real(name, v.Real())
 	case value.KindText:
+		if err := fits(name, len(v.Raw())); err != nil {
+			return v, nil, err
+		}
 		if err := rules.Text(name, v.Text()); err != nil {
 			return v, nil, err
 		}
 		return value.Text(strings.Clone(v.Text())), nil, nil
 	case value.KindBytes:
+		if err := fits(name, len(v.Raw())); err != nil {
+			return v, nil, err
+		}
 		return value.Bytes(strings.Clone(v.Raw())), nil, nil
 	case value.KindVector:
 		return v, nil, rules.VectorElsewhere(name)
 	}
 	return v, nil, nil
+}
+
+// fits checks the length of a text or bytes value for the field called
+// name: FORMAT.md writes it as a u32, so a value holds 4,294,967,295 bytes
+// at most, and format.AppendBatch refuses a longer one. 0.x's limit is
+// SQLite's, 1,000,000,000 bytes.
+func fits(name string, n int) error {
+	if uint64(n) > math.MaxUint32 {
+		return fmt.Errorf("%w: field %s holds %d bytes, and a value holds at most %d", errs.ErrInvalid, name, n, uint64(math.MaxUint32))
+	}
+	return nil
 }
