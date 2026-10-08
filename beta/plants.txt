@@ -35,3 +35,4 @@ fault/sync-keeps-name ./beta/internal/fault
 fault/one-sync-for-all ./beta/internal/fault
 fault/cut-before-names ./beta/internal/fault
 fault/chown-lasts ./beta/internal/fault
+crash/marker-before-sync ./beta/internal/crash
