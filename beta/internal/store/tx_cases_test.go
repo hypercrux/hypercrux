@@ -495,6 +495,8 @@ type writer interface {
 	Put(key string, fields []format.Field) error
 	Delete(key string) error
 	Drop(name string) error
+	Link(from, typ, to string) error
+	Unlink(from, typ, to string) error
 	Apply(c format.Change) error
 }
 
@@ -503,8 +505,11 @@ type writer interface {
 // table, create the record or the table, set the table's vector size, or
 // clear a vector. A delete takes a record out, and a drop a table with its
 // records. Pairs make the same record or table twice, or one record twice.
-// After a rollback the store must be as it was, and after a commit as it
-// was before that rollback.
+// A link adds a link, an unlink takes one or several out, and a delete or a
+// drop takes out every link of the records it takes, both ways: links
+// between two of them, from a record to itself, and to and from records
+// that stay. After a rollback the store must be as it was, and after a
+// commit as it was before that rollback.
 func TestUndoEachChange(t *testing.T) {
 	f := func(name string, v value.Value) format.Field { return format.Field{Name: name, Value: v} }
 	vec := func(x ...float32) value.Value { return value.Vector(x) }
@@ -564,6 +569,70 @@ func TestUndoEachChange(t *testing.T) {
 			}
 			return w.Put("notes:2", []format.Field{f("vec", vec(1, 2))})
 		}},
+		{"a link", func(w writer) error { return w.Link("docs:2", "new", "pics:1") }},
+		{"a link there already, and a link from a record to itself", func(w writer) error {
+			if err := w.Link("docs:1", "cites", "docs:2"); err != nil {
+				return err
+			}
+			return w.Link("pics:1", "self", "pics:1")
+		}},
+		{"an unlink", func(w writer) error { return w.Unlink("docs:1", "cites", "docs:2") }},
+		{"an unlink of every type", func(w writer) error {
+			if err := w.Link("docs:1", "also", "docs:2"); err != nil {
+				return err
+			}
+			return w.Unlink("docs:1", "", "docs:2")
+		}},
+		{"a delete of a record with links both ways and to itself", func(w writer) error { return w.Delete("docs:1") }},
+		{"a drop of a table with links inside it, into it and out of it", func(w writer) error { return w.Drop("docs") }},
+		{"a delete, and new links to a new record with the same key", func(w writer) error {
+			if err := w.Delete("docs:1"); err != nil {
+				return err
+			}
+			if err := w.Put("docs:1", nil); err != nil {
+				return err
+			}
+			if err := w.Link("docs:1", "cites", "docs:2"); err != nil {
+				return err
+			}
+			return w.Link("pics:1", "shows", "docs:1")
+		}},
+		{"two deletes of records linked to each other", func(w writer) error {
+			if err := w.Delete("docs:2"); err != nil {
+				return err
+			}
+			return w.Delete("docs:1")
+		}},
+		{"a drop, and links to a new table of the same name", func(w writer) error {
+			if err := w.Drop("docs"); err != nil {
+				return err
+			}
+			if err := w.Put("docs:1", nil); err != nil {
+				return err
+			}
+			return w.Link("pics:1", "shows", "docs:1")
+		}},
+		{"an applied link and unlink", func(w writer) error {
+			if err := w.Apply(format.Change{Op: format.Link, Key: "pics:1", Type: "new", To: "docs:2"}); err != nil {
+				return err
+			}
+			return w.Apply(format.Change{Op: format.Unlink, Key: "docs:2", Type: "in", To: "pics:1"})
+		}},
+		{"many links into one record, and its delete", func(w writer) error {
+			for i := range 3 * halfMax {
+				key := fmt.Sprintf("many:%d", i*7919%(3*halfMax))
+				if err := w.Put(key, nil); err != nil {
+					return err
+				}
+				if err := w.Link(key, "to", "pics:1"); err != nil {
+					return err
+				}
+				if err := w.Link("pics:1", "from", key); err != nil {
+					return err
+				}
+			}
+			return w.Delete("pics:1")
+		}},
 	}
 	all := func(w writer) error {
 		for _, c := range cases[:6] { // the puts: the rest undo what they do
@@ -605,10 +674,14 @@ func TestUndoEachChange(t *testing.T) {
 
 // undoStore returns the store TestUndoEachChange starts from: docs with two
 // records and a vector size of 2, pics with a vector field but no size yet,
-// and a table with no records.
+// and a table with no records. docs:1 and docs:2 link to each other, docs:1
+// links to itself, pics:1 links to docs:1, and docs:2 to pics:1.
 func undoStore(t *testing.T) *Store {
 	t.Helper()
 	s := New()
+	link := func(from, typ, to string) format.Change {
+		return format.Change{Op: format.Link, Key: from, Type: typ, To: to}
+	}
 	for _, c := range []format.Change{
 		{Op: format.CreateTable, Table: "docs"},
 		{Op: format.Put, Key: "docs:1", Fields: []format.Field{{Name: "n", Value: value.Int(1)}, {Name: "title", Value: value.Text("a")},
@@ -617,6 +690,11 @@ func undoStore(t *testing.T) *Store {
 		{Op: format.CreateTable, Table: "pics", Names: []string{"Vec"}},
 		{Op: format.Put, Key: "pics:1"},
 		{Op: format.CreateTable, Table: "empty"},
+		link("docs:1", "cites", "docs:2"),
+		link("docs:2", "cites", "docs:1"),
+		link("docs:1", "self", "docs:1"),
+		link("pics:1", "shows", "docs:1"),
+		link("docs:2", "in", "pics:1"),
 	} {
 		ok(t, s.Apply(c))
 	}
@@ -767,7 +845,7 @@ func TestCommit(t *testing.T) {
 // TestATransactionThatHasEnded: once Commit or Rollback has ended a
 // transaction, its methods fail with ErrClosed, a cursor it gave gives no
 // more records, and Rollback and RollbackTo do nothing. While it's open,
-// the reads that later tasks write say so, and its snapshot holds its
+// the read that a later task writes says so, and its snapshot holds its
 // changes.
 func TestATransactionThatHasEnded(t *testing.T) {
 	s := newStoreN(t)
@@ -804,10 +882,14 @@ func TestATransactionThatHasEnded(t *testing.T) {
 		}
 		closed := append(readsToCome(tx),
 			tx.Put("docs:1", nil), tx.Delete("docs:1"), tx.Drop("docs"), tx.Apply(format.Change{Op: format.Delete, Key: "docs:1"}),
-			tx.Commit(nil))
+			tx.Link("docs:1", "x", "docs:1"), tx.Unlink("docs:1", "", "docs:1"), tx.Commit(nil))
 		_, err = tx.Get("docs:1")
 		closed = append(closed, err)
 		_, err = tx.Scan("docs:", "")
+		closed = append(closed, err)
+		_, err = tx.Neighbours("docs:1", Out, "")
+		closed = append(closed, err)
+		_, err = tx.Walk("docs:1", Out, "", 1)
 		closed = append(closed, err)
 		for j, err := range closed {
 			if !errors.Is(err, errs.ErrClosed) {
@@ -834,10 +916,8 @@ func TestATransactionThatHasEnded(t *testing.T) {
 
 // readsToCome makes the transaction's reads that later tasks write.
 func readsToCome(tx *Tx) []error {
-	_, neighbours := tx.Neighbours("docs:1", Out, "")
-	_, walk := tx.Walk("docs:1", Out, "", 1)
 	_, nearest := tx.Nearest("docs", []float32{1}, 1, nil)
-	return []error{neighbours, walk, nearest}
+	return []error{nearest}
 }
 
 // TestDirectWritesWaitTheirTurn: the store's own writes, which have it to
@@ -849,6 +929,8 @@ func TestDirectWritesWaitTheirTurn(t *testing.T) {
 		"Put":    func() { s.Put(nil, "docs:2", nil) },
 		"Delete": func() { s.Delete(nil, "docs:1") },
 		"Drop":   func() { s.Drop(nil, "docs") },
+		"Link":   func() { s.Link(nil, "docs:1", "x", "docs:1") },
+		"Unlink": func() { s.Unlink(nil, "docs:1", "", "docs:1") },
 		"Apply":  func() { s.Apply(format.Change{Op: format.Delete, Key: "docs:1"}) },
 	} {
 		func() {

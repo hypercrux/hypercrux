@@ -22,14 +22,15 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
-// TestTheStoreAgrees0x runs the same random puts, gets, scans, deletes and
-// drops, with Go values, on 0.x and on the store, through putGo and scanGo
-// as the public package will. After each step both must give the same
-// error, with the same message, or the same record, or the same records in
-// the same order, and each table the same fields in the order 0.x's SELECT
-// * gives its columns. Only the message for a field named twice in two
-// spellings may differ, since 0.x reports whichever of the two its map gave
-// first.
+// TestTheStoreAgrees0x runs the same random puts, gets, scans, links,
+// unlinks, reads of links, walks, deletes and drops, with Go values, on 0.x
+// and on the store, through putGo and scanGo as the public package will.
+// After each step both must give the same error, with the same message, or
+// the same record, or the same records, links or steps in the same order,
+// and each table the same fields in the order 0.x's SELECT * gives its
+// columns. Every so often, every record's links both ways must agree too.
+// Only the message for a field named twice in two spellings may differ,
+// since 0.x reports whichever of the two its map gave first.
 func TestTheStoreAgrees0x(t *testing.T) {
 	db, err := hc.Open(filepath.Join(t.TempDir(), "agree.db"))
 	if err != nil {
@@ -89,6 +90,37 @@ func TestTheStoreAgrees0x(t *testing.T) {
 		}
 		return v
 	}
+	linkTypes := []string{"owns", "cites", "Owns", "x", "é", "a b"}
+	badLinkTypes := []string{"", strings.Repeat("t", 201), "\xff"}
+	linkType := func() string {
+		if r.IntN(25) == 0 {
+			return pick(badLinkTypes)
+		}
+		return pick(linkTypes)
+	}
+	readType := func() string {
+		if r.IntN(2) == 0 {
+			return ""
+		}
+		return linkType()
+	}
+	var made []store.Link // links that worked, which may have gone since
+	linked := func() string {
+		if len(made) == 0 || r.IntN(3) == 0 {
+			return key()
+		}
+		l := made[r.IntN(len(made))]
+		if r.IntN(2) == 0 {
+			return l.From
+		}
+		return l.To
+	}
+	direction := func() store.Direction {
+		if r.IntN(20) == 0 {
+			return 3
+		}
+		return store.Direction(r.IntN(3))
+	}
 	outcomes := map[string]int{}
 	for step := 0; step < steps; step++ {
 		var desc string
@@ -96,7 +128,7 @@ func TestTheStoreAgrees0x(t *testing.T) {
 		clash := false
 		var touched string
 		switch w := r.IntN(100); {
-		case w < 55:
+		case w < 45:
 			k := key()
 			tbl, _, _ := strings.Cut(k, ":")
 			f := fields{}
@@ -123,7 +155,7 @@ func TestTheStoreAgrees0x(t *testing.T) {
 				}
 			}
 			touched = k
-		case w < 68:
+		case w < 53:
 			k := key()
 			desc = "get " + k
 			want, e1 := db.Get(k)
@@ -139,7 +171,7 @@ func TestTheStoreAgrees0x(t *testing.T) {
 					t.Fatalf("step %d: %s: the store gives %#v, and 0.x %#v", step, desc, got, want)
 				}
 			}
-		case w < 80:
+		case w < 61:
 			prefix := pick(tables) + ":"
 			if r.IntN(3) == 0 {
 				prefix += pick([]string{"1", "4", "a", "a ", "\xc3", "é", "x"})
@@ -164,7 +196,57 @@ func TestTheStoreAgrees0x(t *testing.T) {
 			if e1 == nil && e2 == nil && !reflect.DeepEqual(got, fromZerox(want)) {
 				t.Fatalf("step %d: %s: the store gives %q, and 0.x %q:\n%v\n%v", step, desc, keysOf(got), keysOf(fromZerox(want)), got, want)
 			}
-		case w < 96:
+		case w < 73:
+			from, typ, to := linked(), linkType(), linked()
+			if r.IntN(4) == 0 {
+				to = from
+			}
+			desc = fmt.Sprintf("link %q %q %q", from, typ, to)
+			zeroxErr = db.Link(from, typ, to)
+			_, err = s.Link(nil, from, typ, to)
+			if zeroxErr == nil {
+				made = append(made, store.Link{From: from, Type: typ, To: to})
+			}
+		case w < 78:
+			from, typ, to := key(), readType(), key()
+			if len(made) > 0 && r.IntN(4) != 0 {
+				l := made[r.IntN(len(made))]
+				from, typ, to = l.From, l.Type, l.To
+				if r.IntN(3) == 0 {
+					typ = ""
+				}
+			}
+			desc = fmt.Sprintf("unlink %q %q %q", from, typ, to)
+			zeroxErr = db.Unlink(from, typ, to)
+			_, err = s.Unlink(nil, from, typ, to)
+		case w < 84:
+			k, dir, typ := linked(), direction(), readType()
+			desc = fmt.Sprintf("neighbours %q %v %q", k, dir, typ)
+			want, e1 := db.Neighbours(k, hc.Direction(dir), typ)
+			got, e2 := s.Neighbours(k, dir, typ)
+			zeroxErr, err = e1, e2
+			if e1 == nil && e2 == nil && !sameLinks(got, want) {
+				t.Fatalf("step %d: %s: the store gives %v, and 0.x %v", step, desc, got, want)
+			}
+			if len(got) > 0 {
+				outcomes["neighbours found some"]++
+			}
+		case w < 90:
+			k, dir, typ, depth := linked(), direction(), readType(), 1+r.IntN(4)
+			if r.IntN(20) == 0 {
+				depth = []int{0, -1, store.MaxDepth + 1}[r.IntN(3)]
+			}
+			desc = fmt.Sprintf("walk %q %v %q %d", k, dir, typ, depth)
+			want, e1 := db.Walk(k, hc.Direction(dir), typ, depth)
+			got, e2 := s.Walk(k, dir, typ, depth)
+			zeroxErr, err = e1, e2
+			if e1 == nil && e2 == nil && !sameSteps(got, want) {
+				t.Fatalf("step %d: %s: the store gives %v, and 0.x %v", step, desc, got, want)
+			}
+			if len(got) > 0 && got[len(got)-1].Depth > 1 {
+				outcomes["walk went further than one link"]++
+			}
+		case w < 98:
 			k := key()
 			desc = "delete " + k
 			zeroxErr = db.Delete(k)
@@ -190,19 +272,63 @@ func TestTheStoreAgrees0x(t *testing.T) {
 			for _, tbl := range tables {
 				agreeOnTable(t, db, s, tbl)
 			}
+			agreeOnLinks(t, db, s, tables, ids)
 		}
 	}
 	for _, tbl := range tables {
 		agreeOnTable(t, db, s, tbl)
 	}
+	agreeOnLinks(t, db, s, tables, ids)
 	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "scan ok", "scan invalid",
-		"delete ok", "delete not found", "drop ok", "drop invalid", "drop not found"} {
+		"link ok", "link invalid", "link not found", "unlink ok", "unlink not found", "neighbours ok",
+		"neighbours invalid", "neighbours not found", "neighbours found some", "walk ok", "walk invalid",
+		"walk not found", "walk went further than one link", "delete ok", "delete not found", "drop ok",
+		"drop invalid", "drop not found"} {
 		if outcomes[o] < steps/500 {
 			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
 		}
 	}
 	if testing.Verbose() {
 		t.Logf("outcomes: %v", outcomes)
+	}
+}
+
+// sameLinks reports whether the store's links are 0.x's, in the same
+// order, with nil for none in both.
+func sameLinks(got []store.Link, want []hc.Link) bool {
+	var conv []store.Link
+	for _, l := range want {
+		conv = append(conv, store.Link(l))
+	}
+	return reflect.DeepEqual(got, conv)
+}
+
+// sameSteps reports whether the store's steps are 0.x's, in the same
+// order, with nil for none in both.
+func sameSteps(got []store.Step, want []hc.Step) bool {
+	var conv []store.Step
+	for _, st := range want {
+		conv = append(conv, store.Step(st))
+	}
+	return reflect.DeepEqual(got, conv)
+}
+
+// agreeOnLinks compares every record's links both ways, and the count of
+// links in 0.x's Check and the store's snapshot.
+func agreeOnLinks(t *testing.T, db *hc.DB, s *store.Store, tables, ids []string) {
+	t.Helper()
+	for _, tbl := range tables {
+		for _, id := range ids {
+			k := tbl + ":" + id
+			want, e1 := db.Neighbours(k, hc.Both, "")
+			got, e2 := s.Neighbours(k, store.Both, "")
+			if kind(e2) != zeroxKind(e1) || !sameLinks(got, want) {
+				t.Fatalf("%s: the store has the links %v, %v, and 0.x %v, %v", k, got, e2, want, e1)
+			}
+		}
+	}
+	if rep := must[hc.Report](t)(db.Check()); rep.Links != links(t, s) {
+		t.Fatalf("0.x counts %d links, and the store's snapshot %d", rep.Links, links(t, s))
 	}
 }
 

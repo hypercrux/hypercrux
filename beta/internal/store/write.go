@@ -26,13 +26,14 @@ import (
 // makes one change of a change list, such as a batch the log has read,
 // checked by FORMAT.md's rules for changes.
 //
-// The four change the store directly, so they're for a goroutine that has
-// the store to itself, and they panic while a transaction is open. The
-// transaction's own Put, Delete, Drop and Apply, in tx.go, run the same
-// code with the copy's lock and the undo list (S2). Every change to the
-// store goes through one of the small functions that call changing first:
-// newTable, add and setSize in store.go, and put, unhash, list, unlist and
-// drop here.
+// They change the store directly, so they're for a goroutine that has the
+// store to itself, and they panic while a transaction is open. Link and
+// Unlink, in links.go, are writes of the same kind (S5). The transaction's
+// own Put, Delete, Drop, Link, Unlink and Apply, in tx.go, run the same code
+// with the copy's lock and the undo list (S2). Every change to the store
+// goes through one of the small functions that call changing first:
+// newTable, add and setSize in store.go, put, unhash, list, unlist and drop
+// here, and link, unlink and cutHalf in links.go.
 // changes.go says what the change lists hold, and applies a whole batch
 // from the log on top of apply (S3).
 
@@ -104,9 +105,10 @@ func (s *Store) putFields(dst []format.Change, key string, fields []format.Field
 	return append(dst, format.Change{Op: format.Put, Key: key, Fields: put}), nil
 }
 
-// Delete removes the record with this key, which must exist. The error is
-// 0.x's: ErrInvalid for a key that breaks the rules, and ErrNotFound when
-// there's no such record. Its links go with it once S5 adds them.
+// Delete removes the record with this key, which must exist, with every
+// link to it or from it. The change is the Delete alone: whoever applies it
+// works out the same links to take out. The error is 0.x's: ErrInvalid for
+// a key that breaks the rules, and ErrNotFound when there's no such record.
 func (s *Store) Delete(dst []format.Change, key string) ([]format.Change, error) {
 	s.direct("Delete")
 	return s.deleteKey(dst, key)
@@ -119,9 +121,10 @@ func (s *Store) deleteKey(dst []format.Change, key string) ([]format.Change, err
 	return append(dst, format.Change{Op: format.Delete, Key: key}), nil
 }
 
-// Drop removes the table called name with its records, its field list and
-// its vector size. The error is 0.x's: ErrInvalid for a name that breaks
-// the rules, and ErrNotFound when there's no such table.
+// Drop removes the table called name with its records, every link to them
+// or from them, its field list and its vector size. The change is the Drop
+// alone, as with Delete. The error is 0.x's: ErrInvalid for a name that
+// breaks the rules, and ErrNotFound when there's no such table.
 func (s *Store) Drop(dst []format.Change, name string) ([]format.Change, error) {
 	s.direct("Drop")
 	return s.dropTable(dst, name)
@@ -147,15 +150,14 @@ func (s *Store) direct(op string) {
 // CreateTable needs a name no table has, and a Put a table that exists. A
 // Put spells each field the table has as the table does, gives its fields
 // in byte order of name, and keeps the rules Put keeps. A Delete needs its
-// record, and a Drop its table. A change that sets a field of
-// format.Change its Op doesn't use is refused, as format.AppendBatch
-// refuses it. On an error nothing changes. The errors wrap errs.ErrInvalid,
-// or errs.ErrNotFound for a missing record or table. ApplyBatch and
-// LoadBatch apply a whole batch from the log, and report any of them as
-// damage.
-//
-// Link and Unlink come with S5, and until then give an error that matches
-// errors.ErrUnsupported.
+// record, and a Drop its table. A Link needs both its records, a type that
+// keeps the rules, and no link of that type between them already, since a
+// writer never adds one twice. An Unlink needs its link. A change that sets
+// a field of format.Change its Op doesn't use is refused, as
+// format.AppendBatch refuses it. On an error nothing changes. The errors
+// wrap errs.ErrInvalid, or errs.ErrNotFound for a missing record, table or
+// link. ApplyBatch and LoadBatch apply a whole batch from the log, and
+// report any of them as damage.
 func (s *Store) Apply(c format.Change) error {
 	s.direct("Apply")
 	return s.apply(c)
@@ -176,8 +178,10 @@ func (s *Store) apply(c format.Change) error {
 		return s.delete(c.Key)
 	case format.Drop:
 		return s.drop(c.Table)
-	case format.Link, format.Unlink:
-		return notYet("Apply for "+c.Op.String(), "S5")
+	case format.Link:
+		return s.applyLink(c)
+	case format.Unlink:
+		return s.applyUnlink(c)
 	}
 	return fmt.Errorf("%w: a change of kind %v", errs.ErrInvalid, c.Op)
 }
@@ -395,10 +399,13 @@ func (s *Store) delete(key string) error {
 	return nil
 }
 
-// remove takes a record out of the store, for a delete: out of the hash
-// table, and its key out of its table's keys. S5 takes its links out both
-// ways here, and V1 frees its slot, each with undo entries of their own.
+// remove takes a record out of the store, for a delete: its links out at
+// their other ends, then the record out of the hash table, and its key out
+// of its table's keys. So a rollback, which goes newest first, puts the
+// record back before its links. V1 frees its slot here, with undo entries
+// of its own.
 func (s *Store) remove(r *record) {
+	s.cut(r, nil)
 	s.unhash(r)
 	if plant != "store/delete-keeps-key" {
 		s.unlist(r)
@@ -433,13 +440,16 @@ func (s *Store) drop(name string) error {
 	if t == nil {
 		return fmt.Errorf("%w: no record table %s", errs.ErrNotFound, name)
 	}
-	// The table's own keys give its records, which leave the hash table.
-	// The keys stay as they are, with the table, and the table and its
-	// records keep everything they hold, so undoing the drop is putting
-	// them back in the maps. S5 takes each record's links out both ways
-	// here.
+	// The table's own keys give its records, which leave the hash table,
+	// each after its links have left the records that stay: links from
+	// other tables into it, and from it out to other tables. The keys stay
+	// as they are, with the table, and the table and its records keep
+	// everything they hold, links among themselves included, so undoing
+	// the drop is putting them back in the maps and putting back the other
+	// ends of their links.
 	if plant != "store/drop-keeps-records" {
 		for r := range t.keys.records {
+			s.cut(r, t)
 			s.unhash(r)
 		}
 	}

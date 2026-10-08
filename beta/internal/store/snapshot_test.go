@@ -39,13 +39,17 @@ func snapshot(t *testing.T, s *store.Store) []format.Change {
 }
 
 // TestSnapshot pins a snapshot written out by hand, of a store whose
-// tables, keys and fields each come in an order other than byte order.
-// Table users has the fields Zed and title from its first put, then VEC,
-// alpha, phone, raw and small, so a record's fields by place differ from
-// byte order of name. Its keys sort as bytes do, users:10 before users:9.
-// phone has only ever held null, so it's in the field list and in no put.
-// pics keeps the vector size its deleted record set. empty has fields and
-// no records. tmp was dropped, so it's not there.
+// tables, keys, fields and links each come in an order other than byte
+// order. Table users has the fields Zed and title from its first put, then
+// VEC, alpha, phone, raw and small, so a record's fields by place differ
+// from byte order of name. Its keys sort as bytes do, users:10 before
+// users:9. phone has only ever held null, so it's in the field list and in
+// no put. pics keeps the vector size its deleted record set. empty has
+// fields and no records. tmp was dropped, so it's not there. The links come
+// last, by the key they're from, then type, then the key they're to: a
+// link from users2:zed comes before the links from users, since a digit
+// sorts before a colon, and the links of the deleted pics:1 and the dropped
+// tmp have gone with them.
 func TestSnapshot(t *testing.T) {
 	s := store.New()
 	ok(t, putGo(s, "users:ann", fields{"title": "Ann", "Zed": 1}))
@@ -59,11 +63,27 @@ func TestSnapshot(t *testing.T) {
 	ok(t, putGo(s, "tmp:1", fields{"n": 1}))
 	must[[]format.Change](t)(s.Drop(nil, "tmp"))
 	ok(t, putGo(s, "users:ann", fields{"raw": []byte{0, 0xff}, "small": math.SmallestNonzeroFloat64}))
+	ok(t, putGo(s, "pics:2", nil))
+	ok(t, putGo(s, "tmp:2", nil))
+	for _, l := range []store.Link{
+		{From: "users:ann", Type: "likes", To: "users:9"}, {From: "users:ann", Type: "cites", To: "users2:zed"},
+		{From: "users2:zed", Type: "cites", To: "users:ann"}, {From: "users:ann", Type: "likes", To: "users:10"},
+		{From: "users:Bob", Type: "Likes", To: "users:Bob"}, {From: "users:ann", Type: "cites", To: "pics:2"},
+		{From: "pics:2", Type: "a\x00b", To: "users:ann"}, {From: "users:10", Type: "é", To: "users:ann"},
+		{From: "pics:2", Type: "x", To: "tmp:2"}, {From: "tmp:2", Type: "x", To: "users:ann"},
+	} {
+		must[[]format.Change](t)(s.Link(nil, l.From, l.Type, l.To))
+	}
+	must[[]format.Change](t)(s.Drop(nil, "tmp"))
 
 	f := func(name string, v value.Value) format.Field { return format.Field{Name: name, Value: v} }
+	link := func(from, typ, to string) format.Change {
+		return format.Change{Op: format.Link, Key: from, Type: typ, To: to}
+	}
 	want := []format.Change{
 		{Op: format.CreateTable, Table: "empty", Names: []string{"b", "a"}},
 		{Op: format.CreateTable, Table: "pics", Size: 3, Names: []string{"vec"}},
+		{Op: format.Put, Key: "pics:2"},
 		{Op: format.CreateTable, Table: "users", Size: 2, Names: []string{"Zed", "title", "VEC", "alpha", "phone", "raw", "small"}},
 		{Op: format.Put, Key: "users:10", Fields: []format.Field{
 			f("VEC", value.Vector([]float32{1, float32(math.Copysign(0, -1))})), f("alpha", value.Text("a\x00b")),
@@ -75,6 +95,14 @@ func TestSnapshot(t *testing.T) {
 		}},
 		{Op: format.CreateTable, Table: "users2", Names: []string{"name"}},
 		{Op: format.Put, Key: "users2:zed", Fields: []format.Field{f("name", value.Text("Zed"))}},
+		link("pics:2", "a\x00b", "users:ann"),
+		link("users2:zed", "cites", "users:ann"),
+		link("users:10", "é", "users:ann"),
+		link("users:Bob", "Likes", "users:Bob"),
+		link("users:ann", "cites", "pics:2"),
+		link("users:ann", "cites", "users2:zed"),
+		link("users:ann", "likes", "users:10"),
+		link("users:ann", "likes", "users:9"),
 	}
 	got := snapshot(t, s)
 	if !reflect.DeepEqual(got, want) {
@@ -91,44 +119,54 @@ func TestSnapshot(t *testing.T) {
 	if again := snapshot(t, c); !reflect.DeepEqual(again, want) {
 		t.Fatalf("the store loaded from the snapshot gives\n%v", again)
 	}
-	for _, key := range []string{"users:ann", "users:10", "users:9", "users:Bob", "users2:zed"} {
+	for _, key := range []string{"users:ann", "users:10", "users:9", "users:Bob", "users2:zed", "pics:2"} {
 		if a, b := must[fields](t)(getGo(s, key)), must[fields](t)(getGo(c, key)); !reflect.DeepEqual(a, b) {
 			t.Errorf("%s is %v, and loaded from the snapshot %v", key, a, b)
+		}
+		a := must[[]store.Link](t)(s.Neighbours(key, store.Both, ""))
+		if b := must[[]store.Link](t)(c.Neighbours(key, store.Both, "")); !reflect.DeepEqual(a, b) {
+			t.Errorf("%s has the links %v, and loaded from the snapshot %v", key, a, b)
 		}
 	}
 }
 
 // TestSnapshotOfTheFixtures loads file-new.hex, P2's small database, and
 // takes its snapshot. P2 wrote file-compacted.hex by hand from FORMAT.md, as
-// that database compacted, and the first batch of its compacted part holds
-// every table with its records. The snapshot, written as that batch, must
-// match it byte for byte. The second batch holds the links, which the store
-// leaves out until S5 keeps them, as it leaves out the links of
-// file-new.hex. Loading the compacted part, then the commit after it, gives
-// back what the store holds with that commit applied.
+// that database compacted, and its compacted part is two batches: the first
+// holds every table with its records, and the second every link. The
+// snapshot, cut where the links start and written as those two batches,
+// must match them byte for byte. Loading the compacted part, then the
+// commit after it, gives back what the store holds with that commit
+// applied.
 func TestSnapshotOfTheFixtures(t *testing.T) {
 	s := store.New()
 	for _, bt := range fixtureBatches(t, "file-new.hex", false) {
-		ok(t, s.LoadBatch(bt.Seq, withoutLinks(bt.Changes)))
+		ok(t, s.LoadBatch(bt.Seq, bt.Changes))
 	}
 	snap := snapshot(t, s)
 	comp := fixtureBatches(t, "file-compacted.hex", true)
-	got, sum, err := format.AppendBatch(nil, 2, 1, snap)
-	ok(t, err)
-	file := readHex(t, "file-compacted.hex")
-	first := file[format.HeaderSize : format.HeaderSize+comp[0].Length]
-	if !bytes.Equal(got, first) || sum != comp[0].Sum {
-		t.Fatalf("the snapshot, written as a batch, is\n%x\nwhere the compacted part's first batch is\n%x\nits changes: %v", got, first, snap)
+	if len(comp) != 2 {
+		t.Fatalf("the compacted part holds %d batches, where the test expects two", len(comp))
 	}
-	if len(comp) != 2 || len(withoutLinks(comp[1].Changes)) != 0 {
-		t.Fatalf("the compacted part holds %d batches, and the store expects the second to hold the links alone", len(comp))
+	cut := slices.IndexFunc(snap, func(c format.Change) bool { return c.Op == format.Link })
+	if cut < 0 {
+		t.Fatalf("the snapshot holds no links: %v", snap)
+	}
+	file := readHex(t, "file-compacted.hex")
+	at := format.HeaderSize
+	for i, part := range [][]format.Change{snap[:cut], snap[cut:]} {
+		got, sum, err := format.AppendBatch(nil, 2, uint64(i+1), part)
+		ok(t, err)
+		want := file[at : at+comp[i].Length]
+		if !bytes.Equal(got, want) || sum != comp[i].Sum {
+			t.Fatalf("the snapshot's part %d, written as a batch, is\n%x\nwhere the compacted part's batch is\n%x\nits changes: %v", i+1, got, want, part)
+		}
+		at += comp[i].Length + format.MarkerSize
 	}
 
 	c := store.New()
 	for _, bt := range comp {
-		if changes := withoutLinks(bt.Changes); len(changes) > 0 {
-			ok(t, c.LoadBatch(bt.Seq, changes))
-		}
+		ok(t, c.LoadBatch(bt.Seq, bt.Changes))
 	}
 	if again := snapshot(t, c); !slices.EqualFunc(again, snap, equalChanges) {
 		t.Fatalf("the compacted part loads as\n%v\nwhere file-new.hex loads as\n%v", again, snap)
@@ -146,12 +184,6 @@ func TestSnapshotOfTheFixtures(t *testing.T) {
 func equalChanges(a, b format.Change) bool {
 	return a.Op == b.Op && a.Table == b.Table && a.Size == b.Size && slices.Equal(a.Names, b.Names) && a.Key == b.Key &&
 		slices.Equal(a.Fields, b.Fields) && a.Type == b.Type && a.To == b.To
-}
-
-// withoutLinks returns the changes that aren't links, which the store
-// applies only from S5 on.
-func withoutLinks(changes []format.Change) []format.Change {
-	return slices.DeleteFunc(slices.Clone(changes), func(c format.Change) bool { return c.Op == format.Link || c.Op == format.Unlink })
 }
 
 // readHex reads one of P2's fixtures, annotated hex in which everything
@@ -268,6 +300,7 @@ func TestApplyRefusesUnusedFields(t *testing.T) {
 		s := store.New()
 		ok(t, putGo(s, "docs:1", fields{"title": "a"}))
 		ok(t, putGo(s, "docs:2", fields{"title": "b"}))
+		must[[]format.Change](t)(s.Link(nil, "docs:1", "cites", "docs:2"))
 		return s
 	}
 	for _, c := range []struct {
@@ -277,19 +310,14 @@ func TestApplyRefusesUnusedFields(t *testing.T) {
 		{format.Change{Op: format.CreateTable, Table: "notes", Size: 1, Names: []string{"vec"}}, []string{"Table", "Size", "Names"}},
 		{format.Change{Op: format.Put, Key: "docs:1", Fields: []format.Field{{Name: "title", Value: value.Text("c")}}}, []string{"Key", "Fields"}},
 		{format.Change{Op: format.Delete, Key: "docs:1"}, []string{"Key"}},
-		{format.Change{Op: format.Link, Key: "docs:1", Type: "cites", To: "docs:2"}, []string{"Key", "Type", "To"}},
+		{format.Change{Op: format.Link, Key: "docs:2", Type: "cites", To: "docs:1"}, []string{"Key", "Type", "To"}},
 		{format.Change{Op: format.Unlink, Key: "docs:1", Type: "cites", To: "docs:2"}, []string{"Key", "Type", "To"}},
 		{format.Change{Op: format.Drop, Table: "docs"}, []string{"Table"}},
 	} {
 		if _, _, err := format.AppendBatch(nil, 1, 1, []format.Change{c.change}); err != nil {
 			t.Fatalf("AppendBatch refused %v: %v", c.change, err)
 		}
-		err := start().Apply(c.change)
-		if c.change.Op == format.Link || c.change.Op == format.Unlink {
-			wantErr(t, err, errors.ErrUnsupported) // until S5
-		} else {
-			ok(t, err)
-		}
+		ok(t, start().Apply(c.change))
 		for name, setIt := range set {
 			if slices.Contains(c.uses, name) {
 				continue

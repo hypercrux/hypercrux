@@ -6,8 +6,10 @@
 package store
 
 import (
+	"cmp"
 	"iter"
 	"slices"
+	"strings"
 
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
@@ -18,8 +20,9 @@ import (
 // order of name, as a CreateTable with its vector size and its whole field
 // list, and then a Put for each of its records in byte order of key. A Put
 // carries every field that holds a value, the vector among them, each spelt
-// as the table spells it, in byte order of name. The links follow the
-// tables once S5 adds them.
+// as the table spells it, in byte order of name. Every link follows the
+// tables, as a Link, in byte order of the key it's from, then its type,
+// then the key it's to.
 //
 // The changes are built one at a time as they're ranged over, so a caller
 // ranges over them inside the Read that handed it the store, or inside the
@@ -29,7 +32,8 @@ import (
 // next Put, so a caller that keeps a Put clones its Fields.
 //
 // Each table's records come from its keys, which are in byte order already
-// (S4), so the snapshot sorts only the tables' names.
+// (S4), and each record's links out are in order of type and then of the
+// key they're to (S5), so the snapshot sorts only the tables' names.
 func (s *Store) Snapshot() iter.Seq[format.Change] { return s.snapshot }
 
 func (s *Store) snapshot(yield func(format.Change) bool) {
@@ -55,8 +59,40 @@ func (s *Store) snapshot(yield func(format.Change) bool) {
 			}
 		}
 	}
-	// S5 adds every link here, as a Link, in byte order of the key it's
-	// from, then its type, then the key it's to.
+	// The links, in byte order of the key they're from. Every key of a
+	// table starts with the table's name and a colon, so all the keys of
+	// one table come before all the keys of another when its name with a
+	// colon after it does: users2:zed before users:ann, since a digit sorts
+	// before a colon. So the tables go in that order, and each table's
+	// records in the order of their keys.
+	if plant != "store/snapshot-links-by-table" {
+		slices.SortFunc(names, compareAsKeys)
+	}
+	for _, name := range names {
+		for r := range s.inOrder(s.tables[name]) {
+			for h := range r.out.ofType("") {
+				if !yield(format.Change{Op: format.Link, Key: r.key, Type: h.typ.Value(), To: h.other.key}) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// compareAsKeys compares two tables' names as their records' keys compare:
+// each name with a colon after it, in byte order. No name holds a colon.
+func compareAsKeys(a, b string) int {
+	n := min(len(a), len(b))
+	if c := strings.Compare(a[:n], b[:n]); c != 0 {
+		return c
+	}
+	switch {
+	case len(a) < len(b):
+		return cmp.Compare(byte(':'), b[n])
+	case len(a) > len(b):
+		return cmp.Compare(a[n], byte(':'))
+	}
+	return 0
 }
 
 // inOrder ranges over a table's records in byte order of key.

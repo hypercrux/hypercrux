@@ -6,6 +6,7 @@
 package store
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
@@ -22,9 +23,11 @@ import (
 // TestChangeLists is S3's closing test: store A's change lists applied to
 // store B, and A's snapshot loaded into store C, both give back A.
 //
-// Random transactions run on A, as in S2's test: puts, deletes, drops and
-// creates, many of which fail, statements taken back to their marks,
-// commits whose write fails, and rollbacks. Each change list a commit hands
+// Random transactions run on A, as in S2's test: puts, links, unlinks,
+// deletes, drops and creates, many of which fail, statements taken back to
+// their marks, commits whose write fails, and rollbacks. Deletes and drops
+// take links out both ways, which B and C have to work out for themselves
+// from the Delete or the Drop alone. Each change list a commit hands
 // on is encoded with format.AppendBatch and decoded again, as the log
 // writes a batch and reads it, and must come back the same. B opens once a
 // fifth of the transactions have run, taking the batches committed by then
@@ -111,8 +114,9 @@ func runChangeLists(t *testing.T, seed uint64, n int) {
 	// Every kind of step and ending has to come up, or the test tests less
 	// than it says.
 	for _, o := range []string{"put ok", "put invalid", "delete ok", "delete not found", "drop ok", "drop not found",
-		"create ok", "create invalid", "statement rolled back", "commit", "commit failed", "rollback",
-		"batch loaded", "batch applied", "damage found", "snapshot loaded", "snapshot applied"} {
+		"create ok", "create invalid", "link ok", "link already there", "unlink ok", "statement rolled back", "commit",
+		"commit failed", "rollback", "batch loaded", "batch applied", "damage found", "damage in a link",
+		"snapshot loaded", "snapshot applied", "snapshot with links"} {
 		if outcomes[o] < max(1, n/150) {
 			t.Errorf("%q came up %d times in %d transactions: %v", o, outcomes[o], n, outcomes)
 		}
@@ -237,6 +241,9 @@ func follow(t *testing.T, g *gen, b *Store, seq uint64, batch []format.Change, o
 			t.Fatalf("a damaged batch changed B from\n%s\nto\n%s", before, after)
 		}
 		outcomes["damage found"]++
+		if op := bad[at-1].Op; op == format.Link || op == format.Unlink {
+			outcomes["damage in a link"]++
+		}
 	}
 	if err := b.ApplyBatch(seq, batch); err != nil {
 		t.Fatalf("B couldn't apply batch %d: %v", seq, err)
@@ -252,12 +259,17 @@ func damaged(g *gen, batch []format.Change) ([]format.Change, int) {
 	at := g.r.IntN(len(batch) + 1)
 	var bad format.Change
 	if at > 0 && batch[at-1].Op != format.Put && g.one(2) {
-		bad = batch[at-1] // the same create, delete or drop again, straight after it
+		// The same create, delete, drop, link or unlink again, straight
+		// after it: a table made twice, a record or a table that's gone, a
+		// link added twice, or a link taken out twice.
+		bad = batch[at-1]
 	} else {
 		bad = pick(g, []format.Change{
 			{Op: format.Put, Key: "nosuch:1"},
 			{Op: format.Delete, Key: "nosuch:1"},
 			{Op: format.Drop, Table: "nosuch"},
+			{Op: format.Link, Key: "nosuch:1", Type: "x", To: "nosuch:2"},
+			{Op: format.Unlink, Key: "nosuch:1", Type: "x", To: "nosuch:2"},
 		})
 	}
 	return slices.Insert(slices.Clone(batch), at, bad), at + 1
@@ -270,6 +282,9 @@ func checkpoint(t *testing.T, g *gen, a, b *Store, m *model, outcomes map[string
 	t.Helper()
 	snap := snapshotOf(a)
 	checkSnapshot(t, m, snap)
+	if len(m.links) > 0 {
+		outcomes["snapshot with links"]++
+	}
 	c := New()
 	how := "snapshot loaded"
 	if g.one(2) {
@@ -344,14 +359,29 @@ func dumpRead(s *Store) string {
 // and its whole field list, and then a Put for each of its records in byte
 // order of key. A Put carries every field that holds a value, the vector
 // among them, spelt as the table spells it, in byte order of name, and no
-// nulls.
+// nulls. Then every link comes, as a Link, in byte order of the key it's
+// from, then its type, then the key it's to.
 func checkSnapshot(t *testing.T, m *model, snap []format.Change) {
 	t.Helper()
 	var table *modelTable
 	var name, last string // the table whose records come now, and the last key
-	tables, puts := 0, 0
-	for _, c := range snap {
+	tables, puts, links := 0, 0, 0
+	var lastLink *format.Change
+	for i, c := range snap {
+		if lastLink != nil && c.Op != format.Link {
+			t.Fatalf("the snapshot gives %v after the link %v", c, lastLink)
+		}
 		switch c.Op {
+		case format.Link:
+			if l := (Link{c.Key, c.Type, c.To}); !m.links[l] {
+				t.Fatalf("the snapshot gives %v, which isn't one of the model's links", c)
+			}
+			if lastLink != nil && cmp.Or(strings.Compare(lastLink.Key, c.Key), strings.Compare(lastLink.Type, c.Type),
+				strings.Compare(lastLink.To, c.To)) >= 0 {
+				t.Fatalf("the snapshot gives %v after %v", c, lastLink)
+			}
+			lastLink = &snap[i]
+			links++
 		case format.CreateTable:
 			mt := m.tables[c.Table]
 			if mt == nil || tables > 0 && c.Table <= name || !slices.Equal(c.Names, mt.fields) || c.Size != mt.size {
@@ -373,19 +403,21 @@ func checkSnapshot(t *testing.T, m *model, snap []format.Change) {
 			last = c.Key
 			puts++
 		default:
-			t.Fatalf("the snapshot gives %v, before S5 adds links", c)
+			t.Fatalf("the snapshot gives %v", c)
 		}
 	}
-	if tables != len(m.tables) || puts != len(m.records) {
-		t.Fatalf("the snapshot gives %d tables and %d records, and the model has %d and %d", tables, puts, len(m.tables), len(m.records))
+	if tables != len(m.tables) || puts != len(m.records) || links != len(m.links) {
+		t.Fatalf("the snapshot gives %d tables, %d records and %d links, and the model has %d, %d and %d",
+			tables, puts, links, len(m.tables), len(m.records), len(m.links))
 	}
 }
 
 // sameStores checks that got holds what want holds. Through the read API,
 // every table and key the workload can name must give the same answer from
-// both, and so must a scan of each table and the snapshot. Then the whole
-// of both must match, each table's keys included, so nothing the read API
-// can't see yet differs either.
+// both, its links and a walk from it included, and so must a scan of each
+// table and the snapshot. Then the whole of both must match, each table's
+// keys and each record's lists of links included, so nothing the read API
+// can't see differs either.
 func sameStores(t *testing.T, name string, want, got *Store) {
 	t.Helper()
 	tables := append(append(slices.Clone(txTables), badTables...), "nosuch")
@@ -410,6 +442,16 @@ func sameStores(t *testing.T, name string, want, got *Store) {
 				gr, gerr := g.Get(key)
 				if errText(werr) != errText(gerr) || !sameRecord(wr, gr) {
 					return fmt.Errorf("Get(%q) gives %+v, %v, where it should give %+v, %v", key, gr, gerr, wr, werr)
+				}
+				wl, werr := w.Neighbours(key, Both, "")
+				gl, gerr := g.Neighbours(key, Both, "")
+				if errText(werr) != errText(gerr) || !slices.Equal(wl, gl) {
+					return fmt.Errorf("Neighbours(%q) gives %v, %v, where it should give %v, %v", key, gl, gerr, wl, werr)
+				}
+				ws, werr := w.Walk(key, Both, "", 3)
+				gs, gerr := g.Walk(key, Both, "", 3)
+				if errText(werr) != errText(gerr) || !slices.Equal(ws, gs) {
+					return fmt.Errorf("Walk(%q) gives %v, %v, where it should give %v, %v", key, gs, gerr, ws, werr)
 				}
 			}
 			for _, tbl := range tables {
@@ -484,7 +526,10 @@ func TestApplyBatch(t *testing.T) {
 		{format.Change{Op: format.Delete, Key: "docs:2"}, "not found: docs:2"}, // the second change deleted it
 		{format.Change{Op: format.Drop, Table: "nosuch"}, "not found: no record table nosuch"},
 		{format.Change{Op: format.Delete, Key: "docs:1", Table: "docs"}, "a delete change that sets Table, which it doesn't use"},
-		{format.Change{Op: format.Link, Key: "docs:1", Type: "cites", To: "docs:3"}, "comes with task S5"},
+		{format.Change{Op: format.Link, Key: "docs:1", Type: "cites", To: "docs:2"}, "not found: docs:2"},
+		{format.Change{Op: format.Link, Key: "pics:1", Type: "shows", To: "docs:1"}, "pics:1 -shows-> docs:1 is added when it's there already"},
+		{format.Change{Op: format.Link, Key: "docs:3", Type: "", To: "docs:1"}, `link type "": use 1 to 200 characters`},
+		{format.Change{Op: format.Unlink, Key: "docs:2", Type: "cites", To: "docs:1"}, "no link docs:2 -cites-> docs:1 to remove"},
 		{format.Change{Op: 99}, "a change of kind Op(99)"},
 	} {
 		s := undoStore(t)
@@ -679,6 +724,52 @@ func TestTheChangesOfEachWrite(t *testing.T) {
 			{Op: format.CreateTable, Table: "made", Size: 2, Names: []string{"z", "vec", "a"}},
 			{Op: format.Put, Key: "made:1", Fields: []format.Field{f("a", value.Int(1)), f("z", value.Int(2))}},
 		}},
+		{"links, one of them there already", func(tx *Tx) error {
+			for _, l := range []Link{{"docs:2", "new", "pics:1"}, {"docs:1", "cites", "docs:2"}, {"pics:1", "self", "pics:1"}} {
+				if err := tx.Link(l.From, l.Type, l.To); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, []format.Change{
+			{Op: format.Link, Key: "docs:2", Type: "new", To: "pics:1"},
+			{Op: format.Link, Key: "pics:1", Type: "self", To: "pics:1"},
+		}},
+		{"an unlink of every type, in byte order of type", func(tx *Tx) error {
+			if err := tx.Link("docs:1", "also", "docs:2"); err != nil {
+				return err
+			}
+			if err := tx.Link("docs:1", "Zed", "docs:2"); err != nil {
+				return err
+			}
+			return tx.Unlink("docs:1", "", "docs:2")
+		}, []format.Change{
+			{Op: format.Link, Key: "docs:1", Type: "also", To: "docs:2"},
+			{Op: format.Link, Key: "docs:1", Type: "Zed", To: "docs:2"},
+			{Op: format.Unlink, Key: "docs:1", Type: "Zed", To: "docs:2"},
+			{Op: format.Unlink, Key: "docs:1", Type: "also", To: "docs:2"},
+			{Op: format.Unlink, Key: "docs:1", Type: "cites", To: "docs:2"},
+		}},
+		{"an unlink, and the link again", func(tx *Tx) error {
+			if err := tx.Unlink("docs:1", "self", "docs:1"); err != nil {
+				return err
+			}
+			return tx.Link("docs:1", "self", "docs:1")
+		}, []format.Change{
+			{Op: format.Unlink, Key: "docs:1", Type: "self", To: "docs:1"},
+			{Op: format.Link, Key: "docs:1", Type: "self", To: "docs:1"},
+		}},
+		{"a delete of a record with links, which go without changes of their own", func(tx *Tx) error { return tx.Delete("docs:1") },
+			[]format.Change{{Op: format.Delete, Key: "docs:1"}}},
+		{"a drop of a table with links, which go without changes of their own", func(tx *Tx) error { return tx.Drop("docs") },
+			[]format.Change{{Op: format.Drop, Table: "docs"}}},
+		{"links and unlinks that fail", func(tx *Tx) error {
+			if tx.Link("docs:1", "", "docs:2") == nil || tx.Link("docs:1", "x", "docs:404") == nil || tx.Unlink("docs:1", "x", "docs:2") == nil ||
+				tx.Unlink("docs:404", "", "docs:1") == nil {
+				return errors.New("a link or an unlink that should fail worked")
+			}
+			return tx.Link("docs:2", "x", "docs:1")
+		}, []format.Change{{Op: format.Link, Key: "docs:2", Type: "x", To: "docs:1"}}},
 		{"writes that fail, and a statement taken back", func(tx *Tx) error {
 			if tx.Delete("docs:404") == nil || tx.Drop("nosuch") == nil || tx.Put("docs:1", []format.Field{f("key", value.Int(1))}) == nil {
 				return errors.New("a write that should fail worked")

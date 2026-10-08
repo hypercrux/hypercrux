@@ -16,22 +16,24 @@ import (
 )
 
 // Store is the in-memory copy of a database. So far it holds the records
-// with their fields, and each table's field list and vector size (S1), and
-// each table's keys in byte order, which Scan reads (S4). Its writes give
-// the change lists the log writes, it takes the batches the log reads whole
-// or not at all, and its Snapshot gives the copy as a compacted part (S3).
-// The links come with S5 and the vector arrays with V1.
+// with their fields, and each table's field list and vector size (S1), each
+// table's keys in byte order, which Scan reads (S4), and each record's links
+// both ways, which Neighbours and Walk read (S5). Its writes give the change
+// lists the log writes, it takes the batches the log reads whole or not at
+// all, and its Snapshot gives the copy as a compacted part (S3). The vector
+// arrays come with V1.
 //
 // Many goroutines share a Store (S2). Reads go through Read, under the
 // copy's lock held shared, and writes through a transaction from Begin,
 // which takes the lock alone at its first change. The Store's own Reader
 // methods take no lock: they serve Read's callback and the transaction,
-// and like Put, Delete, Drop and Apply they serve a goroutine that has the
-// store to itself, such as a test.
+// and like Put, Delete, Drop, Link, Unlink and Apply they serve a goroutine
+// that has the store to itself, such as a test.
 //
 // A read changes nothing in the store, a cache included: readers share the
 // lock, and a transaction reads beside them, without the lock, until its
-// first change.
+// first change. A walk's working memory comes from a pool of the package's
+// own, outside any store (walk.go).
 type Store struct {
 	// mu is the copy's lock. Read holds it shared. A transaction takes it
 	// alone at its first change and keeps it until Commit or Rollback, so
@@ -58,6 +60,10 @@ type Store struct {
 	// which keys each table holds, undone changes included, so a cursor
 	// knows when to find its place again. Nothing else changes it.
 	epoch uint64
+	// lastType is the handle of the last link type a link was added with,
+	// so a run of links of one type, as a compacted file gives them, makes
+	// one call to unique.Make. Only writes use it.
+	lastType linkType
 }
 
 var _ Reader = (*Store)(nil)
@@ -118,8 +124,16 @@ func (s *Store) setSize(t *table, size int) {
 
 // record is one record.
 type record struct {
-	key   string
-	table *table
+	key string
+	// out holds a half for each link from the record, with the record it's
+	// to, and in, the reverse index, a half for each link to it, with the
+	// record it's from (S5, halves.go). They come straight after the key,
+	// so a walk that reads a record's key finds its lists in the same 64
+	// bytes. A delete or a drop of the record leaves them as they are: it
+	// takes each link out at its other end, so nothing can reach the record
+	// any more, and undoing it puts those ends back.
+	out, in links
+	table   *table
 	// fields are the fields that hold a value, in order of their places in
 	// the table's list, with nulls and the vector left out. A put replaces
 	// the slice whole and never changes one in place, so a slice a read
@@ -129,7 +143,6 @@ type record struct {
 	// keeps the vector in the table's vector array, and the record holds
 	// the slot's number here.
 	vec []float32
-	// S5 keeps the record's links here, out of it and into it.
 }
 
 // Table returns the shape of the table called name, or false when there's
@@ -160,14 +173,26 @@ func (t Table) Find(name string) int {
 // gives an error that wraps errs.ErrInvalid, and a key with no record one
 // that wraps errs.ErrNotFound, as in 0.x.
 func (s *Store) Get(key string) (Record, error) {
-	if _, err := rules.TableOf(key); err != nil {
+	r, err := s.existing(key)
+	if err != nil {
 		return Record{}, err
+	}
+	return r.read(), nil
+}
+
+// existing returns the record with this key, with 0.x's errors: one that
+// wraps errs.ErrInvalid for a key that breaks the rules, and one that wraps
+// errs.ErrNotFound for a key with no record. Get, Link, Neighbours and Walk
+// check their keys with it, as 0.x's mustExist does.
+func (s *Store) existing(key string) (*record, error) {
+	if _, err := rules.TableOf(key); err != nil {
+		return nil, err
 	}
 	r := s.records[key]
 	if r == nil {
-		return Record{}, fmt.Errorf("%w: %s", errs.ErrNotFound, key)
+		return nil, fmt.Errorf("%w: %s", errs.ErrNotFound, key)
 	}
-	return r.read(), nil
+	return r, nil
 }
 
 // read gives the record as Reader hands it out, sharing the store's
@@ -179,16 +204,6 @@ func (r *record) read() Record {
 // notYet is the error of a method whose task hasn't written it yet.
 func notYet(method, task string) error {
 	return fmt.Errorf("store: %s comes with task %s: %w", method, task, errors.ErrUnsupported)
-}
-
-// Neighbours comes with S5.
-func (s *Store) Neighbours(key string, dir Direction, typ string) ([]Link, error) {
-	return nil, notYet("Neighbours", "S5")
-}
-
-// Walk comes with S5.
-func (s *Store) Walk(key string, dir Direction, typ string, depth int) ([]Step, error) {
-	return nil, notYet("Walk", "S5")
 }
 
 // Nearest comes with V1.

@@ -25,16 +25,17 @@ import (
 // TestTransactions is S2's closing test. Random transactions run on the
 // store and on the model, with random rollbacks: of whole transactions, of
 // statements taken back to a mark as SQL's are, and of commits whose write
-// to the log fails. Inside them go random puts, deletes, drops and creates,
-// many of which fail and must leave the transaction as it was, and reads
-// through the transaction, which must see its changes: gets, scans, and a
-// cursor kept open across the transaction's later steps and the statements
-// it takes back, which must give no more once the transaction ends. Every
-// answer must agree with the model's. After each transaction the store
-// must hold what the model holds, and so must a replica that applies each
-// committed change list. Readers run alongside the whole time, getting and
-// scanning everything, and every read must see a state that a commit left.
-// CI runs it under the race detector too.
+// to the log fails. Inside them go random puts, links, unlinks, deletes,
+// drops and creates, many of which fail and must leave the transaction as
+// it was, and reads through the transaction, which must see its changes:
+// gets, scans, a cursor kept open across the transaction's later steps and
+// the statements it takes back, which must give no more once the
+// transaction ends, reads of links and walks. Every answer must agree with
+// the model's. After each transaction the store must hold what the model
+// holds, and so must a replica that applies each committed change list.
+// Readers run alongside the whole time, getting, scanning and walking
+// everything, and every read must see a state that a commit left. CI runs
+// it under the race detector too.
 func TestTransactions(t *testing.T) {
 	seeds, txs := 12, 300
 	if testing.Short() {
@@ -85,9 +86,11 @@ func runTransactions(t *testing.T, seed uint64, n int) {
 	// Every kind of step and ending has to come up, or the test tests less
 	// than it says.
 	for _, o := range []string{"put ok", "put invalid", "delete ok", "delete invalid", "delete not found", "drop ok",
-		"drop invalid", "drop not found", "create ok", "create invalid", "get ok", "get invalid", "get not found",
-		"scan ok", "scan invalid", "live scan", "live scan moved", "live scan ended", "live scan at the end",
-		"live scan across a statement rolled back", "statement rolled back", "read before the first change", "commit",
+		"drop invalid", "drop not found", "create ok", "create invalid", "link ok", "link invalid", "link not found",
+		"link already there", "link applied", "unlink ok", "unlink not found", "unlink applied", "get ok", "get invalid",
+		"get not found", "scan ok", "scan invalid", "live scan", "live scan moved", "live scan ended",
+		"live scan at the end", "live scan across a statement rolled back", "neighbours ok", "neighbours found some",
+		"walk ok", "walk found some", "statement rolled back", "read before the first change", "commit",
 		"commit failed", "rollback"} {
 		if outcomes[o] < max(1, n/150) {
 			t.Errorf("%q came up %d times in %d transactions: %v", o, outcomes[o], n, outcomes)
@@ -214,8 +217,9 @@ func txWrite(t *testing.T, g *gen, s *Store, tx *Tx, m *model, outcomes map[stri
 	var desc, want string
 	var err error
 	var wantChanges []format.Change
+	checkChanges := true // whether wantChanges are the changes the write should give
 	switch w := g.r.IntN(100); {
-	case w < 60:
+	case w < 45:
 		key, fields, bad := g.put()
 		desc = fmt.Sprintf("put %q %v", key, fields)
 		_, existed := s.tables[tableOfKey(key+":")]
@@ -224,7 +228,49 @@ func txWrite(t *testing.T, g *gen, s *Store, tx *Tx, m *model, outcomes map[stri
 		if err == nil {
 			checkPutChanges(t, s, tx.changes[before:], key, existed)
 		}
-	case w < 80:
+		checkChanges = false
+	case w < 60:
+		a := g.link()
+		desc = fmt.Sprintf("link %q %q %q", a.from, a.typ, a.to)
+		c := format.Change{Op: format.Link, Key: a.from, Type: a.typ, To: a.to}
+		var added bool
+		if g.one(4) {
+			// A Link change for a link that's there breaks FORMAT.md's
+			// rules, where Link adds nothing.
+			err = tx.Apply(c)
+			want, added = m.link(a)
+			if want == "" && !added {
+				want = "invalid"
+			}
+			outcomes["link applied"]++
+		} else {
+			err = tx.Link(a.from, a.typ, a.to)
+			want, added = m.link(a)
+			if want == "" && !added {
+				outcomes["link already there"]++
+			}
+		}
+		if added {
+			wantChanges = []format.Change{c}
+		}
+	case w < 66:
+		from, typ, to := g.unlinkArgs()
+		desc = fmt.Sprintf("unlink %q %q %q", from, typ, to)
+		if l := (Link{from, typ, to}); typ != "" && m.links[l] && g.one(2) {
+			// A link that's there, as an Unlink change: the change needs a
+			// type, and its keys and type have to keep the rules, so only
+			// the model's links are certain to.
+			err = tx.Apply(format.Change{Op: format.Unlink, Key: from, Type: typ, To: to})
+			outcomes["unlink applied"]++
+		} else {
+			err = tx.Unlink(from, typ, to)
+		}
+		var types []string
+		want, types = m.unlink(from, typ, to)
+		for _, typ := range types {
+			wantChanges = append(wantChanges, format.Change{Op: format.Unlink, Key: from, Type: typ, To: to})
+		}
+	case w < 82:
 		key, bad := g.key()
 		desc = "delete " + key
 		if c := (format.Change{Op: format.Delete, Key: key}); g.one(3) {
@@ -234,7 +280,7 @@ func txWrite(t *testing.T, g *gen, s *Store, tx *Tx, m *model, outcomes map[stri
 		}
 		want = m.delete(key, bad)
 		wantChanges = []format.Change{{Op: format.Delete, Key: key}}
-	case w < 92:
+	case w < 93:
 		name, bad := pick(g, txTables), false
 		if g.one(5) {
 			name, bad = pick(g, badTables), true
@@ -262,8 +308,8 @@ func txWrite(t *testing.T, g *gen, s *Store, tx *Tx, m *model, outcomes map[stri
 	switch {
 	case err != nil && len(tx.changes) != before:
 		t.Fatalf("%s failed and still gave the changes %v", desc, tx.changes[before:])
-	case err == nil && wantChanges != nil && !slices.EqualFunc(tx.changes[before:], wantChanges, equalChange):
-		t.Fatalf("%s gave the changes %v", desc, tx.changes[before:])
+	case err == nil && checkChanges && !slices.EqualFunc(tx.changes[before:], wantChanges, equalChange):
+		t.Fatalf("%s gave the changes %v, where it should give %v", desc, tx.changes[before:], wantChanges)
 	}
 	return err
 }
@@ -274,9 +320,11 @@ func txWrite(t *testing.T, g *gen, s *Store, tx *Tx, m *model, outcomes map[stri
 // records from that one.
 func txRead(t *testing.T, g *gen, tx *Tx, m *model, live **liveScan, outcomes map[string]int) {
 	t.Helper()
-	switch g.r.IntN(4) {
+	switch g.r.IntN(6) {
 	case 0, 1:
 		txGet(t, g, tx, m, outcomes)
+	case 4, 5:
+		readLinks(t, g, tx, m, outcomes)
 	case 2:
 		prefix, after, bad := g.scanArgs()
 		desc := fmt.Sprintf("scan %q %q through the transaction", prefix, after)
@@ -312,6 +360,36 @@ func txRead(t *testing.T, g *gen, tx *Tx, m *model, live **liveScan, outcomes ma
 		}
 		*live = &liveScan{c: c, desc: fmt.Sprintf("the live scan %q %q through the transaction", prefix, after), prefix: prefix, after: after}
 		outcomes["live scan"]++
+	}
+}
+
+// readLinks reads the links of a random key through r, a transaction or
+// the store, or walks from it, which must give what the model gives.
+func readLinks(t *testing.T, g *gen, r Reader, m *model, outcomes map[string]int) {
+	t.Helper()
+	key, bad := g.linked()
+	if g.one(2) {
+		dir, typ := g.direction(), g.readType()
+		links, err := r.Neighbours(key, dir, typ)
+		want, kind := m.neighbours(key, bad, dir, typ)
+		if got := kindOf(err); got != kind || err == nil && (!slices.Equal(links, want) || links != nil && len(links) == 0) {
+			t.Fatalf("neighbours %q %v %q gave %v, %v, where the model gives %v, %q", key, dir, typ, links, err, want, kind)
+		}
+		outcomes["neighbours "+cmp.Or(kind, "ok")]++
+		if len(links) > 0 {
+			outcomes["neighbours found some"]++
+		}
+		return
+	}
+	dir, typ, depth := g.direction(), g.readType(), g.depth()
+	steps, err := r.Walk(key, dir, typ, depth)
+	want, kind := m.walk(key, bad, dir, typ, depth)
+	if got := kindOf(err); got != kind || err == nil && (!slices.Equal(steps, want) || steps != nil && len(steps) == 0) {
+		t.Fatalf("walk %q %v %q %d gave %v, %v, where the model gives %v, %q", key, dir, typ, depth, steps, err, want, kind)
+	}
+	outcomes["walk "+cmp.Or(kind, "ok")]++
+	if len(steps) > 0 {
+		outcomes["walk found some"]++
 	}
 }
 
@@ -383,7 +461,9 @@ func applyTo(t *testing.T, replica *Store, changes []format.Change) {
 // readAlongside reads the whole store, over and over, until stop closes.
 // Each read must see a state that a commit left. Inside it, every record
 // must come through Get, and each table's records through a scan of the
-// whole table, in byte order of key.
+// whole table, in byte order of key. Every fourth read, each record's links
+// both ways must come through Neighbours, each to a record in the store,
+// and a walk one link out of it must reach the records at their other ends.
 func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 	res := readResult{states: map[string]bool{}}
 	for ; ; res.reads++ {
@@ -404,6 +484,28 @@ func readAlongside(s *Store, seen *states, stop <-chan struct{}) readResult {
 					return err
 				}
 				counts[rec.table.name]++
+				if res.reads%4 != 0 {
+					continue
+				}
+				links, err := r.Neighbours(key, Both, "")
+				if err != nil {
+					return err
+				}
+				steps, err := r.Walk(key, Both, "", 1)
+				if err != nil {
+					return err
+				}
+				ends := map[string]bool{}
+				for _, l := range links {
+					if s.records[l.From] == nil || s.records[l.To] == nil || l.From != key && l.To != key {
+						return fmt.Errorf("Neighbours(%s) gave %v", key, l)
+					}
+					ends[l.From], ends[l.To] = true, true
+				}
+				delete(ends, key)
+				if len(steps) != len(ends) {
+					return fmt.Errorf("a walk from %s gave %v, where its links are %v", key, steps, links)
+				}
 			}
 			for name := range s.tables {
 				c, err := r.Scan(name+":", "")
@@ -462,7 +564,7 @@ func (st *states) has(d string) bool {
 }
 
 func newModel() *model {
-	return &model{tables: map[string]*modelTable{}, records: map[string]map[string]value.Value{}}
+	return &model{tables: map[string]*modelTable{}, records: map[string]map[string]value.Value{}, links: map[Link]bool{}}
 }
 
 // clone copies the model, for a transaction or a statement to work on.
@@ -474,6 +576,7 @@ func (m *model) clone() *model {
 	for key, rec := range m.records {
 		c.records[key] = maps.Clone(rec)
 	}
+	c.links, c.order = maps.Clone(m.links), slices.Clone(m.order)
 	return c
 }
 

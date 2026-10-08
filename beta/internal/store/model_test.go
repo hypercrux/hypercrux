@@ -7,12 +7,15 @@ package store
 
 import (
 	"cmp"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,6 +31,8 @@ import (
 type model struct {
 	tables  map[string]*modelTable
 	records map[string]map[string]value.Value // by key, then by field name in lower case; nulls aren't there
+	links   map[Link]bool                     // every link, each once
+	order   []Link                            // the same links, in the order they came, for a generator to pick from
 }
 
 type modelTable struct {
@@ -92,6 +97,12 @@ func (m *model) delete(key string, bad bool) string {
 		return "not found"
 	}
 	delete(m.records, key)
+	for l := range m.links {
+		if l.From == key || l.To == key {
+			delete(m.links, l)
+		}
+	}
+	m.reorder()
 	return ""
 }
 
@@ -108,7 +119,160 @@ func (m *model) drop(name string, bad bool) string {
 			delete(m.records, key)
 		}
 	}
+	for l := range m.links {
+		if tableOfKey(l.From) == name || tableOfKey(l.To) == name {
+			delete(m.links, l)
+		}
+	}
+	m.reorder()
 	return ""
+}
+
+// reorder takes the links that have gone out of order.
+func (m *model) reorder() {
+	m.order = slices.DeleteFunc(m.order, func(l Link) bool { return !m.links[l] })
+}
+
+// linkArgs are a link's arguments, with which of them break the rules
+// whatever the state, as the generator made them.
+type linkArgs struct {
+	from, typ, to           string
+	badFrom, badType, badTo bool
+}
+
+// link returns the kind of error a link should give, and adds the link when
+// it should work and isn't there yet, which added reports. The checks come
+// in 0.x's order: the type, then from, then to.
+func (m *model) link(a linkArgs) (kind string, added bool) {
+	switch {
+	case a.badType, a.badFrom:
+		return "invalid", false
+	case m.records[a.from] == nil:
+		return "not found", false
+	case a.badTo:
+		return "invalid", false
+	case m.records[a.to] == nil:
+		return "not found", false
+	}
+	l := Link{a.from, a.typ, a.to}
+	if m.links[l] {
+		return "", false
+	}
+	m.links[l] = true
+	m.order = append(m.order, l)
+	return "", true
+}
+
+// unlink returns the kind of error an unlink should give, and the types of
+// the links it should take out, in byte order, which it takes out.
+func (m *model) unlink(from, typ, to string) (string, []string) {
+	var types []string
+	for l := range m.links {
+		if l.From == from && l.To == to && (typ == "" || l.Type == typ) {
+			types = append(types, l.Type)
+		}
+	}
+	if len(types) == 0 {
+		return "not found", nil
+	}
+	sort.Strings(types)
+	for _, typ := range types {
+		delete(m.links, Link{from, typ, to})
+	}
+	m.reorder()
+	return "", types
+}
+
+// neighbours returns the links Neighbours should give, in 0.x's order, and
+// the kind of error. The checks come in 0.x's order: the key, then the
+// direction.
+func (m *model) neighbours(key string, bad bool, dir Direction, typ string) ([]Link, string) {
+	switch {
+	case bad:
+		return nil, "invalid"
+	case m.records[key] == nil:
+		return nil, "not found"
+	case dir != Out && dir != In && dir != Both:
+		return nil, "invalid"
+	}
+	var out []Link
+	for l := range m.links {
+		if (typ == "" || l.Type == typ) && (dir != In && l.From == key || dir != Out && l.To == key) {
+			out = append(out, l)
+		}
+	}
+	// 0.x's orders: out by type and the key it's to, in by type and the
+	// key it's from, both ways by type, from and to. One key is the
+	// record's in the first two, so all three are by type, from and to.
+	slices.SortFunc(out, func(a, b Link) int {
+		return cmp.Or(strings.Compare(a.Type, b.Type), strings.Compare(a.From, b.From), strings.Compare(a.To, b.To))
+	})
+	return out, ""
+}
+
+// walk returns the steps Walk should give, and the kind of error. The
+// checks come in 0.x's order: the depth, the direction, then the key.
+func (m *model) walk(key string, bad bool, dir Direction, typ string, depth int) ([]Step, string) {
+	switch {
+	case depth < 1 || depth > 32:
+		return nil, "invalid"
+	case dir != Out && dir != In && dir != Both:
+		return nil, "invalid"
+	case bad:
+		return nil, "invalid"
+	case m.records[key] == nil:
+		return nil, "not found"
+	}
+	return referenceWalk(m.links, key, dir, typ, depth), ""
+}
+
+// referenceWalk is a walk written plainly, from a set of links alone: every
+// key within depth links of start, along links of the type typ, or of every
+// type when it's "", in the direction dir, with the fewest links it takes,
+// nearest first and then by key, and without start. It goes over every link
+// once for each depth, and a key gets depth d when a link reaches it from a
+// key at d-1 and it has no depth yet. It gives nil when nothing is in
+// reach, as 0.x does.
+func referenceWalk(links map[Link]bool, start string, dir Direction, typ string, depth int) []Step {
+	dist := map[string]int{start: 0}
+	reach := func(from, to string, d int) {
+		if at, ok := dist[from]; ok && at == d-1 {
+			if _, ok := dist[to]; !ok {
+				dist[to] = d
+			}
+		}
+	}
+	for d := 1; d <= depth; d++ {
+		for l := range links {
+			if typ != "" && l.Type != typ {
+				continue
+			}
+			if dir == Out || dir == Both {
+				reach(l.From, l.To, d)
+			}
+			if dir == In || dir == Both {
+				reach(l.To, l.From, d)
+			}
+		}
+	}
+	var steps []Step
+	for key, d := range dist {
+		if key != start {
+			steps = append(steps, Step{key, d})
+		}
+	}
+	slices.SortFunc(steps, func(a, b Step) int { return cmp.Or(cmp.Compare(a.Depth, b.Depth), strings.Compare(a.Key, b.Key)) })
+	return steps
+}
+
+// sortedLinks returns the model's links in byte order of the key each is
+// from, then type, then the key it's to.
+func (m *model) sortedLinks() []Link {
+	out := slices.Collect(maps.Keys(m.links))
+	slices.SortFunc(out, func(a, b Link) int {
+		return cmp.Or(strings.Compare(a.From, b.From), strings.Compare(a.Type, b.Type), strings.Compare(a.To, b.To))
+	})
+	return out
 }
 
 // scan returns the keys a scan gives: every key that starts with prefix
@@ -158,6 +322,10 @@ var (
 	idStarts    = []string{"", "", "", "1", "5", "a", "a ", "x", "x:", "\xc3", "é", "\xff", "zz"}
 	afters      = []string{"a", "docs", "docs;", "people:", "t_1:\xff", "zzz", "docs:\x00", "\xff"}
 	badPrefixes = []string{"", "docs", "nocolon", "Docs:", "hc_x:", "sqlite_x:1", ":", ":1", "a-b:", "1docs:"}
+	// Link types: case counts in them, they can hold any UTF-8 but a zero
+	// byte at the start, and they run to 200 characters.
+	linkTypes    = []string{"owns", "cites", "Owns", "x", "é", "a b", "a\x00b", strings.Repeat("ü", 200)}
+	badLinkTypes = []string{"", strings.Repeat("t", 201), "\xff", "\x00x"}
 )
 
 type gen struct {
@@ -245,6 +413,114 @@ func (g *gen) put() (string, []format.Field, bool) {
 	return key, fields, bad
 }
 
+// linkType returns a link type, and whether it breaks the rules.
+func (g *gen) linkType() (string, bool) {
+	if g.one(25) {
+		return pick(g, badLinkTypes), true
+	}
+	return pick(g, linkTypes), false
+}
+
+// readType returns a type for a read: "" for every type half the time, and
+// otherwise mostly a type one of the model's links has, and now and then one
+// that breaks the rules, which follows no links.
+func (g *gen) readType() string {
+	switch {
+	case g.one(2):
+		return ""
+	case len(g.m.links) > 0 && !g.one(3):
+		return pick(g, g.m.order).Type
+	}
+	typ, _ := g.linkType()
+	return typ
+}
+
+// direction returns a direction, and now and then a number that isn't one.
+func (g *gen) direction() Direction {
+	if g.one(15) {
+		return pick(g, []Direction{3, -1})
+	}
+	return Direction(g.r.IntN(3))
+}
+
+// depth returns a walk's depth, mostly 1 to 4, now and then the most, and
+// now and then one outside the rules.
+func (g *gen) depth() int {
+	switch {
+	case g.one(25):
+		return pick(g, []int{0, -1, MaxDepth + 1})
+	case g.one(10):
+		return MaxDepth
+	}
+	return 1 + g.r.IntN(4)
+}
+
+// held returns the key of a record the model holds, most of the time, and
+// otherwise a key as key gives one, and whether it breaks the rules.
+func (g *gen) held() (string, bool) {
+	if len(g.m.records) == 0 || g.one(4) {
+		return g.key()
+	}
+	keys := slices.Sorted(maps.Keys(g.m.records))
+	return pick(g, keys), false
+}
+
+// linked returns a key at one end of one of the model's links, most of the
+// time, and otherwise a key as held or key gives one, and whether it breaks
+// the rules.
+func (g *gen) linked() (string, bool) {
+	if g.one(10) {
+		return g.key()
+	}
+	if len(g.m.links) == 0 || g.one(4) {
+		return g.held()
+	}
+	l := pick(g, g.m.order)
+	if g.one(2) {
+		return l.From, false
+	}
+	return l.To, false
+}
+
+// link returns a link's arguments: two keys, either of which may break the
+// rules or have no record, though most are records the model holds, and a
+// type. A quarter of the links go from a record to itself, some join two
+// records the model links already, with another type, and some are links
+// the model has already.
+func (g *gen) link() linkArgs {
+	var a linkArgs
+	a.from, a.badFrom = g.held()
+	a.to, a.badTo = g.held()
+	a.typ, a.badType = g.linkType()
+	switch {
+	case g.one(4):
+		a.to, a.badTo = a.from, a.badFrom
+	case g.one(3) && len(g.m.links) > 0:
+		l := pick(g, g.m.order)
+		a.from, a.to, a.badFrom, a.badTo = l.From, l.To, false, false
+		if g.one(3) {
+			a.typ, a.badType = l.Type, false
+		}
+	}
+	return a
+}
+
+// unlinkArgs returns an unlink's arguments: mostly a link the model has,
+// with its type or with "" for every type, and otherwise any two keys and
+// any type.
+func (g *gen) unlinkArgs() (from, typ, to string) {
+	if len(g.m.links) > 0 && !g.one(4) {
+		l := pick(g, g.m.order)
+		if g.one(3) {
+			l.Type = ""
+		}
+		return l.From, l.Type, l.To
+	}
+	from, _ = g.key()
+	to, _ = g.key()
+	return from, g.readType(), to
+}
+
 // scanArgs returns a scan's prefix and after, and whether the prefix breaks
 // the rules. after is "" half the time, and otherwise a key, which may be
 // in another table or break the rules itself, a string inside the prefix,
@@ -325,13 +601,15 @@ func (l *liveScan) pull(t *testing.T, r Reader, m *model, outcomes map[string]in
 	return true
 }
 
-// TestTheModel runs random puts, gets, scans, deletes and drops on the
-// store and on the model, and checks that they agree on every answer, that
-// a write that fails changes nothing, and that every write's changes,
-// applied to a second store, give a copy of the first. A scan is pulled to
-// its end or stopped part of the way. Now and then a cursor stays open over
-// the steps that follow, and gives a record every few steps, which must be
-// the next in the model as the steps between have left it.
+// TestTheModel runs random puts, gets, scans, links, unlinks, reads of
+// links, walks, deletes and drops on the store and on the model, and checks
+// that they agree on every answer, that a write that fails changes nothing,
+// and that every write's changes, applied to a second store, give a copy of
+// the first. A scan is pulled to its end or stopped part of the way. Now and
+// then a cursor stays open over the steps that follow, and gives a record
+// every few steps, which must be the next in the model as the steps between
+// have left it. Deletes and drops take the links of their records both
+// ways, which the model does by looking at every link.
 func TestTheModel(t *testing.T) {
 	seeds, steps := 20, 4000
 	if testing.Short() {
@@ -344,7 +622,7 @@ func TestTheModel(t *testing.T) {
 
 func runModel(t *testing.T, seed uint64, steps int) {
 	s, replica := New(), New()
-	m := &model{tables: map[string]*modelTable{}, records: map[string]map[string]value.Value{}}
+	m := newModel()
 	g := &gen{r: rand.New(rand.NewPCG(seed, 0x51)), m: m}
 	var changes []format.Change
 	outcomes := map[string]int{}
@@ -366,7 +644,7 @@ func runModel(t *testing.T, seed uint64, steps int) {
 		var desc, want, got string
 		var err error
 		switch w := g.r.IntN(100); {
-		case w < 50:
+		case w < 34:
 			key, fields, bad := g.put()
 			given := slices.Clone(fields)
 			desc = fmt.Sprintf("put %q %v", key, fields)
@@ -379,7 +657,7 @@ func runModel(t *testing.T, seed uint64, steps int) {
 			if err == nil {
 				checkPutChanges(t, s, changes[before:], key, existed)
 			}
-		case w < 65:
+		case w < 42:
 			key, bad := g.key()
 			desc = "get " + key
 			r, err := s.Get(key)
@@ -393,7 +671,7 @@ func runModel(t *testing.T, seed uint64, steps int) {
 			if err == nil && want == "" {
 				compareRecord(t, s, m, r)
 			}
-		case w < 75:
+		case w < 49:
 			prefix, after, bad := g.scanArgs()
 			desc = fmt.Sprintf("scan %q %q", prefix, after)
 			var c Cursor
@@ -415,9 +693,80 @@ func runModel(t *testing.T, seed uint64, steps int) {
 				stop = g.r.IntN(4)
 			}
 			checkScan(t, s, m, c, desc, m.scan(prefix, after), stop)
-		case w < 95:
+		case w < 69:
+			a := g.link()
+			desc = fmt.Sprintf("link %q %q %q", a.from, a.typ, a.to)
+			changes, err = s.Link(changes, a.from, a.typ, a.to)
+			var added bool
+			want, added = m.link(a)
+			got = kindOf(err)
+			if err == nil && got == want {
+				var wantChanges []format.Change
+				if added {
+					wantChanges = []format.Change{{Op: format.Link, Key: a.from, Type: a.typ, To: a.to}}
+				} else {
+					outcomes["link already there"]++
+				}
+				if !slices.EqualFunc(changes[before:], wantChanges, equalChange) {
+					t.Fatalf("step %d: %s gave the changes %v", step, desc, changes[before:])
+				}
+			}
+		case w < 74:
+			from, typ, to := g.unlinkArgs()
+			desc = fmt.Sprintf("unlink %q %q %q", from, typ, to)
+			changes, err = s.Unlink(changes, from, typ, to)
+			var types []string
+			want, types = m.unlink(from, typ, to)
+			got = kindOf(err)
+			if err == nil && got == want {
+				var wantChanges []format.Change
+				for _, typ := range types {
+					wantChanges = append(wantChanges, format.Change{Op: format.Unlink, Key: from, Type: typ, To: to})
+				}
+				if !slices.EqualFunc(changes[before:], wantChanges, equalChange) {
+					t.Fatalf("step %d: %s gave the changes %v", step, desc, changes[before:])
+				}
+				if len(types) > 1 {
+					outcomes["unlink of several types"]++
+				}
+			}
+		case w < 80:
+			key, bad := g.linked()
+			dir, typ := g.direction(), g.readType()
+			desc = fmt.Sprintf("neighbours %q %v %q", key, dir, typ)
+			var links []Link
+			links, err = s.Neighbours(key, dir, typ)
+			wantLinks, kind := m.neighbours(key, bad, dir, typ)
+			want, got = kind, kindOf(err)
+			if err == nil && kind == "" && (!slices.Equal(links, wantLinks) || links != nil && len(links) == 0) {
+				t.Fatalf("step %d: %s gave %v, where the model gives %v", step, desc, links, wantLinks)
+			}
+			if len(links) > 0 {
+				outcomes["neighbours found some"]++
+			}
+		case w < 88:
+			key, bad := g.linked()
+			dir, typ, depth := g.direction(), g.readType(), g.depth()
+			if g.one(3) {
+				dir = Both
+			}
+			desc = fmt.Sprintf("walk %q %v %q %d", key, dir, typ, depth)
+			var steps []Step
+			steps, err = s.Walk(key, dir, typ, depth)
+			wantSteps, kind := m.walk(key, bad, dir, typ, depth)
+			want, got = kind, kindOf(err)
+			if err == nil && kind == "" && (!slices.Equal(steps, wantSteps) || steps != nil && len(steps) == 0) {
+				t.Fatalf("step %d: %s gave %v, where the model gives %v", step, desc, steps, wantSteps)
+			}
+			if len(steps) > 0 && steps[len(steps)-1].Depth > 1 {
+				outcomes["walk went further than one link"]++
+			}
+		case w < 97:
 			key, bad := g.key()
 			desc = "delete " + key
+			if linked(m, func(k string) bool { return k == key }) {
+				outcomes["delete with links"]++
+			}
 			changes, err = s.Delete(changes, key)
 			want, got = m.delete(key, bad), kindOf(err)
 			if err == nil && !slices.EqualFunc(changes[before:], []format.Change{{Op: format.Delete, Key: key}}, equalChange) {
@@ -425,10 +774,16 @@ func runModel(t *testing.T, seed uint64, steps int) {
 			}
 		default:
 			name, bad := pick(g, modelTables), false
-			if g.one(5) {
+			switch {
+			case g.one(5):
 				name, bad = pick(g, badTables), true
+			case g.one(8):
+				name = "nosuch"
 			}
 			desc = "drop " + name
+			if linked(m, func(k string) bool { return tableOfKey(k) == name }) {
+				outcomes["drop with links"]++
+			}
 			changes, err = s.Drop(changes, name)
 			want, got = m.drop(name, bad), kindOf(err)
 			if err == nil && !slices.EqualFunc(changes[before:], []format.Change{{Op: format.Drop, Table: name}}, equalChange) {
@@ -447,7 +802,10 @@ func runModel(t *testing.T, seed uint64, steps int) {
 				t.Fatalf("step %d: %s: the replica refused %v: %v", step, desc, c, err)
 			}
 		}
-		if err != nil || step%25 == 0 {
+		// A write that fails must have changed nothing. A read changes
+		// nothing anyway, so a failed one needs no look at the whole store.
+		read := slices.Contains([]string{"get", "scan", "neighbours", "walk"}, strings.Fields(desc)[0])
+		if err != nil && !read || step%25 == 0 {
 			compareAll(t, s, m)
 			if a, b := dump(s), dump(replica); a != b {
 				t.Fatalf("step %d, after %s, the replica differs:\nstore:\n%s\nreplica:\n%s", step, desc, a, b)
@@ -459,9 +817,11 @@ func runModel(t *testing.T, seed uint64, steps int) {
 	// Every kind of step has to come up, working and failing, or the test
 	// tests less than it says.
 	for _, o := range []string{"put ok", "put invalid", "get ok", "get invalid", "get not found", "scan ok", "scan invalid",
-		"live scan", "live scan moved", "live scan ended", "ended scan still ended", "delete ok", "delete invalid",
-		"delete not found", "drop ok", "drop invalid",
-		"drop not found"} {
+		"live scan", "live scan moved", "live scan ended", "ended scan still ended", "link ok", "link invalid",
+		"link not found", "link already there", "unlink ok", "unlink not found", "unlink of several types",
+		"neighbours ok", "neighbours invalid", "neighbours not found", "neighbours found some", "walk ok", "walk invalid",
+		"walk not found", "walk went further than one link", "delete ok", "delete invalid", "delete not found",
+		"delete with links", "drop ok", "drop invalid", "drop not found", "drop with links"} {
 		if outcomes[o] < steps/1000 {
 			t.Errorf("%q came up %d times in %d steps: %v", o, outcomes[o], steps, outcomes)
 		}
@@ -469,6 +829,17 @@ func runModel(t *testing.T, seed uint64, steps int) {
 	if testing.Verbose() && seed == 1 {
 		t.Logf("outcomes: %v", outcomes)
 	}
+}
+
+// linked reports whether the model has a link from or to a key that is
+// says yes to.
+func linked(m *model, is func(key string) bool) bool {
+	for l := range m.links {
+		if is(l.From) || is(l.To) {
+			return true
+		}
+	}
+	return false
 }
 
 // checkPutChanges checks the changes a put gave: a CreateTable with no
@@ -555,13 +926,30 @@ func compareAll(t *testing.T, s *Store, m *model) {
 		}
 		compareRecord(t, s, m, r)
 	}
+	// Every link the records hold out of them is the model's, and the model
+	// has no more. checkInvariants has checked that the links in mirror
+	// them.
+	n := 0
+	for key, r := range s.records {
+		for h := range r.out.ofType("") {
+			if l := (Link{key, h.typ.Value(), h.other.key}); !m.links[l] {
+				t.Fatalf("the store has the link %v, which the model hasn't", l)
+			}
+			n++
+		}
+	}
+	if n != len(m.links) {
+		t.Fatalf("the store holds %d links, and the model %d: %v", n, len(m.links), m.sortedLinks())
+	}
 }
 
 // checkInvariants checks what the store's layout promises: each table's
 // index and vector field agree with its list, and each record's fields
 // are in order of place, without nulls or the vector, inside its table's
 // list, and its vector has the table's size. Each table's keys hold its
-// records' keys, and only those, in blocks as checkOrder checks them.
+// records' keys, and only those, in blocks as checkOrder checks them. Each
+// record's links both ways are as checkLinks checks them, so each link has
+// its two halves, and every half points at a record in the store.
 func checkInvariants(t *testing.T, s *Store) {
 	t.Helper()
 	held := 0 // keys in the tables' orders
@@ -602,10 +990,42 @@ func checkInvariants(t *testing.T, s *Store) {
 		if r.vec != nil && len(r.vec) != tb.size {
 			t.Fatalf("record %s has a vector of %d values, in a table of size %d", key, len(r.vec), tb.size)
 		}
+		checkLinks(t, s, r, true)
+		checkLinks(t, s, r, false)
 	}
 	if held != len(s.records) {
 		t.Fatalf("the tables' keys hold %d keys, and the hash table %d records", held, len(s.records))
 	}
+}
+
+// checkLinks checks one of a record's lists, its links out when out is
+// true and its links in otherwise: the layout, as checkHalves checks it,
+// and each half. Its type keeps the rules, and is the handle the unique
+// package gives its text. It points at a record in the store, whose other
+// list holds the half's mirror, with the same handle. It returns how many
+// halves the list holds.
+func checkLinks(t *testing.T, s *Store, r *record, out bool) int {
+	l, way := &r.in, "in"
+	if out {
+		l, way = &r.out, "out"
+	}
+	count := len(checkHalves(t, r.key+"'s links "+way, l))
+	for h := range l.ofType("") {
+		if s.records[h.other.key] != h.other {
+			t.Fatalf("%s's links %s point at %s, which isn't in the store", r.key, way, h.other.key)
+		}
+		if rules.LinkType(h.typ.Value()) != nil || h.typ != makeType(h.typ.Value()) {
+			t.Fatalf("%s's links %s hold the type %q, as a handle of its own", r.key, way, h.typ.Value())
+		}
+		mirror := &h.other.out
+		if out {
+			mirror = &h.other.in
+		}
+		if m, ok := mirror.get(linkAt{h.typ.Value(), r.key}); !ok || m.other != r || m.typ != h.typ {
+			t.Fatalf("%s's links %s hold %q %s, and the other end hasn't got its half", r.key, way, h.typ.Value(), h.other.key)
+		}
+	}
+	return count
 }
 
 // checkOrder checks the layout of one table's keys: blocks of 1 to
@@ -658,16 +1078,59 @@ func dump(s *Store) string {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	// Each record's line is written by hand, without fmt, since the tests
+	// that compare stores write thousands of them: its key, each field's
+	// place and value, its vector's bits, and each of its links out and in
+	// as its type and the key at the other end, each after its length.
 	for _, key := range keys {
 		r := s.records[key]
-		fmt.Fprintf(&b, "%q:", key)
+		b.WriteString(strconv.Quote(key))
+		b.WriteByte(':')
 		for _, f := range r.fields {
-			fmt.Fprintf(&b, " %d=%v", f.Index, f.Value)
+			b.WriteByte(' ')
+			b.WriteString(strconv.Itoa(f.Index))
+			b.WriteByte('=')
+			dumpValue(&b, f.Value)
 		}
 		if r.vec != nil {
-			fmt.Fprintf(&b, " vec=%v", value.Vector(r.vec))
+			b.WriteString(" vec=")
+			for _, x := range r.vec {
+				b.WriteString(strconv.FormatUint(uint64(math.Float32bits(x)), 16))
+				b.WriteByte(',')
+			}
+		}
+		for _, l := range []*links{&r.out, &r.in} {
+			b.WriteString(" |")
+			for h := range l.ofType("") {
+				for _, x := range []string{h.typ.Value(), h.other.key} {
+					b.WriteString(strconv.Itoa(len(x)))
+					b.WriteByte(':')
+					b.WriteString(x)
+				}
+			}
 		}
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// dumpValue writes a value for dump: its kind's letter and its bits, so -0
+// and 0, or text and bytes, never look the same.
+func dumpValue(b *strings.Builder, v value.Value) {
+	switch v.Kind() {
+	case value.KindInt:
+		b.WriteByte('i')
+		b.WriteString(strconv.FormatInt(v.Int(), 10))
+	case value.KindReal:
+		b.WriteByte('r')
+		b.WriteString(strconv.FormatUint(math.Float64bits(v.Real()), 16))
+	case value.KindText:
+		b.WriteByte('t')
+		b.WriteString(strconv.Quote(v.Text()))
+	case value.KindBytes:
+		b.WriteByte('b')
+		b.WriteString(hex.EncodeToString([]byte(v.Raw())))
+	default:
+		b.WriteString(v.String())
+	}
 }

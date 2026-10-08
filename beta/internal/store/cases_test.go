@@ -283,7 +283,7 @@ func TestNewFieldsShowAtOnce(t *testing.T) {
 }
 
 // From TestRulesForLongKeysAndLinkTypes, without the inserts into 0.x's
-// link table. Links are S5's, which checks types with rules.LinkType.
+// link table.
 func TestRulesForLongKeysAndLinkTypes(t *testing.T) {
 	s := store.New()
 	ok(t, putGo(s, "docs:1", nil))
@@ -295,8 +295,13 @@ func TestRulesForLongKeysAndLinkTypes(t *testing.T) {
 		t.Fatalf("the store took a %d-byte key: %v", len(long), err)
 	}
 	ok(t, putGo(s, "docs:2", nil))
-	ok(t, rules.LinkType(strings.Repeat("ü", 150))) // 150 characters, 300 bytes
-	wantErr(t, rules.LinkType(strings.Repeat("ü", 201)), errs.ErrInvalid)
+	typ := strings.Repeat("ü", 150) // 150 characters, 300 bytes
+	must[[]format.Change](t)(s.Link(nil, "docs:1", typ, "docs:2"))
+	_, err := s.Link(nil, "docs:1", strings.Repeat("ü", 201), "docs:2")
+	wantErr(t, err, errs.ErrInvalid)
+	if l := must[[]store.Link](t)(s.Neighbours("docs:2", store.In, "")); len(l) != 1 || l[0].Type != typ {
+		t.Fatalf("docs:2 has the links %v", l)
+	}
 }
 
 // From TestTableNamesLikeHyperCruxsOwn: tables may be called anything,
@@ -311,10 +316,14 @@ func TestTableNamesLikeHyperCruxsOwn(t *testing.T) {
 		}
 		ok(t, putGo(s, tbl+":1", fields{"vec": []float32{1, 0}}))
 		ok(t, putGo(s, tbl+":2", fields{"vec": []float32{0, 1}}))
+		must[[]format.Change](t)(s.Link(nil, tbl+":1", "next", tbl+":2"))
 	}
 	for _, tbl := range []string{"keys", "links", "docs_vec", "docs"} {
 		_, err := s.Delete(nil, tbl+":2")
 		ok(t, err)
+		if l := must[[]store.Link](t)(s.Neighbours(tbl+":1", store.Both, "")); len(l) != 0 {
+			t.Errorf("%s: deleting a record left its link: %v", tbl, l)
+		}
 		if _, err := s.Put(nil, tbl+":1", []format.Field{{Name: "vec", Value: value.VectorBits(string(make([]byte, 8)))}}); !errors.Is(err, errs.ErrInvalid) {
 			t.Errorf("%s took a vector of zeros: %v", tbl, err)
 		}
@@ -370,16 +379,20 @@ func TestVectors(t *testing.T) {
 }
 
 // From TestDropAndAdoptAfterSchemaChanges, the part about Drop: a dropped
-// table's records and vector size go with it.
+// table's records, vector size and links go with it.
 func TestDropTable(t *testing.T) {
 	s := store.New()
 	ok(t, putGo(s, "customer:1", nil))
 	for _, k := range []string{"docs:1", "docs:2", "docs:3"} {
 		ok(t, putGo(s, k, fields{"title": k, "vec": []float32{1, 2, 3}}))
+		must[[]format.Change](t)(s.Link(nil, "customer:1", "owns", k))
 	}
 	changes := must[[]format.Change](t)(s.Drop(nil, "docs"))
 	if len(changes) != 1 || changes[0].Op != format.Drop || changes[0].Table != "docs" {
 		t.Fatalf("Drop gave %v", changes)
+	}
+	if l := must[[]store.Link](t)(s.Neighbours("customer:1", store.Out, "")); len(l) != 0 {
+		t.Fatalf("after Drop, customer:1 has the links %v", l)
 	}
 	for _, k := range []string{"docs:1", "docs:2", "docs:3"} {
 		_, err := s.Get(k)
@@ -664,6 +677,12 @@ func TestApplyRefuses(t *testing.T) {
 	s := store.New()
 	ok(t, s.Apply(format.Change{Op: format.CreateTable, Table: "docs", Size: 2, Names: []string{"title", "vec"}}))
 	ok(t, s.Apply(format.Change{Op: format.Put, Key: "docs:1", Fields: []format.Field{{Name: "title", Value: value.Text("a")}}}))
+	ok(t, s.Apply(format.Change{Op: format.Put, Key: "docs:3"}))
+	cites := format.Change{Op: format.Link, Key: "docs:1", Type: "cites", To: "docs:3"}
+	ok(t, s.Apply(cites))
+	link := func(op format.Op, from, typ, to string) format.Change {
+		return format.Change{Op: op, Key: from, Type: typ, To: to}
+	}
 	tooMany := make([]string, rules.FormatMaxFields+1)
 	for i := range tooMany {
 		tooMany[i] = "f" + strconv.Itoa(i)
@@ -699,8 +718,20 @@ func TestApplyRefuses(t *testing.T) {
 		{format.Change{Op: format.Delete, Key: "docs"}, errs.ErrInvalid},
 		{format.Change{Op: format.Drop, Table: "notes"}, errs.ErrNotFound},
 		{format.Change{Op: format.Drop, Table: "hc_x"}, errs.ErrInvalid},
-		{format.Change{Op: format.Link, Key: "docs:1", Type: "x", To: "docs:1"}, errors.ErrUnsupported},
-		{format.Change{Op: format.Unlink, Key: "docs:1", Type: "x", To: "docs:1"}, errors.ErrUnsupported},
+		{link(format.Link, "docs:1", "x", "docs:9"), errs.ErrNotFound},
+		{link(format.Link, "docs:9", "x", "docs:1"), errs.ErrNotFound},
+		{link(format.Link, "docs:1", "", "docs:3"), errs.ErrInvalid},
+		{link(format.Link, "docs:1", strings.Repeat("t", 201), "docs:3"), errs.ErrInvalid},
+		{link(format.Link, "docs:1", "\x00x", "docs:3"), errs.ErrInvalid},
+		{link(format.Link, "Docs:1", "x", "docs:3"), errs.ErrInvalid},
+		{link(format.Link, "docs:1", "x", "docs"), errs.ErrInvalid},
+		{cites, errs.ErrInvalid}, // there already
+		{link(format.Unlink, "docs:1", "x", "docs:3"), errs.ErrNotFound},
+		{link(format.Unlink, "docs:3", "cites", "docs:1"), errs.ErrNotFound},
+		{link(format.Unlink, "nosuch:1", "cites", "docs:3"), errs.ErrNotFound},
+		{link(format.Unlink, "docs:1", "", "docs:3"), errs.ErrInvalid},
+		{link(format.Unlink, "docs:1", "cites", "Docs:3"), errs.ErrInvalid},
+		{link(format.Unlink, "docs:1", "\xff", "docs:3"), errs.ErrInvalid},
 		{format.Change{}, errs.ErrInvalid},
 		{format.Change{Op: 99}, errs.ErrInvalid},
 	} {
@@ -717,6 +748,9 @@ func TestApplyRefuses(t *testing.T) {
 	}
 	if _, ok := s.Table("t"); ok {
 		t.Fatal("a create that failed made its table")
+	}
+	if l, err := s.Neighbours("docs:1", store.Both, ""); err != nil || !reflect.DeepEqual(l, []store.Link{{From: "docs:1", Type: "cites", To: "docs:3"}}) {
+		t.Fatalf("docs:1 has the links %v, %v", l, err)
 	}
 }
 
@@ -740,14 +774,10 @@ func TestTheStoreKeepsItsOwnStrings(t *testing.T) {
 	}
 }
 
-// TestWhatComesLater checks that the parts of Reader later tasks write say
-// so.
+// TestWhatComesLater checks that the part of Reader a later task writes
+// says so.
 func TestWhatComesLater(t *testing.T) {
 	s := store.New()
-	_, err := s.Neighbours("docs:1", store.Out, "")
-	wantErr(t, err, errors.ErrUnsupported)
-	_, err = s.Walk("docs:1", store.Out, "", 1)
-	wantErr(t, err, errors.ErrUnsupported)
-	_, err = s.Nearest("docs", []float32{1}, 1, nil)
+	_, err := s.Nearest("docs", []float32{1}, 1, nil)
 	wantErr(t, err, errors.ErrUnsupported)
 }

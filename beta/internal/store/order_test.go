@@ -318,6 +318,14 @@ func (w directWriter) Put(key string, fields []format.Field) error {
 func (w directWriter) Delete(key string) error     { _, err := w.s.Delete(nil, key); return err }
 func (w directWriter) Drop(name string) error      { _, err := w.s.Drop(nil, name); return err }
 func (w directWriter) Apply(c format.Change) error { return w.s.Apply(c) }
+func (w directWriter) Link(from, typ, to string) error {
+	_, err := w.s.Link(nil, from, typ, to)
+	return err
+}
+func (w directWriter) Unlink(from, typ, to string) error {
+	_, err := w.s.Unlink(nil, from, typ, to)
+	return err
+}
 
 func must[T any](v T, err error) T {
 	if err != nil {

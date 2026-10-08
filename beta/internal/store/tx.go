@@ -155,16 +155,17 @@ func (s *Store) changing(u undo) {
 // even when a panic cut its change short. A rollback walks the list newest
 // first, so each entry finds the store as its own change left it.
 //
-// S4 added the kinds for each table's keys. S5 and V1 add kinds for the
-// links both ways and the vector arrays.
+// S4 added the kinds for each table's keys, and S5 the kinds for the links.
+// V1 adds kinds for the vector arrays.
 type undo struct {
 	op     undoOp
 	name   string       // undoNoTable: the table's name; undoNoRecord: the key
 	table  *table       // undoHadTable, undoFields, undoSize, undoNoKey, undoHadKey
-	record *record      // undoHadRecord, undoRecord, undoNoKey, undoHadKey
+	record *record      // undoHadRecord, undoRecord, undoNoKey, undoHadKey, and the record whose list the links' kinds change
 	n      int          // undoFields: how many fields the table had; undoSize: its size
 	fields []FieldValue // undoRecord: the record's fields
 	vec    []float32    // undoRecord: the record's vector
+	half   half         // undoNoLink, undoHadLink: the link's type and the record it's to; undoHadOut, undoHadIn: the half
 }
 
 type undoOp uint8
@@ -179,13 +180,32 @@ const (
 	undoRecord                      // record held fields and vec
 	undoNoKey                       // table's keys didn't hold record's key
 	undoHadKey                      // table's keys held record's key, with record
+	undoNoLink                      // there was no link of half's type from record to half's record
+	undoHadLink                     // there was that link, with both its halves
+	undoHadOut                      // record's links out held half
+	undoHadIn                       // record's links in held half
 )
 
 // back puts back the state one entry records. Each table's keys are put
-// back by key, so a block that split or joined since needn't be put back as
-// it was: only which keys the table holds counts.
+// back by key, and each record's links by type and key, so a block that
+// split or joined since needn't be put back as it was: only which keys a
+// table holds counts, and which halves a list holds.
 func (s *Store) back(u undo) {
 	switch u.op {
+	case undoNoLink:
+		a, b := u.record, u.half.other
+		a.out.remove(linkAt{u.half.typ.Value(), b.key})
+		if plant != "store/link-undone-at-one-end" {
+			b.in.remove(linkAt{u.half.typ.Value(), a.key})
+		}
+	case undoHadLink:
+		a, b := u.record, u.half.other
+		a.out.insert(u.half)
+		b.in.insert(half{u.half.typ, a})
+	case undoHadOut:
+		u.record.out.insert(u.half)
+	case undoHadIn:
+		u.record.in.insert(u.half)
 	case undoNoTable:
 		delete(s.tables, u.name)
 		s.epoch++
@@ -362,6 +382,16 @@ func (tx *Tx) Delete(key string) error {
 // Drop is Store.Drop inside the transaction.
 func (tx *Tx) Drop(name string) error {
 	return tx.write(func(dst []format.Change) ([]format.Change, error) { return tx.s.dropTable(dst, name) })
+}
+
+// Link is Store.Link inside the transaction.
+func (tx *Tx) Link(from, typ, to string) error {
+	return tx.write(func(dst []format.Change) ([]format.Change, error) { return tx.s.linkKeys(dst, from, typ, to) })
+}
+
+// Unlink is Store.Unlink inside the transaction.
+func (tx *Tx) Unlink(from, typ, to string) error {
+	return tx.write(func(dst []format.Change) ([]format.Change, error) { return tx.s.unlinkKeys(dst, from, typ, to) })
 }
 
 // Apply is Store.Apply inside the transaction: one change of a change list,

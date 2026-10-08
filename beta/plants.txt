@@ -49,3 +49,12 @@ hypercrux/vector-shared ./beta/hypercrux
 logfile/cut-what-counts ./beta/internal/logfile
 logfile/sync-without-rewrite ./beta/internal/logfile
 logfile/no-marker-again ./beta/internal/logfile
+store/link-added-twice ./beta/internal/store
+store/unlink-one-end ./beta/internal/store
+store/unlink-types-reversed ./beta/internal/store
+store/links-in-kept ./beta/internal/store
+store/link-undone-at-one-end ./beta/internal/store
+store/both-not-merged ./beta/internal/store
+store/walk-unsorted ./beta/internal/store
+store/walk-start-included ./beta/internal/store
+store/snapshot-links-by-table ./beta/internal/store

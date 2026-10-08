@@ -57,6 +57,26 @@ import "os"
 //     in the blocks after a change, without finding its place again.
 //   - store/prefix-table-unchecked: Scan takes a prefix whose table name
 //     breaks the rules, such as Docs:, and gives no records.
+//   - store/link-added-twice: Link adds a link that's there already, with a
+//     second pair of halves and a second Link change.
+//   - store/unlink-one-end: Unlink takes a link out of the list of the
+//     record it's from, and leaves its half in the list of the record it's
+//     to.
+//   - store/unlink-types-reversed: Unlink with no type gives its Unlink
+//     changes in reverse byte order of type.
+//   - store/links-in-kept: a delete or a drop leaves the links that point
+//     into its records in the lists of the records they're from.
+//   - store/link-undone-at-one-end: undoing a link takes it out of the list
+//     of the record it's from only.
+//   - store/both-not-merged: Neighbours both ways gives the links out, then
+//     the links in, unmerged, with a link from the record to itself twice.
+//   - store/walk-unsorted: a walk gives each round's records in the order it
+//     found them, instead of by key.
+//   - store/walk-start-included: a walk gives the record it started from
+//     when a path leads back to it.
+//   - store/snapshot-links-by-table: the snapshot gives the links in byte
+//     order of their tables' names, users before users2, instead of the
+//     order of their keys.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "store/nulls-kept", "store/drop-keeps-records", "store/spelt-as-given", "store/size-unchecked",
@@ -65,7 +85,9 @@ var plant = func() string {
 		"store/applied-slices-shared", "store/snapshot-in-map-order", "store/snapshot-fields-unsorted",
 		"store/snapshot-no-vectors", "store/snapshot-size-left-out", "store/order-not-undone",
 		"store/delete-keeps-key", "store/join-out-of-order", "store/after-included",
-		"store/cursor-keeps-its-place", "store/prefix-table-unchecked":
+		"store/cursor-keeps-its-place", "store/prefix-table-unchecked", "store/link-added-twice",
+		"store/unlink-one-end", "store/unlink-types-reversed", "store/links-in-kept", "store/link-undone-at-one-end",
+		"store/both-not-merged", "store/walk-unsorted", "store/walk-start-included", "store/snapshot-links-by-table":
 		return p
 	}
 	return ""
