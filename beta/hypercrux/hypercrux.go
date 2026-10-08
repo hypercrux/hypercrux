@@ -10,8 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
+	"github.com/hypercrux/hypercrux/beta/internal/fsys"
+	"github.com/hypercrux/hypercrux/beta/internal/logfile"
+	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
 // Version is the version of the package and of the hypercrux command. The
@@ -87,6 +92,12 @@ func notYet(what, task string) error {
 // others commit.
 type DB struct {
 	path string
+	// mem is the in-memory copy, or nil once the database is closed, and in
+	// a DB that was never opened. The log's Reset puts a new one in its
+	// place (target), so a call loads it once and works on what it loaded.
+	mem atomic.Pointer[store.Store]
+	// log is the file, with the write lock.
+	log *logfile.Log
 }
 
 // Open opens the database at path, creating it if it doesn't exist, and
@@ -106,12 +117,32 @@ func Open(path string) (*DB, error) {
 	if path == ":memory:" || strings.HasPrefix(path, "file:") {
 		return nil, fmt.Errorf("%w: %s: HyperCrux needs a file name; for a throwaway database, use a file in a temporary folder", ErrInvalid, path)
 	}
-	return nil, notYet("Open", "G1")
+	return open(fsys.OS{}, path, logfile.Options{})
 }
 
 // Close closes the database. A call through it after that fails with an
-// error that wraps ErrClosed.
-func (db *DB) Close() error { return notYet("DB.Close", "G1") }
+// error that wraps ErrClosed, and closing it again does nothing. Close waits
+// for an Update under way in another goroutine to commit or roll back.
+// Inside an Update, Close fails at once with an error that wraps
+// ErrInsideUpdate, since it would wait for that Update.
+func (db *DB) Close() error {
+	s := db.mem.Load()
+	if s == nil {
+		return nil
+	}
+	if err := s.Outside(); err != nil {
+		return err
+	}
+	// The log's Close waits for the write lock's mutex, so for any Update
+	// under way, and once it has closed, every Update fails at the lock. So
+	// nothing reaches the copy through the log after this.
+	err := db.log.Close()
+	db.mem.Store(nil) // reads fail from now on, and the copy can go
+	if errors.Is(err, ErrClosed) {
+		return nil // another goroutine's Close got there first
+	}
+	return err
+}
 
 // Path returns the file name the database was opened with.
 func (db *DB) Path() string { return db.path }
@@ -128,7 +159,18 @@ func (db *DB) SQL() *sql.DB { return stubSQL() }
 // through it commits together or not at all. Once the function returns, a
 // call through it fails with an error that wraps ErrClosed.
 type Tx struct {
-	db *DB // the database the transaction is on
+	db   *DB       // the database the transaction is on
+	stx  *store.Tx // the copy's transaction, which holds the changes
+	done bool      // Update has returned
+}
+
+// open returns the copy's transaction, or an error that wraps ErrClosed
+// once Update has returned, and on a Tx that no Update made.
+func (t *Tx) open() (*store.Tx, error) {
+	if t.stx == nil || t.done {
+		return nil, fmt.Errorf("%w: a transaction used outside its Update", ErrClosed)
+	}
+	return t.stx, nil
 }
 
 // Update runs fn in one write transaction. If fn returns an error or
@@ -145,14 +187,63 @@ type Tx struct {
 // wait for fn if it's a write, or a read after fn's first change, so such a
 // call fails at once with an error that wraps ErrInsideUpdate. A call
 // through db from a goroutine that fn starts and then waits for can't be
-// caught that way, and hangs.
+// caught that way: a write waits for the write lock and fails once the
+// wait is over, and a read after fn's first change, or Close, hangs.
 //
 // An error from the commit itself means its outcome is unknown. The
 // database in memory goes back to how it was before fn, but a power cut
 // could still leave the commit in the file. If the file can't be put back,
 // every later write through db fails with an error that wraps ErrStuck,
 // until db is closed.
-func (db *DB) Update(fn func(tx *Tx) error) error { return notYet("DB.Update", "G1") }
+func (db *DB) Update(fn func(tx *Tx) error) (err error) {
+	s, err := db.current()
+	if err != nil {
+		return err
+	}
+	if err := s.Outside(); err != nil {
+		return err
+	}
+	// The write lock. Lock reads on to the end of the log first, so the
+	// copy holds every commit before fn runs, and a read in fn followed by
+	// a write can't lose another process's commit.
+	if err := db.log.Lock(); err != nil {
+		return err
+	}
+	defer func() {
+		// The lock goes last, after the copy's transaction has ended, and
+		// on a panic too.
+		if e := db.log.Unlock(); e != nil && err == nil {
+			err = fmt.Errorf("hypercrux: %s: letting go of the write lock after the Update failed: %w", db.path, e)
+		}
+	}()
+	// Lock may have put a new copy in place, when another file had taken
+	// the path, so the transaction begins on the copy there now.
+	stx, err := db.mem.Load().Begin()
+	if err != nil {
+		return err
+	}
+	defer stx.Rollback() // does nothing once Commit has ended it
+	tx := &Tx{db: db, stx: stx}
+	defer func() { tx.done = true }()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	// Commit hands the change list to Append with the copy still locked,
+	// so readers here see the changes only once they're in the file. When
+	// Append fails, Commit takes them back with the undo list. A transaction
+	// with no changes writes nothing.
+	return stx.Commit(db.write)
+}
+
+// write writes a commit's changes to the file, as Commit's write: the
+// batch, a sync and the marker.
+func (db *DB) write(changes []format.Change) error {
+	err := db.log.Append(changes)
+	if plant == "hypercrux/append-error-dropped" {
+		return nil
+	}
+	return err
+}
 
 // Compact rewrites the file with only the live data, which also takes
 // deleted data off the disk, as VACUUM does in 0.x. The database compacts

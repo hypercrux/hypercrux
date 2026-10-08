@@ -8,9 +8,6 @@ package hypercrux_test
 import (
 	"bytes"
 	"errors"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -27,24 +24,12 @@ func errOf[T any](_ T, err error) error { return err }
 // makes a call work takes its line out of this test.
 func TestTheStubsSayWhatsMissing(t *testing.T) {
 	db, tx := new(hc.DB), new(hc.Tx)
-	ran := false
 	q := hc.Vector{1, 0}
 	var out bytes.Buffer
-	path := filepath.Join(t.TempDir(), "test.db")
 	stubs := []struct {
 		name, task string
 		err        error
 	}{
-		{"Open", "G1", errOf(hc.Open(path))},
-		{"TableOf", "G1", errOf(hc.TableOf("docs:1"))},
-		{"DB.Close", "G1", db.Close()},
-		{"DB.Update", "G1", db.Update(func(*hc.Tx) error { ran = true; return nil })},
-		{"DB.Get", "G1", errOf(db.Get("docs:1"))},
-		{"Tx.Get", "G1", errOf(tx.Get("docs:1"))},
-		{"DB.Put", "G1", db.Put("docs:1", hc.Fields{"a": 1})},
-		{"Tx.Put", "G1", tx.Put("docs:1", hc.Fields{"a": 1})},
-		{"DB.Delete", "G1", db.Delete("docs:1")},
-		{"Tx.Delete", "G1", tx.Delete("docs:1")},
 		{"DB.Scan", "G2", errOf(db.Scan("docs:", "", 0))},
 		{"Tx.Scan", "G2", errOf(tx.Scan("docs:", "", 0))},
 		{"DB.Drop", "G2", db.Drop("docs")},
@@ -69,7 +54,6 @@ func TestTheStubsSayWhatsMissing(t *testing.T) {
 		{"SQL", "G4", tx.QueryRow("SELECT ?", 1).Scan(new(int))},
 		{"SQL", "G4", db.SQL().Ping()},
 		{"SQL", "G4", errOf(db.SQL().Begin())},
-		{"DB.Check", "G7", errOf(db.Check())},
 		{"DB.Export", "G6", db.Export(&out)},
 		{"DB.Import", "G6", db.Import(strings.NewReader(""))},
 		{"DB.Compact", "G5", db.Compact()},
@@ -85,14 +69,8 @@ func TestTheStubsSayWhatsMissing(t *testing.T) {
 			t.Errorf("%s: %q, want %q", s.name, s.err, want)
 		}
 	}
-	if ran {
-		t.Error("Update ran its function")
-	}
 	if out.Len() != 0 {
 		t.Errorf("Export wrote %q", out.String())
-	}
-	if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("Open left something at its path: %v", err)
 	}
 	if db.Path() != "" {
 		t.Errorf("a DB that was never opened has the path %q", db.Path())

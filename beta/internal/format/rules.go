@@ -20,6 +20,14 @@ import (
 // problem, so they refuse the same ones, with the same words. The rules
 // that depend on the state, such as a put going into a table that exists,
 // or a vector having its table's size, are the store's.
+//
+// The checks on names and values here are the codec's own code, written
+// from FORMAT.md. The store and the public package check the same things
+// with beta/internal/rules, 0.x's rules with 0.x's words. rules_test.go
+// holds the two to refusing exactly the same names, keys, link types and
+// values (G1), so neither can change without the other: a change here is
+// a change to what a file may hold, which FORMAT.md and its version have
+// to follow.
 
 // FORMAT.md's limits.
 const (

@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+
+	"github.com/hypercrux/hypercrux/beta/internal/rules"
 )
 
 // Vector is a record's vector, such as an embedding of its text. It's the
@@ -20,7 +22,7 @@ import (
 type Vector []float32
 
 // MaxDims is the largest vector HyperCrux accepts.
-const MaxDims = 65536
+const MaxDims = rules.MaxDims
 
 // Value gives the vector to SQL as a blob, so a Vector can be passed
 // straight to Query or Exec, as in distance(vec, ?).
@@ -63,7 +65,7 @@ func ParseVector(s string) (Vector, error) {
 	for i, x := range f {
 		v[i] = float32(x)
 	}
-	return v, checkVector(v)
+	return v, rules.Vector(v)
 }
 
 // String returns the vector as a JSON array, or "" when a value isn't
@@ -71,29 +73,6 @@ func ParseVector(s string) (Vector, error) {
 func (v Vector) String() string {
 	b, _ := json.Marshal([]float32(v))
 	return string(b)
-}
-
-// checkVector refuses empty, oversized, all-zero and non-finite vectors.
-// It's 0.x's rule, for ParseVector, until G1 points ParseVector at the
-// store's rules (S1), which are then the only copy.
-func checkVector(v Vector) error {
-	if len(v) == 0 || len(v) > MaxDims {
-		return fmt.Errorf("%w: a vector has 1 to %d values, not %d", ErrInvalid, MaxDims, len(v))
-	}
-	zero := true
-	for i, x := range v {
-		f := float64(x)
-		if math.IsNaN(f) || math.IsInf(f, 0) {
-			return fmt.Errorf("%w: vector value %d is %v", ErrInvalid, i, x)
-		}
-		if x != 0 {
-			zero = false
-		}
-	}
-	if zero {
-		return fmt.Errorf("%w: a vector of only zeros has no direction to compare", ErrInvalid)
-	}
-	return nil
 }
 
 // Hit is one result of Nearest.

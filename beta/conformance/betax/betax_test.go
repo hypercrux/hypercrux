@@ -19,12 +19,8 @@ import (
 func TestMain(m *testing.M) { conformance.Main(m, Engine{}) }
 
 // TestConformance runs the whole suite on the Beta, which must pass it as
-// 0.x does. The Beta's package is stubs until task G1, so G1 takes out the
-// skip, and names in Skip the tests that wait for later tasks.
-func TestConformance(t *testing.T) {
-	t.Skip("the Beta's package is stubs until task G1, which makes Open, Update, Put, Get and Delete work and switches this test on")
-	conformance.Run(t, Engine{})
-}
+// 0.x does, apart from the tests Skip names, which wait for later tasks.
+func TestConformance(t *testing.T) { conformance.Run(t, Engine{}) }
 
 // TestTheAdapterReachesTheBeta checks what the adapter hands the suite,
 // without running it: the Beta's errors, which are errs' values, its

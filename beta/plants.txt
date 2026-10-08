@@ -42,3 +42,7 @@ store/join-out-of-order ./beta/internal/store
 store/after-included ./beta/internal/store
 store/cursor-keeps-its-place ./beta/internal/store
 store/prefix-table-unchecked ./beta/internal/store
+hypercrux/append-error-dropped ./beta/hypercrux
+hypercrux/reset-kept ./beta/hypercrux
+hypercrux/load-after-open ./beta/hypercrux
+hypercrux/vector-shared ./beta/hypercrux
