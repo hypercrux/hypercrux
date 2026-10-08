@@ -149,3 +149,15 @@ query/date-now-in-its-zone ./beta/internal/query
 query/date-seconds-rounded ./beta/internal/query
 query/date-limit-inclusive ./beta/internal/query
 query/date-checked-as-compiled ./beta/internal/query
+query/sort-unstable ./beta/internal/query
+query/sort-nulls-last ./beta/internal/query
+query/top-k-later-tie-wins ./beta/internal/query
+query/top-k-works-out-every-row ./beta/internal/query
+query/limit-counts-offset ./beta/internal/query
+query/offset-after-zero-limit ./beta/internal/query
+query/sum-uncompensated ./beta/internal/query
+query/sum-in-reverse ./beta/internal/query
+query/sum-text-as-real ./beta/internal/query
+query/sum-wraps ./beta/internal/query
+query/max-later-tie-wins ./beta/internal/query
+query/aggregates-as-compiled ./beta/internal/query
