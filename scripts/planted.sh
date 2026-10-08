@@ -4,7 +4,8 @@
 #
 # Switches on each bug planted in the Beta's code, one at a time, and runs
 # the tests that should catch it. beta/plants.txt lists them. Every bug has
-# to make its tests fail; one that doesn't is a gap in the tests.
+# to make its tests fail; one that doesn't is a gap in the tests. Each run
+# stops at the first test that fails, since one failure is all it needs.
 #
 #   sh scripts/planted.sh
 set -u
@@ -27,7 +28,7 @@ total=0
 echo "$plants" | {
 	while read -r name pkgs; do
 		total=$((total + 1))
-		if HYPERCRUX_PLANT="$name" go test -tags hypercrux_planted -count=1 $pkgs >"$log" 2>&1; then
+		if HYPERCRUX_PLANT="$name" go test -tags hypercrux_planted -count=1 -failfast $pkgs >"$log" 2>&1; then
 			echo "MISSED $name: the tests in $pkgs pass with it planted"
 			missed=$((missed + 1))
 		else

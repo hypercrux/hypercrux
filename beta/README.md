@@ -62,15 +62,26 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   log on opening, commits under the write lock, a mutex then `flock`, each
   with its batch, a sync and its marker, and the check of the end of the
   log, which writes again and marks a batch whose writer died before marking
-  it, and cuts off what a crash left half written.
+  it, and cuts off what a crash left half written. Before anything is cut or
+  written again, it looks past the end of the log for damage, which it
+  reports after a read holding the lock, cutting nothing. Damaged files for
+  each kind are in its `testdata/damaged`.
+- `internal/procs/`: the many-process harness. It runs writer and reader
+  processes on one database, copies of the test binary, kills them with
+  SIGKILL at random moments and starts new ones in their place. Then it
+  checks that every reader saw every commit once and in order, and that the
+  file holds every commit a writer saw succeed, with a commit under way at a
+  kill there whole or not at all. Its tests run a toy log with a planted
+  bug, and the real log with readers that open the file afresh.
 - `internal/query/`: SQL. For now, the operator iterator, `Rows`.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
-- `internal/store/`: the in-memory copy, with its read API, `Reader`. So
-  far it holds the records with their fields, each table's field list, and
-  each table's keys in byte order, which `Scan` reads through a `Cursor`.
-  Its writes give the change lists the log writes, `ApplyBatch` and
+- `internal/store/`: the in-memory copy, with its read API, `Reader`. It
+  holds the records with their fields, each table's field list, each table's
+  keys in byte order, which `Scan` reads through a `Cursor`, and each
+  record's links both ways, which `Neighbours` reads and `Walk` follows. Its
+  writes give the change lists the log writes, `ApplyBatch` and
   `LoadBatch` take a batch the log has read whole or not at all, and
   `Snapshot` gives the copy as a compacted part. Reads share it through
   `Read`, and writes go through a transaction from `Begin`, which holds
@@ -109,6 +120,7 @@ sh scripts/check-beta.sh     # the rules for this folder, and the board against 
 sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
 sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
 HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds
+HYPERCRUX_PROCS_TIME=10m go test ./beta/internal/procs   # many processes for 10 minutes a run
 ```
 
 ## CI

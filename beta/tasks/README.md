@@ -54,18 +54,18 @@ work in, and all 133 hours are done after R4.
 | 14 | S2 Transactions | 3 | done, [S2.md](S2.md), with F2 and T1 |
 | 15 | S3 Change lists | 2 | done, [S3.md](S3.md), with T2 and T3 |
 | 16 | S4 Key order and `Scan` | 3 | done, [S4.md](S4.md), with G1 and F3 |
-| 17 | S5 Links and walks | 4 | next, [S5.md](S5.md) |
-| 18 | V1 Vector arrays and `Nearest` | 4 | |
-| 19 | T5 Benchmarks | 2 | |
+| 17 | S5 Links and walks | 4 | done, [S5.md](S5.md), with T4 and F4 |
+| 18 | V1 Vector arrays and `Nearest` | 4 | next, [V1.md](V1.md) |
+| 19 | T5 Benchmarks | 2 | next, [T5.md](T5.md) |
 | 20 | G1 Slice 1: `Put` and `Get` | 2 | done, [G1.md](G1.md) |
 | 21 | G2 Slice 2, the first working version | 2 | |
 | 22 | T1 Fault layer for data | 3 | done, [T1.md](T1.md) |
 | 23 | T2 Fault layer for names | 2 | done, [T2.md](T2.md) |
 | 24 | T3 Crash-point driver | 3 | done, [T3.md](T3.md) |
-| 25 | T4 Many-process harness | 3 | next, [T4.md](T4.md) |
+| 25 | T4 Many-process harness | 3 | done, [T4.md](T4.md) |
 | 26 | F3 Crash recovery | 4 | done, [F3.md](F3.md) |
-| 27 | F4 Damage | 2 | next, [F4.md](F4.md) |
-| 28 | F5 Failed commits | 2 | |
+| 27 | F4 Damage | 2 | done, [F4.md](F4.md) |
+| 28 | F5 Failed commits | 2 | next, [F5.md](F5.md) |
 | 29 | F6 Following other processes | 3 | |
 | 30 | F8 Compaction | 3 | |
 | 31 | F9 Reloading | 2 | |
@@ -88,7 +88,7 @@ work in, and all 133 hours are done after R4.
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
 
-Hours done so far: 57 of 133. The five early tasks, P1 to P5, S1 to S4, F1 to F3, G1 and T1 to T3 are done. The next round is S5, T4 and F4. V1 waits for S5, since both work in the store. T5 can run beside V1 in the round after, with its recorded run made once the other agents have finished, since its timings need the machine to itself. G2, the first working version, can follow in the round after that.
+Hours done so far: 66 of 133. The five early tasks, P1 to P5, S1 to S5, F1 to F4, G1 and T1 to T4 are done. The next round is V1, T5 and F5. T5's agent writes the benchmarks and checks them with short runs; the coordinator makes the recorded run once the round is merged and nothing else is running, since timings need the machine to itself. G2, the first working version, can follow in the round after, beside F6.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.

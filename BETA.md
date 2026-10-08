@@ -301,7 +301,8 @@ check before it cuts anything. Nothing is cut without the write lock.
 Opening a database reads every marked batch, checking each checksum on the
 way, and only then tries the write lock, without waiting. If it gets the
 lock, it runs the check above. If not, whoever holds the lock runs the check
-before appending anything.
+before appending anything, and opening still looks past the end of the log,
+waiting for the lock only to read again what looks like damage.
 
 A marked batch whose checksum fails can't come from a crash, since the
 marker follows the sync. It's damage, or a read that raced a failed commit's

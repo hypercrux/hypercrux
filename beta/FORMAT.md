@@ -349,15 +349,20 @@ What lies past the end of the log can change while a writer is at work: a
 marker can appear behind a batch that was half written a moment earlier,
 and a failed commit's batch can be cut and another written in its place. So
 before it reports damage, a reader takes the write lock, waiting for it as a
-writer does, and reads the file again while nothing can change it.
+writer does, and reads the file again while nothing can change it. A reader
+treats a batch that counts followed by a whole marker naming another batch
+the same way. Holding the lock, it checks the end of the log as below, as
+when it gets the lock at once. If another file has taken the path by then,
+it reads that one afresh. If the wait runs out, it reports a timeout, since
+nothing has confirmed the damage.
 
 ## Checking the end of the log
 
 Nothing is cut, and nothing is written again in place, without the write
 lock. Its holder checks the end of the log before it appends anything; so
-does opening, when it gets the lock without waiting, and so does a reader
-that finds it can take the lock, because the writer is gone. The check, in
-this order:
+does opening once it holds the lock, whether it got it at once or waited for
+it to read again what looked like damage, and so does a reader that finds it
+can take the lock, because the writer is gone. The check, in this order:
 
 1. Looks past the end of the log for damage, as above: a whole marker
    naming the next sequence number or a later one, or in a compacted file a
