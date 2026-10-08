@@ -34,10 +34,17 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   stubs that name the task that makes them work.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
+- `internal/crash/`: the crash-point driver. It runs a workload of commits
+  on the fault layer's disk with the power cut in every write, with every
+  call failing, and with copies of the file taken mid-commit, and checks
+  after each that the database opens at the last commit that succeeded or
+  the one under way. Its tests drive a toy log with a planted bug.
 - `internal/fault/`: the crash tests' fault layer, a disk held in memory
   behind `fsys.FS` and `fsys.File`. A simulated power cut keeps, loses or
-  tears each sector written since the last sync, any call can be made to
-  fail at its nth use, and a seed decides every choice.
+  tears each sector written since the last sync, and keeps the changes to
+  names made since their folder's last sync in call order up to a point, as
+  ext4's journal does. Any call can be made to fail at its nth use, and a
+  seed decides every choice.
 - `internal/format/`: the change list, `Change`, which the format's batches
   carry, and the format's golden fixtures in `internal/format/testdata`,
   annotated hex for each part of the format and two small databases, with
@@ -54,8 +61,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
 - `internal/store/`: the in-memory copy, with its read API, `Reader`. So
-  far it holds the records with their fields and each table's field list,
-  and its writes give the changes they amount to. Reads share it through
+  far it holds the records with their fields and each table's field list.
+  Its writes give the change lists the log writes, `ApplyBatch` and
+  `LoadBatch` take a batch the log has read whole or not at all, and
+  `Snapshot` gives the copy as a compacted part. Reads share it through
   `Read`, and writes go through a transaction from `Begin`, which holds
   readers off from its first change until it ends, and puts the copy back
   with its undo list when it rolls back.
@@ -91,6 +100,7 @@ HYPERCRUX_DIFF_SEQUENCES=50000 go test -run TestZeroxAgainstItself ./beta/diffte
 sh scripts/check-beta.sh     # the rules for this folder, and the board against BETA.md
 sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
 sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
+HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds
 ```
 
 ## CI
