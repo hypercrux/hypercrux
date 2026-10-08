@@ -16,7 +16,8 @@ import (
 // their kinds" has it, since it wraps neither errs.ErrNotFound nor
 // errs.ErrInvalid. Where SQLite has a message for the same mistake, Msg is
 // SQLite's, such as `near "SELEC": syntax error`; a statement outside the
-// subset says what isn't taken.
+// subset says what isn't taken. The evaluator's errors are Errors too, with
+// SQLite's messages, such as "integer overflow" (eval.go).
 type Error struct {
 	Pos int    // the byte in the text where the trouble starts
 	Msg string // what's wrong

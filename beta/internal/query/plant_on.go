@@ -35,12 +35,51 @@ import "os"
 //     parses as IS NOT.
 //   - query/slash-star-comment: a /* that ends the text is taken as a
 //     comment, where SQLite reads a slash and a star.
+//
+// The evaluator's (Q1):
+//
+//   - query/real-text-shortest: a real's text is Go's shortest form, so
+//     5e-324 gives 5e-324 where SQLite writes 4.9406564584124654e-324.
+//   - query/text-reads-as-number: a comparison without affinity turns text
+//     into a number, so '1' = 1 is true.
+//   - query/plus-keeps-affinity: a plus sign keeps its operand's affinity,
+//     so +CAST(5 AS INTEGER) = '5' is true.
+//   - query/in-takes-item-affinity: IN takes its first item's affinity as
+//     well as x's, so 5 IN (CAST('5' AS TEXT), 6) is true.
+//   - query/in-list-stops-early: a list of three constant items or more is
+//     worked out one item at a time after x, so 1 IN (1, 2, E) stops
+//     before E, where SQLite works out every item first.
+//   - query/in-record-is-a-list: x IN ((SELECT ...)) is a list of one
+//     item, so no record gives NULL where SQLite's empty set gives 0.
+//   - query/and-or-sees-signs: AND and OR settle on a literal with a sign
+//     in front of it, so -0 AND E skips E.
+//   - query/minus-zero-lost: a minus sign in front of a literal works as
+//     0 - x, so -0.0 is 0.0.
+//   - query/div-rounds-down: integer division rounds down, so -7 / 2 is
+//     -4.
+//   - query/nan-kept: arithmetic keeps a NaN, so 1e999 - 1e999 isn't
+//     NULL.
+//   - query/min-keeps-earliest: min() keeps the earliest of tied
+//     arguments, so min(1, 1.0) is 1.
+//   - query/substr-zero-is-one: substr()'s position 0 counts as 1, so
+//     substr('abc', 0, 2) is 'ab'.
+//   - query/like-folds-unicode: LIKE folds the case of bytes above ASCII,
+//     so 'é' LIKE 'É' matches.
+//   - query/where-or-works-out-both: a condition's OR works out its second
+//     side when the first is true.
+//   - query/time-in-utc: a time.Time argument is written in UTC, where
+//     go-sqlite3 keeps the time's own zone.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "query/and-or-one-level", "query/between-takes-comparisons", "query/sign-takes-operators",
 		"query/plus-kept", "query/left-as-alias", "query/params-from-one", "query/text-without-comments",
 		"query/aggregate-in-where", "query/record-key-takes-or", "query/is-not-printed-bare",
-		"query/slash-star-comment":
+		"query/slash-star-comment",
+		"query/real-text-shortest", "query/text-reads-as-number", "query/plus-keeps-affinity",
+		"query/in-takes-item-affinity", "query/in-list-stops-early", "query/in-record-is-a-list",
+		"query/and-or-sees-signs", "query/minus-zero-lost", "query/div-rounds-down", "query/nan-kept",
+		"query/min-keeps-earliest", "query/substr-zero-is-one", "query/like-folds-unicode",
+		"query/where-or-works-out-both", "query/time-in-utc":
 		return p
 	}
 	return ""

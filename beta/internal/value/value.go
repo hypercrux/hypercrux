@@ -175,8 +175,7 @@ func (v Value) Vector() []float32 {
 	return v.AppendVector(make([]float32, 0, len(v.s)/4))
 }
 
-// AppendVector appends a vector's values to dst and returns the result,
-// as V1 does to put a vector into its table's array.
+// AppendVector appends a vector's values to dst and returns the result.
 func (v Value) AppendVector(dst []float32) []float32 {
 	v.must(KindVector, "AppendVector")
 	s := v.s
