@@ -8,6 +8,7 @@ package query
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
@@ -20,9 +21,10 @@ import (
 // statement gives.
 //
 // Fields, the one-record subquery, walks and the functions that read the
-// store or the clock come from the statement's sources, so the planner
-// hands the compiler a Scope for them (Q4, Q5). An expression with none of
-// them compiles with a nil Scope.
+// store come from the statement's sources, so the planner hands the
+// compiler a Scope for them (Q4, Q5). An expression with none of them
+// compiles with a nil Scope. date() and datetime() read the statement's
+// moment from the Frame (date.go).
 
 // Frame is what a compiled expression reads as it's worked out.
 type Frame struct {
@@ -33,6 +35,14 @@ type Frame struct {
 	// Row is the row being worked on, in the planner's own form. Only the
 	// Evals a Scope gives read it.
 	Row any
+	// Now is the statement's moment, which 'now' in date() and datetime()
+	// stands for. Whoever runs the statement reads it once, with time.Now,
+	// before the first row, and every row gets the same one (SQL.md,
+	// "Dates"). Dates are in UTC, so its zone doesn't count, and only whole
+	// milliseconds do, as in SQLite's clock. The zero time, the first moment
+	// of year 1, which no clock gives, stands for no moment, and a date on
+	// it is an error.
+	Now time.Time
 }
 
 // Eval works out a compiled expression for the row in f. It may be called
@@ -68,8 +78,8 @@ type Scope interface {
 	// each statement too.
 	Walk(w *Walk, args []Eval) (func(f *Frame) ([]value.Value, error), error)
 	// Call returns what works out a call the evaluator leaves to others:
-	// walk(), date() and datetime(), and the aggregates, given what works
-	// out the call's arguments.
+	// walk() and the aggregates, given what works out the call's
+	// arguments.
 	Call(c *Call, args []Eval) (Eval, error)
 }
 
@@ -89,7 +99,13 @@ func (e *FuncError) Error() string { return "hypercrux: " + e.Msg }
 // s for its names and subqueries. Other errors, raised as the Eval runs,
 // are *Error, as SQLite raises them: "integer overflow" from abs(), LIKE's
 // errors, and "string or blob too big". Each is of kind "error".
+//
+// A date() or datetime() anywhere in e that the subset doesn't take is
+// refused first, in the parts the compiler leaves out too (checkDates).
 func Compile(e Expr, s Scope) (Eval, error) {
+	if err := checkDates(e); err != nil {
+		return nil, err
+	}
 	return newCompiler(e, s).expr(e)
 }
 
@@ -98,8 +114,11 @@ func Compile(e Expr, s Scope) (Eval, error) {
 // false or NULL, OR at the first that's true, and NOT, BETWEEN and the
 // comparisons go the same way inside them, so a part that can't change
 // the answer isn't worked out. How a WHERE is split into conditions, and
-// their order, is the planner's.
+// their order, is the planner's. Dates are refused first, as in Compile.
 func CompileCondition(e Expr, s Scope) (Cond, error) {
+	if err := checkDates(e); err != nil {
+		return nil, err
+	}
 	j, err := newCompiler(e, s).ifFalse(e, true)
 	if err != nil {
 		return nil, err

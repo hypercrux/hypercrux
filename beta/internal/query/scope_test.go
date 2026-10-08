@@ -9,6 +9,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
@@ -170,7 +171,6 @@ func TestWithoutAScope(t *testing.T) {
 		{"(SELECT n FROM docs WHERE key = 'docs:1')", "no such table: docs"},
 		{"'docs:1' IN (SELECT key FROM walk('docs:1', 1))", "no such table: walk"},
 		{"walk('docs:1', 1)", "walk() needs the statement's planner"},
-		{"date('now')", "date() needs the statement's planner"},
 		{"count(*)", "count() needs the statement's planner"},
 		{"max(n)", "no such column: n"},
 		{"max(1)", "max() needs the statement's planner"},
@@ -191,11 +191,12 @@ func TestWithoutAScope(t *testing.T) {
 func TestCallsGoToTheScope(t *testing.T) {
 	s := &fakeScope{}
 	ev := compileWith(t, "date('now') || walk('docs:1', 2) || count(*) || sum(n) || min(n) || datetime('now')", s)
-	v, err := ev(&Frame{Row: fakeRow{}})
-	if err != nil || v != value.Text("date()walk()count()sum()min()datetime()") {
+	// The evaluator works out the dates itself (Q2), from the Frame's moment.
+	v, err := ev(&Frame{Row: fakeRow{}, Now: time.Date(2026, 10, 8, 9, 5, 7, 0, time.UTC)})
+	if err != nil || v != value.Text("2026-10-08walk()count()sum()min()2026-10-08 09:05:07") {
 		t.Errorf("got %s, %v", v, err)
 	}
-	if got := strings.Join(s.log, " "); got != "date walk count sum min datetime" {
+	if got := strings.Join(s.log, " "); got != "walk count sum min" {
 		t.Errorf("worked out %s", got)
 	}
 }
@@ -224,21 +225,21 @@ func TestWhatASubqueryWaitsFor(t *testing.T) {
 		{sub + " OR (1 = 1)", 1, ""},
 		{"(1 = 1) AND " + sub, 1, "record text \"docs:1\""},
 		{sub + " AND 0", 0, ""},
-		{"date('now') = " + sub, 0, "date record text \"docs:1\""},
-		{sub + " = date('now')", 0, "date record text \"docs:1\""},
+		{"walk('docs:1', 2) = " + sub, 0, "walk record text \"docs:1\""},
+		{sub + " = walk('docs:1', 2)", 0, "walk record text \"docs:1\""},
 		{"'docs:2' IN " + walk, 1, "walk"},
 		{"'docs:9' NOT IN " + walk, 1, "walk"},
 		{"NULL IN " + walk, nil, "walk"},
 		{"NULL IN (SELECT key FROM walk('docs:9', 1))", 0, "walk"},
 		{"2 IN " + walk, 0, "walk"},
 		{"CAST('docs:2' AS BLOB) IN " + walk, 0, "walk"},
-		{"date('now') IN " + walk, 0, "walk date"},
+		{"walk('docs:1', 2) IN " + walk, 0, "walk walk"},
 		{"NULL + ('docs:2' IN " + walk + ")", nil, ""},
 		{sub + " IN (1, 3, 5)", 1, "record text \"docs:1\""},
-		{"3 IN (" + sub + ", date('now'))", 1, "record text \"docs:1\""},
+		{"3 IN (" + sub + ", walk('docs:1', 2))", 1, "record text \"docs:1\""},
 		// SQLite's parser makes x IN ((SELECT ...)) IN over the subquery:
 		// the subquery first, and no record is an empty set.
-		{"date('now') IN (" + sub + ")", 0, "record text \"docs:1\" date"},
+		{"walk('docs:1', 2) IN (" + sub + ")", 0, "record text \"docs:1\" walk"},
 		{"NULL IN ((SELECT n FROM docs WHERE key = 'docs:9'))", 0, "record text \"docs:9\""},
 		{"NULL NOT IN ((SELECT n FROM docs WHERE key = 'docs:9'))", 1, "record text \"docs:9\""},
 		{"NULL IN (" + sub + ")", nil, "record text \"docs:1\""},

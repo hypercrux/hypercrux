@@ -22,6 +22,9 @@ import (
 // number of arguments.
 func (c *compiler) call(e *Call) (Eval, error) {
 	name := e.Func()
+	if isDateCall(e) {
+		return compileDate(e) // date.go
+	}
 	args := make([]Eval, len(e.Args))
 	for i, a := range e.Args {
 		var err error
@@ -30,7 +33,7 @@ func (c *compiler) call(e *Call) (Eval, error) {
 		}
 	}
 	switch {
-	case e.Aggregate(), name == "walk", name == "date", name == "datetime":
+	case e.Aggregate(), name == "walk":
 		if c.scope == nil {
 			return nil, fail(e, "%s() needs the statement's planner", name)
 		}

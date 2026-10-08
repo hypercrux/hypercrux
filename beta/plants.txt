@@ -142,3 +142,10 @@ hypercrux/reload-unheld ./beta/hypercrux
 hypercrux/reload-keeps-the-old-copy ./beta/hypercrux
 hypercrux/failed-reload-read ./beta/hypercrux
 procs/replaced-eras-unchecked ./beta/internal/procs
+query/date-month-end-clamps ./beta/internal/query
+query/date-modifiers-reversed ./beta/internal/query
+query/date-now-per-call ./beta/internal/query
+query/date-now-in-its-zone ./beta/internal/query
+query/date-seconds-rounded ./beta/internal/query
+query/date-limit-inclusive ./beta/internal/query
+query/date-checked-as-compiled ./beta/internal/query

@@ -36,6 +36,23 @@ import "os"
 //   - query/slash-star-comment: a /* that ends the text is taken as a
 //     comment, where SQLite reads a slash and a star.
 //
+// The dates' (Q2):
+//
+//   - query/date-month-end-clamps: a month or a year moved onto a day its
+//     month hasn't got keeps the month's last day, so 31 January and
+//     '+1 month' give 28 February, where SQLite runs on to 3 March.
+//   - query/date-modifiers-reversed: the modifiers apply last first.
+//   - query/date-now-per-call: 'now' reads the clock at each call, and the
+//     statement's moment in Frame.Now goes unused.
+//   - query/date-now-in-its-zone: 'now' takes the moment's own zone for
+//     UTC, so 23:30 UTC given in a zone three hours ahead is the next day.
+//   - query/date-seconds-rounded: datetime() rounds the seconds, where
+//     SQLite cuts off their fraction.
+//   - query/date-limit-inclusive: a number at its unit's limit is taken,
+//     so '+5373485 days' moves the date, where SQLite gives NULL.
+//   - query/date-checked-as-compiled: only the dates that compile are
+//     refused, so 0 AND date('2026-10-07') gives 0.
+//
 // The evaluator's (Q1):
 //
 //   - query/real-text-shortest: a real's text is Go's shortest form, so
@@ -71,6 +88,10 @@ import "os"
 //     go-sqlite3 keeps the time's own zone.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
+	case "query/date-month-end-clamps", "query/date-modifiers-reversed", "query/date-now-per-call",
+		"query/date-now-in-its-zone", "query/date-seconds-rounded", "query/date-limit-inclusive",
+		"query/date-checked-as-compiled":
+		return p
 	case "query/and-or-one-level", "query/between-takes-comparisons", "query/sign-takes-operators",
 		"query/plus-kept", "query/left-as-alias", "query/params-from-one", "query/text-without-comments",
 		"query/aggregate-in-where", "query/record-key-takes-or", "query/is-not-printed-bare",
