@@ -92,3 +92,14 @@ logfile/follow-no-confirm ./beta/internal/logfile
 logfile/follow-read-once ./beta/internal/logfile
 logfile/follow-stuck-checks ./beta/internal/logfile
 logfile/lock-waits-blind ./beta/internal/logfile
+query/and-or-one-level ./beta/internal/query
+query/between-takes-comparisons ./beta/internal/query
+query/sign-takes-operators ./beta/internal/query
+query/plus-kept ./beta/internal/query
+query/left-as-alias ./beta/internal/query
+query/params-from-one ./beta/internal/query
+query/text-without-comments ./beta/internal/query
+query/aggregate-in-where ./beta/internal/query
+query/record-key-takes-or ./beta/internal/query
+query/is-not-printed-bare ./beta/internal/query
+query/slash-star-comment ./beta/internal/query
