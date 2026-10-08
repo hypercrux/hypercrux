@@ -34,7 +34,13 @@ import (
 //     sync, with nothing or a torn marker after it. The batch is written
 //     again in place, with the marker before it, synced, marked, and handed
 //     to the Target.
-//  3. It cuts off everything after the last marker, and syncs the cut.
+//  3. It cuts off everything after the last marker, as a failed commit is
+//     cut back (cutBack, in failed.go): the last marker is written again
+//     and synced, then the file is cut and the cut synced.
+//
+// A write, a sync or a cut that fails stops the check, and leaves the end of
+// the log as it is for the next check, which starts again from it
+// (unfinished).
 
 // tryCheck is the try at the write lock that Open makes once it has read
 // the log, and that a reader makes when it finds the writer gone (F6, which
@@ -85,25 +91,14 @@ func (l *Log) checkLocked() error {
 
 // catchUp reads on to the end of the log and checks the end of the log,
 // holding the write lock, in a file that fstat gave as size bytes long once
-// the lock was held.
-//
-// F5 goes here. Until it cuts a failed write back out of the file, a failure
-// is handled as F2 handles it: while the bytes a failed commit or a failed
-// check left past the end of the log are there, and the log hasn't moved on
-// past them, this Log appends nothing after them (Append) and doesn't check
-// them. Another Log's check can deal with them meanwhile, as it deals with
-// what a crash leaves, and once they've been cut, or marked and read, this
-// one checks again.
+// the lock was held. This Log's own failed commits are cut back out of the
+// file before the lock goes, so what lies past the end of the log is another
+// writer's, or what a check that failed left, and the check deals with it
+// either way.
 func (l *Log) catchUp(size int64) error {
-	from := l.end
 	if err := l.readOn(size); err != nil {
 		return err
 	}
-	if l.tail && l.end == from {
-		l.tail = l.end < size
-		return nil
-	}
-	l.tail = false
 	return l.checkEnd(size)
 }
 
@@ -113,8 +108,8 @@ func (l *Log) catchUp(size int64) error {
 // before the compacted part does, a whole marker past the end of the log
 // naming the next batch or a later one, a batch that counts followed by a
 // whole marker naming another batch, and a batch that counts with changes
-// that break the rules. A write, a sync or a cut that fails is handled as a
-// failed commit is (failed).
+// that break the rules. A write, a sync or a cut that fails stops the check,
+// and the end of the log is left for the next check (unfinished).
 func (l *Log) checkEnd(size int64) error {
 	// Step 1, before anything is written. Holding the lock, what the look
 	// past the end finds is damage. In a compacted file, it also keeps the
@@ -137,11 +132,8 @@ func (l *Log) checkEnd(size int64) error {
 	if l.end >= size {
 		return nil
 	}
-	if err := l.f.Truncate(l.end); err != nil {
-		return l.failed(err, "cutting the file back to the end of the log at offset %d, which may not have happened", l.end)
-	}
-	if err := l.f.Sync(); err != nil {
-		return l.failed(err, "syncing the cut of the file back to the end of the log at offset %d, which may not last", l.end)
+	if err := l.cutBack(); err != nil {
+		return l.unfinished(err, "cutting the file back to the end of the log at offset %d", l.end)
 	}
 	return nil
 }
@@ -192,16 +184,16 @@ func (l *Log) markLeft(size int64) error {
 	}
 	if plant != "logfile/sync-without-rewrite" {
 		if _, err := l.f.WriteAt(again, at); err != nil {
-			return l.failed(err, "writing batch %d again, which a writer left without its marker, so whether it's on the drive is unknown", bt.Seq)
+			return l.unfinished(err, "writing batch %d again, which a writer left without its marker,", bt.Seq)
 		}
 	}
 	if err := l.f.Sync(); err != nil {
-		return l.failed(err, "syncing batch %d, which a writer left without its marker, so whether it's on the drive is unknown", bt.Seq)
+		return l.unfinished(err, "syncing batch %d, which a writer left without its marker,", bt.Seq)
 	}
 	var marker [format.MarkerSize]byte
 	format.AppendMarker(marker[:0], l.hdr.ID, l.hdr.Gen, mine)
 	if _, err := l.f.WriteAt(marker[:], off+n); err != nil {
-		return l.failed(err, "marking batch %d, which a writer left without its marker, so whether it's marked is unknown", bt.Seq)
+		return l.unfinished(err, "marking batch %d, which a writer left without its marker,", bt.Seq)
 	}
 	if err := l.t.Apply(bt.Seq, bt.Changes); err != nil {
 		return l.refused(off, bt.Seq, err)

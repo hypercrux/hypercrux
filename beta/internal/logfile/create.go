@@ -211,7 +211,6 @@ func (l *Log) use(n *fresh) {
 	copy(l.head[:], n.head)
 	l.seq = 0
 	l.end = format.HeaderSize
-	l.tail = false
 }
 
 // removeLeftovers removes the .new- files that creators left beside the

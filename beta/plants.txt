@@ -72,3 +72,8 @@ store/ties-by-slot ./beta/internal/store
 store/filter-after-distance ./beta/internal/store
 store/top-k-first-seen ./beta/internal/store
 store/nearest-table-first ./beta/internal/store
+logfile/failed-left-uncut ./beta/internal/logfile
+logfile/cut-unsynced ./beta/internal/logfile
+logfile/cut-without-marker ./beta/internal/logfile
+logfile/stuck-lets-go ./beta/internal/logfile
+logfile/check-cuts-what-failed ./beta/internal/logfile

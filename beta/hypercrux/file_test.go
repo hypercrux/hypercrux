@@ -184,11 +184,17 @@ func TestAReopenReadsBackWhatWasCommitted(t *testing.T) {
 // TestUpdateRollsBackWhenTheCommitFails fails the batch's write, its sync
 // and its marker's write in turn, on the fault layer's disk, in an Update
 // that puts, adds a field and a table, and deletes. Each time Update gives
-// the disk's error, and the copy holds what it held before. A reopen reads
-// what was there before, or the whole commit when the batch was written
-// whole: a commit whose error comes from the file has an outcome that's
-// unknown, as Update says, and F3 marks a whole batch that lost its marker.
-// Part of a commit is never read.
+// the disk's error, and the copy holds what it held before. The log cuts the
+// failed batch back out of the file (F5), so a reopen reads what was there
+// before, and a later Update through the same handle commits as if the
+// failed one had never been.
+//
+// When every sync fails, the cut back fails too, and the handle is stuck:
+// the copy still holds what it held before, and reads go on, but every
+// later Update fails with ErrStuck, even once the disk works again, and
+// another handle's Update waits for the lock and times out. Once the stuck
+// handle is closed, the other's next Update finds the failed batch whole,
+// and the check marks it, since a failed commit's outcome is unknown.
 func TestUpdateRollsBackWhenTheCommitFails(t *testing.T) {
 	const path = "/db/test.hcx"
 	keys := []string{"docs:1", "docs:2", "docs:3", "fresh:1"}
@@ -236,13 +242,43 @@ func TestUpdateRollsBackWhenTheCommitFails(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s failing, seed %d: reopening: %v", c.what, seed, err)
 			}
-			got := look(again, keys...)
-			if got != without && (got != with || c.what == "the batch's write") {
-				t.Fatalf("%s failing, seed %d: a reopen reads\n%s\nwhich is neither\n%s\nnor\n%s", c.what, seed, got, without, with)
+			if got := look(again, keys...); got != without {
+				t.Fatalf("%s failing, seed %d: a reopen reads\n%s\nwhere the failed commit is cut back, and\n%s\nis wanted", c.what, seed, got, without)
 			}
 			again.Close()
+			ok(t, db.Update(commit))
+			if got := look(db, keys...); got != with {
+				t.Fatalf("%s failing, seed %d: after a later Update through the same handle, the copy holds\n%s\nwhere\n%s\nis wanted", c.what, seed, got, with)
+			}
 			db.Close()
+			again, err = hc.OpenWith(d.FS(), path, logfile.Options{Wait: time.Second})
+			ok(t, err)
+			if got := look(again, keys...); got != with {
+				t.Fatalf("%s failing, seed %d: after a later Update, a reopen reads\n%s\nwhere\n%s\nis wanted", c.what, seed, got, with)
+			}
+			again.Close()
 		}
+	}
+
+	d, db = setUp(t, 7)
+	d.Add(fault.Rule{Op: fault.Sync, Path: path, N: 1, Times: -1})
+	if err := db.Update(commit); !errors.Is(err, syscall.EIO) || !errors.Is(err, hc.ErrStuck) {
+		t.Fatalf("Update when every sync fails: %v", err)
+	}
+	if got := look(db, keys...); got != without {
+		t.Fatalf("on the stuck handle, the copy holds\n%s\nwhere before the Update, it held\n%s", got, without)
+	}
+	d.Clear()
+	other, err := hc.OpenWith(d.FS(), path, logfile.Options{Wait: 100 * time.Millisecond})
+	ok(t, err)
+	defer other.Close()
+	nothing := func(*hc.Tx) error { return nil }
+	wantErr(t, db.Update(commit), hc.ErrStuck)
+	wantErr(t, other.Update(nothing), hc.ErrLockTimeout)
+	ok(t, db.Close())
+	ok(t, other.Update(nothing))
+	if got := look(other, keys...); got != with {
+		t.Fatalf("once the stuck handle is closed, another handle holds\n%s\nwhere the failed batch is marked, and\n%s\nis wanted", got, with)
 	}
 }
 

@@ -53,11 +53,31 @@ import "os"
 //   - logfile/compacted-held-only: the rule for a compacted file is kept
 //     only holding the lock, so Open, when another holds it, reads part of
 //     a damaged compacted part as a whole database.
+//
+// F5's, in failed commits:
+//
+//   - logfile/failed-left-uncut: a failed commit's batch is left in the
+//     file, and the Log carries on, so the next check marks it when it
+//     counts, under commits that were made without it.
+//   - logfile/cut-unsynced: the cut back isn't synced at its end, so a
+//     power cut can bring back a failed commit that was synced before its
+//     marker's write failed.
+//   - logfile/cut-without-marker: the cut back doesn't write the last
+//     marker again, so a failed sync can leave the marker off the drive
+//     for good, and a power cut after later commits loses them or leaves
+//     the file damaged.
+//   - logfile/stuck-lets-go: a stuck Log lets go of flock at Unlock, so
+//     another writer goes ahead while the stuck one still holds what it
+//     couldn't cut back.
+//   - logfile/check-cuts-what-failed: a failure in the check cuts the end
+//     back, as a failed commit's does, so a batch the check was marking,
+//     whose commit may have succeeded, is lost.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
 		"logfile/cut-what-counts", "logfile/sync-without-rewrite", "logfile/no-marker-again",
-		"logfile/cut-at-zeros", "logfile/damage-unconfirmed", "logfile/window-edge", "logfile/any-sequence-number", "logfile/compacted-held-only":
+		"logfile/cut-at-zeros", "logfile/damage-unconfirmed", "logfile/window-edge", "logfile/any-sequence-number", "logfile/compacted-held-only",
+		"logfile/failed-left-uncut", "logfile/cut-unsynced", "logfile/cut-without-marker", "logfile/stuck-lets-go", "logfile/check-cuts-what-failed":
 		return p
 	}
 	return ""

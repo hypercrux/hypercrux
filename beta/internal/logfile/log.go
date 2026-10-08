@@ -24,15 +24,11 @@ import (
 // look past the end of the log for damage is in damage.go: the check makes
 // it at its top (checkEnd), and Open makes it without the lock when another
 // holds it, then reads again holding the lock before it reports damage
-// (openCheck).
+// (openCheck). F5's failed commits are in failed.go: a commit that fails is
+// cut back out of the file before the lock is let go, or the Log keeps the
+// lock until Close (stuck), and a failure in the check leaves the end of the
+// log for the next check.
 //
-//   - F5, failed commits: Append's failures, and the check's, all go
-//     through failed, which cuts the file back to the end of the log and
-//     syncs, or keeps the lock and sets stuck. stuck is already how a
-//     handle keeps the lock until Close, when an empty file became a
-//     database and the folder's sync failed (adopt). Until F5, a failure
-//     leaves its bytes where they are, and this Log appends nothing after
-//     them (tail, and catchUp).
 //   - F6, following other processes: a call that reads on without the
 //     lock, made before each read: stat the path, read each batch's head,
 //     then its marker, then the rest (format.BatchLength), and try the lock
@@ -135,8 +131,7 @@ type Log struct {
 	r     reader                  // reads the log through a window onto the file
 
 	locked bool   // the write lock is held, both halves
-	tail   bool   // a failed commit or check left bytes past the end of the log, which this Log leaves alone and appends nothing after until F5 cuts them (catchUp)
-	stuck  error  // set when the lock stays held until Close; every Lock returns it
+	stuck  error  // set when the lock stays held until Close; every Lock and Append returns it
 	tidied bool   // leftover .new- files have been looked for
 	closed bool   // Close has been called
 	batch  []byte // a commit's batch and marker, built in the same buffer each time
@@ -172,8 +167,9 @@ type Log struct {
 // errs.ErrZeroX, another format version with errs.ErrFormatVersion, and a
 // damaged header, a batch that counts whose changes are malformed or that t
 // refuses, or damage the check finds, with a *errs.Damage, and nothing in
-// the file is changed. A write, a sync or a cut that fails in the check is
-// an error saying its outcome is unknown.
+// the file is changed. When a write, a sync or a cut fails in the check,
+// Open fails, and the end of the log is left for the next check, which
+// starts again from it (unfinished).
 func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	l := &Log{fsys: files, path: path, dir: filepath.Dir(path), t: t, wait: o.Wait, id: o.ID, mu: make(chan struct{}, 1)}
 	if l.wait <= 0 {
@@ -244,13 +240,18 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 // the caller's transaction runs, and what a crash left half written is cut
 // off. The first Lock of each Log also removes leftover .new- files.
 //
-// Damage the check finds is a *errs.Damage, and nothing is changed. A
-// write, a sync or a cut that fails in the check is handled as a failed
-// commit is (failed).
+// Damage the check finds is a *errs.Damage, and nothing is changed. When a
+// write, a sync or a cut fails in the check, Lock fails, and the end of the
+// log is left as it is for the next check, which starts again from it
+// (unfinished). A batch whose commit may have succeeded is never cut that
+// way.
 //
 // On success, the caller holds the lock until Unlock. When Lock fails, the
 // caller holds nothing, and a later Lock tries again, unless the error
-// wraps errs.ErrStuck: then this Log keeps the lock until Close.
+// wraps errs.ErrStuck: then this Log keeps the lock until Close, and every
+// Lock gives the same error at once. That happens when a commit failed and
+// couldn't be cut back out of the file (failed), and when an empty file was
+// made a database and the folder's sync failed after the rename (adopt).
 func (l *Log) Lock() error {
 	deadline := time.Now().Add(l.wait)
 	if err := l.takeMutex(deadline); err != nil {
@@ -333,8 +334,9 @@ func (l *Log) lockFile(deadline time.Time) error {
 			l.tidied = true
 		}
 		if err := l.catchUp(info.Size); err != nil {
-			// F5 goes here: a failed write, sync or cut in the check keeps
-			// the lock when cutting back fails too (stuck).
+			// Damage, a failed read, or a failed write, sync or cut in the
+			// check, which leaves the end of the log for the next check: the
+			// lock goes either way.
 			l.f.Unlock()
 			return err
 		}
@@ -411,14 +413,15 @@ func (l *Log) reopen() error {
 }
 
 // Unlock lets go of the write lock, in the reverse order: flock, then the
-// mutex.
+// mutex. A Log that's stuck keeps flock until Close, and lets go of the
+// mutex alone.
 func (l *Log) Unlock() error {
 	if !l.locked {
 		return fmt.Errorf("hypercrux: %s: Unlock without the write lock", l.path)
 	}
 	l.locked = false
 	var err error
-	if l.f != nil && l.stuck == nil {
+	if l.f != nil && (l.stuck == nil || plant == "logfile/stuck-lets-go") {
 		err = l.f.Unlock()
 	}
 	<-l.mu
@@ -433,14 +436,22 @@ func (l *Log) Unlock() error {
 //
 // Changes that break FORMAT.md's rules for a change on its own are refused
 // with an error that wraps errs.ErrInvalid, before anything reaches the
-// file. An error from a write or the sync means the commit's outcome is
-// unknown.
+// file.
+//
+// When the batch's write, the sync or the marker's write fails, Append cuts
+// the file back to just after the last marker before it returns (failed),
+// and the error wraps the call's. Once that has worked, the commit is gone
+// for good, and the next Append, under this lock or a later one, goes in
+// where it was. When the cut back fails too, the Log keeps the lock until
+// Close, the error wraps errs.ErrStuck as well, and the commit's outcome is
+// unknown. Every Append and Lock after that fails with an error that wraps
+// errs.ErrStuck.
 func (l *Log) Append(changes []format.Change) error {
 	switch {
 	case !l.locked:
 		return fmt.Errorf("hypercrux: %s: Append without the write lock", l.path)
-	case l.tail:
-		return fmt.Errorf("hypercrux: %s: the log ends at offset %d, and a failed write left bytes past it; nothing is appended after them until a failed write is cut back out of the file (task F5): %w", l.path, l.end, errors.ErrUnsupported)
+	case l.stuck != nil:
+		return l.stuck
 	}
 	seq := l.seq + 1
 	b, sum, err := format.AppendBatch(l.batch[:0], l.hdr.Gen, seq, changes)
@@ -456,16 +467,16 @@ func (l *Log) Append(changes []format.Change) error {
 	at := l.end
 
 	if _, err := l.f.WriteAt(batch, at); err != nil {
-		return l.failed(err, "committing batch %d, whose outcome is unknown", seq)
+		return l.failed(err, seq)
 	}
 	if plant == "logfile/marker-before-sync" {
 		l.f.WriteAt(marker, at+int64(n))
 	}
 	if err := l.f.Sync(); err != nil {
-		return l.failed(err, "committing batch %d, whose outcome is unknown", seq)
+		return l.failed(err, seq)
 	}
 	if _, err := l.f.WriteAt(marker, at+int64(n)); err != nil {
-		return l.failed(err, "committing batch %d, whose outcome is unknown", seq)
+		return l.failed(err, seq)
 	}
 	l.seq = seq
 	l.end = at + int64(len(b))
@@ -474,26 +485,6 @@ func (l *Log) Append(changes []format.Change) error {
 	// holds about twice the live data, a compaction, still holding the
 	// lock.
 	return nil
-}
-
-// failed reports a write or a sync that failed, holding the lock: in a
-// commit (Append), or in the check of the end of the log, while it writes a
-// batch again, syncs it, marks it, or cuts the end and syncs the cut. The
-// check's failures are handled as a failed commit's are (FORMAT.md,
-// "Checking the end of the log"). what says what failed, as a format for
-// args.
-//
-// F5 goes here: the file is cut back to the end of the log and the cut is
-// synced, or when that fails, the lock stays held and writes are refused
-// until Close (stuck). Until F5, nothing is cut, and the bytes left past the
-// end of the log stay where they are. This Log appends nothing after them,
-// and doesn't check them, for as long as they're there (catchUp). Another
-// Log's check deals with them as it would with what a crash left: it cuts
-// them, or when they're a batch that counts, it marks the batch, since a
-// failed commit's outcome is unknown.
-func (l *Log) failed(err error, what string, args ...any) error {
-	l.tail = true
-	return fmt.Errorf("hypercrux: %s: %s: %w", l.path, fmt.Sprintf(what, args...), err)
 }
 
 // Close closes the database file, which lets go of its flock. It waits for

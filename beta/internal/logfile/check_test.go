@@ -387,47 +387,70 @@ func TestTheTargetsDamageIsNamedOnce(t *testing.T) {
 	}
 }
 
-// TestAFailedCheckIsHandledLikeAFailedCommit: when the sync of a batch the
-// check writes again fails, Lock fails, saying the outcome is unknown, and
-// the Log then handles the bytes as F2 handles a failed commit's, until F5:
-// it appends nothing after them and doesn't check them, while another
-// Log's check marks the batch. Once the log has moved on past it, the first
-// Log appends again.
-func TestAFailedCheckIsHandledLikeAFailedCommit(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	w := newBuilder(t)
-	w.commit(table("one"))
-	w.batch(table("two"))
-	w.write(path)
-	fail := 0
-	h := &hookFS{FS: fsys.OS{}, file: func(f fsys.File) fsys.File { return &spyFile{File: f, failSync: &fail} }}
-	release := holdLock(t, path)
-	l, err := Open(h, path, &recorder{}, Options{})
-	release()
-	if err != nil {
-		t.Fatal(err)
+// TestAFailedCheckLeavesTheEndForTheNext: when a write, a sync or a cut
+// fails in the check of the end of the log, Lock fails, saying so, lets go
+// of the lock, and leaves the end of the log as it was for the next check.
+// The Log's next Lock checks again from there: another writer's batch, left
+// without its marker when the writer died, is written again and marked, and
+// half a batch is cut off, and then a commit goes in after them. So a batch
+// the check was marking, whose commit may have succeeded, is never cut. When
+// only the cut's own sync fails, the cut has been made, with the last marker
+// synced before it, and the next check finds a whole log.
+func TestAFailedCheckLeavesTheEndForTheNext(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		half bool // the end is half a batch, which the check cuts off; otherwise a batch that counts, which it marks
+		fail int  // the check's call that fails, counting its writes, syncs and truncates together from 1
+	}{
+		{"writing the batch again", false, 1},
+		{"syncing it", false, 2},
+		{"marking it", false, 3},
+		{"writing the last marker again", true, 1},
+		{"syncing it before the cut", true, 2},
+		{"the cut", true, 3},
+		{"syncing the cut", true, 4},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "db")
+			w := newBuilder(t)
+			w.commit(table("one"))
+			end := len(w.b)
+			w.write(path)
+			s := &spy{}
+			l, err := Open(spyOn(s), path, &recorder{}, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeAtEnd(t, l)
+			rec := l.t.(*recorder)
+			w.batch(table("two"))
+			if c.half {
+				w.b = w.b[:len(w.b)-5]
+			}
+			w.write(path) // as another process's writer left it
+			s.calls, s.fail = nil, failCalls(c.fail)
+			err = lockErr(l)
+			if !errors.Is(err, errDrive) || !strings.Contains(err.Error(), "left as it is for the next check") {
+				t.Fatalf("Lock when the check's call %d fails: %v", c.fail, err)
+			}
+			holdLock(t, path)() // the lock is free
+			want := w.b
+			if c.half && c.fail == 4 {
+				want = w.b[:end]
+			}
+			if !bytes.Equal(fileBytes(t, path), want) {
+				t.Errorf("after the failed check, the file is %d bytes long, where %d as they were are wanted", len(fileBytes(t, path)), len(want))
+			}
+			s.fail = nil
+			commit(t, l, table("three"))
+			lists := [][]format.Change{table("one")}
+			if !c.half {
+				lists = append(lists, table("two"))
+			}
+			rec.holds(t, lists...)
+			reread(t, path).holds(t, append(lists, table("three"))...)
+		})
 	}
-	defer l.Close()
-	fail = 1
-	err = lockErr(l)
-	if !strings.Contains(err.Error(), "the drive failed the sync") || !strings.Contains(err.Error(), "unknown") {
-		t.Fatalf("Lock when the check's sync fails: %v", err)
-	}
-	if !bytes.Equal(fileBytes(t, path), w.b) {
-		t.Error("the file changed")
-	}
-	if err := l.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.Append(table("three")); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("Append after the failed check: %v", err)
-	}
-	if err := l.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	reread(t, path).holds(t, table("one"), table("two"))
-	commit(t, l, table("three"))
-	reread(t, path).holds(t, table("one"), table("two"), table("three"))
 }
 
 // compacted returns a builder holding a compacted file of generation 2: a

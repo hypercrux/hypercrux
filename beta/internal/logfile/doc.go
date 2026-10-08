@@ -13,8 +13,10 @@
 // such as a whole marker further on that shows a commit was made there,
 // which it reports, cutting nothing; opening does that even when another
 // holds the lock, and then reads the file again holding it before it
-// reports damage (damage.go). It reaches the file only through fsys, so the
-// crash tests can put a fault layer under it.
+// reports damage (damage.go). A commit that fails is cut back out of the
+// file before the lock goes, and when that fails too, the handle keeps the
+// lock and refuses every write until it's closed (failed.go). It reaches the
+// file only through fsys, so the crash tests can put a fault layer under it.
 //
 // Tasks F2 to F9 build it. log.go says where each later task fits in. Like
 // the rest of beta/, it builds only on Linux.

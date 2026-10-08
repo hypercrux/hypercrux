@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"slices"
 	"testing"
 
 	"github.com/hypercrux/hypercrux/beta/internal/crash"
@@ -48,9 +49,19 @@ func crashBatch(i int) []format.Change {
 
 // crashState is the state after commit i, as a recorder writes it.
 func crashState(i int) string {
+	commits := make([]int, i)
+	for j := range commits {
+		commits[j] = j + 1
+	}
+	return stateOf(commits)
+}
+
+// stateOf is the state of a file holding the batches of the commits given,
+// in order and numbered from 1, as a recorder writes it.
+func stateOf(commits []int) string {
 	rec := &recorder{}
-	for j := 1; j <= i; j++ {
-		rec.Apply(uint64(j), crashBatch(j))
+	for j, c := range commits {
+		rec.Apply(uint64(j+1), crashBatch(c))
 	}
 	return rec.state()
 }
@@ -85,6 +96,31 @@ func crashCommits(l *Log, m model, first, last int) error {
 	return nil
 }
 
+// carryOn makes the commits first to last on l, telling m about each one,
+// and carries on after a commit that fails, as a program would carry on
+// after an Update that returned an error. done is the commits whose batches
+// the file holds already, in order. A commit's state holds the batches of
+// done and of the commits that succeeded since, then its own, so a failed
+// commit is left out of every later state: the log cuts it back out of the
+// file before it lets go of the lock, or keeps the lock and fails every
+// commit after it.
+func carryOn(l *Log, m model, done []int, first, last int) {
+	for i := first; i <= last; i++ {
+		next := append(slices.Clone(done), i)
+		m.Begin(stateOf(next))
+		if err := l.Lock(); err != nil {
+			continue // nothing was written: a call failed, or the Log is stuck
+		}
+		if err := l.Append(crashBatch(i)); err != nil {
+			l.Unlock()
+			continue
+		}
+		m.Done()
+		done = next
+		l.Unlock()
+	}
+}
+
 // crashOpen opens the database at crashPath through sys, as a process
 // started after a crash would, and returns the state it reads, once the
 // check of the end of the log has run.
@@ -97,18 +133,37 @@ func crashOpen(sys fsys.FS) (string, error) {
 	return rec.state(), l.Close()
 }
 
-// newWorkload creates a database and makes commits commits on it.
-func newWorkload(commits int) crash.Workload {
+// runCommits is a workload's Run: it opens the database and makes the
+// commits first to last, where done is the commits whose batches the file
+// holds already. Without carry, it stops at its first error, as a crash
+// would stop it. With carry, it carries on after a failed commit (carryOn),
+// and opens the database a second time when the first Open fails, since a
+// failure in Open's check of the end of the log leaves the end for the next
+// check.
+func runCommits(done []int, first, last int, carry bool) func(fsys.FS, *crash.Model) error {
+	return func(sys fsys.FS, m *crash.Model) error {
+		l, err := Open(sys, crashPath, &recorder{}, crashOptions)
+		if err != nil && carry {
+			l, err = Open(sys, crashPath, &recorder{}, crashOptions)
+		}
+		if err != nil {
+			return err
+		}
+		defer l.Close()
+		if carry {
+			carryOn(l, m, done, first, last)
+			return nil
+		}
+		return crashCommits(l, m, first, last)
+	}
+}
+
+// newWorkload creates a database and makes commits commits on it, carrying
+// on after a failed one when carry is set.
+func newWorkload(commits int, carry bool) crash.Workload {
 	return crash.Workload{
-		Path: crashPath,
-		Run: func(sys fsys.FS, m *crash.Model) error {
-			l, err := Open(sys, crashPath, &recorder{}, crashOptions)
-			if err != nil {
-				return err
-			}
-			defer l.Close()
-			return crashCommits(l, m, 1, commits)
-		},
+		Path:   crashPath,
+		Run:    runCommits(nil, 1, commits, carry),
 		Reopen: crashOpen,
 	}
 }
@@ -126,13 +181,18 @@ const (
 
 // againWorkload is setup commits made by Setup on a new database, with the
 // end of the log left as end says, then commits more on the same database,
-// opened again for them. When end leaves a batch that counts, it's commit
-// setup+1, and Setup's state holds it, since it's on the drive and the
-// check of the end of the log marks it.
-func againWorkload(setup, commits int, end string) crash.Workload {
+// opened again for them, carrying on after a failed one when carry is set.
+// When end leaves a batch that counts, it's commit setup+1, and Setup's
+// state holds it, since it's on the drive and the check of the end of the
+// log marks it.
+func againWorkload(setup, commits int, end string, carry bool) crash.Workload {
 	after := setup
 	if end == noMarker || end == tornMarker {
 		after++
+	}
+	done := make([]int, after)
+	for j := range done {
+		done[j] = j + 1
 	}
 	return crash.Workload{
 		Path: crashPath,
@@ -174,14 +234,7 @@ func againWorkload(setup, commits int, end string) crash.Workload {
 			}
 			return crashState(after), f.Sync() // so no cut can take what Setup's state holds
 		},
-		Run: func(sys fsys.FS, m *crash.Model) error {
-			l, err := Open(sys, crashPath, &recorder{}, crashOptions)
-			if err != nil {
-				return err
-			}
-			defer l.Close()
-			return crashCommits(l, m, after+1, after+commits)
-		},
+		Run:    runCommits(done, after+1, after+commits, carry),
 		Reopen: crashOpen,
 	}
 }
@@ -214,12 +267,12 @@ func TestTheRealLogPassesACutAtEveryWrite(t *testing.T) {
 		w     crash.Workload
 		seeds int
 	}{
-		{"a new database", newWorkload(commits), seeds},
-		{"opened again", againWorkload(commits/2, commits/2, whole), others},
-		{noMarker, againWorkload(commits/2, commits/2, noMarker), others},
-		{tornMarker, againWorkload(commits/2, commits/2, tornMarker), others},
-		{cutShort, againWorkload(commits/2, commits/2, cutShort), others},
-		{zeros, againWorkload(commits/2, commits/2, zeros), others},
+		{"a new database", newWorkload(commits, false), seeds},
+		{"opened again", againWorkload(commits/2, commits/2, whole, false), others},
+		{noMarker, againWorkload(commits/2, commits/2, noMarker, false), others},
+		{tornMarker, againWorkload(commits/2, commits/2, tornMarker, false), others},
+		{cutShort, againWorkload(commits/2, commits/2, cutShort, false), others},
+		{zeros, againWorkload(commits/2, commits/2, zeros, false), others},
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -235,18 +288,29 @@ func TestTheRealLogPassesACutAtEveryWrite(t *testing.T) {
 	}
 }
 
-// TestTheRealLogAfterAFailedCall drives the real log with a failure at every
-// call, in workloads that stop at their first error, as the public package
-// would hand the error back. The database then opens, as a process started
-// once the workload's had ended, at the last commit that succeeded or the
-// one that failed, and after a cut it opens there or later.
+// TestTheRealLogAfterAFailedCall is F5's closing test: T3's driver on the
+// real log, with a failure at every call, in workloads that carry on after
+// a failed commit, as a program would after Update returned an error, and
+// give each later commit the state it has without the failed one. Once the
+// workload's process has ended, the database opens, as a process started
+// after it, at the last commit that succeeded or one begun after it, and
+// after a power cut it opens there or later, so nothing a reader saw is
+// lost.
 //
-// That's the case FORMAT.md writes a batch again for. After a failed sync,
-// the batch's pages and the marker before it can be marked clean without
-// reaching the drive, while reads go on seeing them, so the opening that
-// finds the batch whole has to write both again before its sync, or the cut
-// takes them, and with them a commit the opening handed over. F5 adds a
-// workload that carries on after a failed commit, and a disk that dies.
+//   - With one call failing, every failed commit is cut back out of the
+//     file before the workload goes on, so every open finds the last commit
+//     that succeeded, and none finds a failed one, before the power cut or
+//     after it. A failure in the check of the end of the log, when Open
+//     marks a batch that Setup left without its marker, leaves the batch
+//     for the next Open, which marks it.
+//   - On a disk that dies, every call fails from the one picked on. When
+//     that's in a commit, its cut back fails too, and the Log is stuck, so
+//     every commit after it fails at Lock. The process that opens the
+//     database next checks the end of the log the stuck Log left, and marks
+//     its failed batch when the batch counts, writing it again first, with
+//     the marker before it, since after a failed sync their pages can be
+//     marked clean without reaching the drive while reads go on seeing them.
+//     So both kinds of open come up there.
 func TestTheRealLogAfterAFailedCall(t *testing.T) {
 	t.Parallel()
 	commits, seeds := 8, 24
@@ -254,21 +318,30 @@ func TestTheRealLogAfterAFailedCall(t *testing.T) {
 		commits, seeds = 6, 4
 	}
 	cases := []struct {
-		name string
-		w    crash.Workload
+		name  string
+		w     crash.Workload
+		times int
 	}{
-		{"a new database", newWorkload(commits)},
-		{tornMarker, againWorkload(commits/2, commits/2, tornMarker)},
+		{"a new database", newWorkload(commits, true), 0},
+		{noMarker, againWorkload(commits/2, commits/2, noMarker, true), 0},
+		{tornMarker, againWorkload(commits/2, commits/2, tornMarker, true), 0},
+		{"a new database on a disk that dies", newWorkload(commits, true), -1},
+		{tornMarker + ", on a disk that dies", againWorkload(commits/2, commits/2, tornMarker, true), -1},
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rep, err := crash.Run(c.w, crash.Options{Kinds: crash.Failures, Seeds: seeds, Seed: uint64(1000 * i)})
+			rep, err := crash.Run(c.w, crash.Options{Kinds: crash.Failures, Seeds: seeds, Seed: uint64(1000 * i), Times: c.times})
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Log(rep)
-			if rep.Last == 0 || rep.Later == 0 {
-				t.Errorf("of the opens, %d found the last commit that succeeded and %d a later one, where both should come up", rep.Last, rep.Later)
+			switch {
+			case rep.Last == 0:
+				t.Errorf("no open found the last commit that succeeded")
+			case c.times == 0 && rep.Later != 0:
+				t.Errorf("%d opens found a commit begun after the last that succeeded, where every failed commit is cut back out of the file", rep.Later)
+			case c.times != 0 && rep.Later == 0:
+				t.Errorf("no open found a commit begun after the last that succeeded, where a stuck Log leaves its failed batch, which the next check marks when it counts")
 			}
 		})
 	}
@@ -280,7 +353,7 @@ func TestTheRealLogAfterAFailedCall(t *testing.T) {
 // caught half done. T3 wrote it, in the crash package's tests.
 func TestCopiesOfTheRealLog(t *testing.T) {
 	for _, chunk := range []int{0, 100} {
-		rep, err := crash.Run(newWorkload(5), crash.Options{Kinds: crash.Copies, Seeds: 2, Chunk: chunk})
+		rep, err := crash.Run(newWorkload(5, false), crash.Options{Kinds: crash.Copies, Seeds: 2, Chunk: chunk})
 		if err != nil {
 			t.Fatal(err)
 		}

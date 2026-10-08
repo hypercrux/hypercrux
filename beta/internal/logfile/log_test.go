@@ -275,9 +275,8 @@ func TestALongLogReadsThroughItsWindow(t *testing.T) {
 // commit makes, in order, and what they write.
 func TestACommitWritesTheBatchSyncsThenWritesTheMarker(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
-	var calls []string
-	h := &hookFS{FS: fsys.OS{}, file: func(f fsys.File) fsys.File { return &spyFile{File: f, calls: &calls} }}
-	l, err := Open(h, path, &recorder{}, Options{})
+	s := &spy{}
+	l, err := Open(spyOn(s), path, &recorder{}, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +287,7 @@ func TestACommitWritesTheBatchSyncsThenWritesTheMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := l.end
-	calls = nil
+	s.calls = nil
 	if err := l.Append(changes); err != nil {
 		t.Fatal(err)
 	}
@@ -301,8 +300,8 @@ func TestACommitWritesTheBatchSyncsThenWritesTheMarker(t *testing.T) {
 		"sync",
 		fmt.Sprintf("write %d at %d", format.MarkerSize, at+int64(len(batch))),
 	}
-	if strings.Join(calls, ", ") != strings.Join(want, ", ") {
-		t.Errorf("a commit made the calls\n  %s\nwhere\n  %s\nare wanted", strings.Join(calls, ", "), strings.Join(want, ", "))
+	if strings.Join(s.calls, ", ") != strings.Join(want, ", ") {
+		t.Errorf("a commit made the calls\n  %s\nwhere\n  %s\nare wanted", strings.Join(s.calls, ", "), strings.Join(want, ", "))
 	}
 	if err := l.Unlock(); err != nil {
 		t.Fatal(err)
@@ -346,53 +345,79 @@ func (f *unlockSpy) Unlock() error {
 	return f.File.Unlock()
 }
 
-// TestAFailedCommitStopsAppends pins F2's handling of a failed commit, which
-// F3 keeps and F5 changes. Until F5 cuts a failed commit back out of the
-// file, the bytes it left past the end of the log stay as they are, and
-// neither this Log nor a later Lock of it appends after them or checks
-// them. Another Log's check deals with them as it deals with what a crash
-// leaves: here the batch is whole, so it counts, and it's marked, since a
-// failed commit's outcome is unknown. Once the log has moved on past them,
-// the first Log appends again.
-func TestAFailedCommitStopsAppends(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	fail := 0
-	h := &hookFS{FS: fsys.OS{}, file: func(f fsys.File) fsys.File { return &spyFile{File: f, failSync: &fail} }}
-	l, err := Open(h, path, &recorder{}, Options{})
-	if err != nil {
-		t.Fatal(err)
+// TestAFailedCommitIsCutBack: when the batch's write, the sync or the
+// marker's write fails, Append cuts the file back to just after the last
+// marker before it returns. It writes the last marker again and syncs, then
+// cuts the file and syncs the cut, and the file holds what it held before
+// the commit. The error wraps the call's, and the Log carries on: the next
+// Append, under the same lock, goes in where the failed one was, and so does
+// a commit after it, and the failed commit is never read back. When the log
+// holds no batch yet, the header comes before the failed one, and the cut
+// back only cuts and syncs the cut.
+func TestAFailedCommitIsCutBack(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		first bool // the failed commit is the database's first
+		fail  int  // the call that fails: 1 for the batch's write, 2 for the sync, 3 for the marker's write
+	}{
+		{"the batch's write", false, 1},
+		{"the sync", false, 2},
+		{"the marker's write", false, 3},
+		{"the first batch's sync", true, 2},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "db")
+			s := &spy{}
+			l, err := Open(spyOn(s), path, &recorder{}, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			closeAtEnd(t, l)
+			var before [][]format.Change
+			if !c.first {
+				before = [][]format.Change{table("one"), table("two")}
+				commit(t, l, before...)
+			}
+			if err := l.Lock(); err != nil {
+				t.Fatal(err)
+			}
+			end, file := l.end, fileBytes(t, path)
+			failing := table("failing")
+			s.calls, s.fail = nil, failCalls(c.fail)
+			err = l.Append(failing)
+			if !errors.Is(err, errDrive) || errors.Is(err, errs.ErrStuck) || !strings.Contains(err.Error(), "cut back out of the file") {
+				t.Fatalf("Append when call %d fails: %v", c.fail, err)
+			}
+			batch, _, err := format.AppendBatch(nil, l.hdr.Gen, uint64(len(before)+1), failing)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := []string{
+				fmt.Sprintf("write %d at %d", len(batch), end),
+				"sync",
+				fmt.Sprintf("write %d at %d", format.MarkerSize, end+int64(len(batch))),
+			}[:c.fail]
+			if !c.first {
+				want = append(want, fmt.Sprintf("write %d at %d", format.MarkerSize, end-format.MarkerSize), "sync")
+			}
+			want = append(want, fmt.Sprintf("truncate to %d", end), "sync")
+			if strings.Join(s.calls, ", ") != strings.Join(want, ", ") {
+				t.Errorf("the failed commit made the calls\n  %s\nwhere\n  %s\nare wanted", strings.Join(s.calls, ", "), strings.Join(want, ", "))
+			}
+			if !bytes.Equal(fileBytes(t, path), file) {
+				t.Error("after the cut back, the file isn't as it was before the commit")
+			}
+			s.fail = nil
+			if err := l.Append(table("three")); err != nil {
+				t.Fatalf("Append under the same lock, after the cut back: %v", err)
+			}
+			if err := l.Unlock(); err != nil {
+				t.Fatal(err)
+			}
+			commit(t, l, table("four"))
+			reread(t, path).holds(t, append(before, table("three"), table("four"))...)
+		})
 	}
-	defer l.Close()
-	commit(t, l, table("one"))
-	if err := l.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	fail = 1
-	if err := l.Append(table("two")); err == nil || !strings.Contains(err.Error(), "the drive failed the sync") {
-		t.Errorf("Append with a failing sync: %v", err)
-	}
-	if err := l.Append(table("three")); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("Append after a failed one: %v", err)
-	}
-	if err := l.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	file := fileBytes(t, path)
-	if err := l.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.Append(table("three")); !errors.Is(err, errors.ErrUnsupported) {
-		t.Errorf("Append under a later lock: %v", err)
-	}
-	if err := l.Unlock(); err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(fileBytes(t, path), file) {
-		t.Error("the file changed")
-	}
-	reread(t, path).holds(t, table("one"), table("two"))
-	commit(t, l, table("three"))
-	reread(t, path).holds(t, table("one"), table("two"), table("three"))
 }
 
 // TestAppendRefusesBadChanges: a change the codec refuses never reaches

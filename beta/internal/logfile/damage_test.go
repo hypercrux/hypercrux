@@ -8,6 +8,7 @@ package logfile
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -82,6 +84,14 @@ func hooked(do map[int]func()) fsys.FS {
 //     damage, so the error doesn't wrap errs.ErrDamaged.
 //   - Another file takes the path, and the writer lets go: Open reads the
 //     file at the path, and the file it read first stays as it was.
+//   - A writer's commit fails, and the writer cuts it back and commits two
+//     shorter batches where it was, while the reader opens the file (F5).
+//     The reader's read of the log finds the failed batch whole, without its
+//     marker, and stops there. By its try at the lock, the first new batch's
+//     marker lies inside what the reader took for the file, which looks like
+//     a commit made past the end of the log. The reader waits for the lock,
+//     reads the file again holding it once the writer lets go, and applies
+//     both new batches. Nothing is reported.
 func TestAReaderReadsAgainUnderTheLock(t *testing.T) {
 	whole := newBuilder(t)
 	whole.commit(table("one"))
@@ -205,6 +215,95 @@ func TestAReaderReadsAgainUnderTheLock(t *testing.T) {
 			t.Error("the file Open read first changed")
 		}
 	})
+
+	t.Run("a failed commit cut back and written again", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "db")
+		s := &spy{}
+		w, err := Open(spyOn(s), path, &recorder{}, Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeAtEnd(t, w)
+		commit(t, w, table("one"))
+
+		// The writer, on a goroutine of its own, holding the lock throughout.
+		// Its commit's sync fails once the reader has read the log.
+		written, read, committed, waiting := newSignal(), newSignal(), newSignal(), newSignal()
+		errc := make(chan error, 1)
+		go func() {
+			err := func() error {
+				if err := w.Lock(); err != nil {
+					return err
+				}
+				defer w.Unlock()
+				s.fail = func(call string) error {
+					if call != "sync" || written.fired() {
+						return nil
+					}
+					written.fire()
+					read.wait()
+					return errDrive
+				}
+				if err := w.Append(table(strings.Repeat("x", 40))); !errors.Is(err, errDrive) || errors.Is(err, errs.ErrStuck) {
+					return fmt.Errorf("the commit whose sync fails gave %v", err)
+				}
+				for _, name := range []string{"two", "three"} {
+					if err := w.Append(table(name)); err != nil {
+						return err
+					}
+				}
+				committed.fire()
+				waiting.wait()
+				return nil
+			}()
+			written.fire()
+			committed.fire()
+			errc <- err
+		}()
+
+		written.wait()
+		rec := &recorder{}
+		waited := false
+		l, err := Open(hooked(map[int]func(){
+			1: func() { read.fire(); committed.wait() },
+			2: func() { waited = true; waiting.fire() },
+		}), path, rec, Options{})
+		read.fire() // in case Open stopped short of its tries
+		waiting.fire()
+		if werr := <-errc; werr != nil {
+			t.Fatal(werr)
+		}
+		if err != nil {
+			t.Fatalf("Open gave %v, where it reads the batches committed where the failed one was", err)
+		}
+		defer l.Close()
+		if !waited {
+			t.Error("Open didn't wait for the lock")
+		}
+		rec.holds(t, table("one"), table("two"), table("three"))
+	})
+}
+
+// signal is a moment that one goroutine waits for another to reach. fire
+// can be called more than once, from any goroutine.
+type signal struct {
+	once sync.Once
+	c    chan struct{}
+}
+
+func newSignal() *signal { return &signal{c: make(chan struct{})} }
+
+func (s *signal) fire() { s.once.Do(func() { close(s.c) }) }
+
+func (s *signal) wait() { <-s.c }
+
+func (s *signal) fired() bool {
+	select {
+	case <-s.c:
+		return true
+	default:
+		return false
+	}
 }
 
 // memFile is a file held in memory, for reads alone.

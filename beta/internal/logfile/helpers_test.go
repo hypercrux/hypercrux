@@ -106,13 +106,19 @@ func openLog(t *testing.T, path string, o Options) (*Log, *recorder) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	closeAtEnd(t, l)
+	return l, rec
+}
+
+// closeAtEnd closes l when the test ends, letting go of the lock first when
+// a test that failed left it held, since Close would wait for it.
+func closeAtEnd(t *testing.T, l *Log) {
 	t.Cleanup(func() {
-		if l.locked { // a test that failed holding the lock, which Close would wait for
+		if l.locked {
 			l.Unlock()
 		}
 		l.Close()
 	})
-	return l, rec
 }
 
 // lockErr calls l.Lock where a test wants it to fail. When it works after
@@ -325,43 +331,107 @@ func (h *hookFS) SyncDir(dir string) error {
 	return h.FS.SyncDir(dir)
 }
 
-// spyFile records the calls on a file that change it or its lock, and can
-// fail a sync.
+// spy is what the spyFiles of one test share: the calls they've made that
+// change a file or its lock, and the failures to make.
+type spy struct {
+	calls []string
+	// fail, when it isn't nil, is asked before each write, sync and
+	// truncate, with the call's kind: "write", "sync" or "truncate". When
+	// it returns an error, the call fails with it and changes nothing.
+	fail func(call string) error
+}
+
+// spyOn is the real calls, with every file a spyFile of s.
+func spyOn(s *spy) *hookFS {
+	return &hookFS{FS: fsys.OS{}, file: func(f fsys.File) fsys.File { return &spyFile{File: f, spy: s} }}
+}
+
+// spyFile records the calls on a file that change it or its lock, and fails
+// those its spy says to.
 type spyFile struct {
 	fsys.File
-	calls    *[]string
-	failSync *int // the syncs left before one fails, counting down when above 0
+	spy *spy
 }
 
 func (f *spyFile) note(format string, args ...any) {
-	if f.calls != nil {
-		*f.calls = append(*f.calls, fmt.Sprintf(format, args...))
+	f.spy.calls = append(f.spy.calls, fmt.Sprintf(format, args...))
+}
+
+func (f *spyFile) failed(call string) error {
+	if f.spy.fail == nil {
+		return nil
 	}
+	return f.spy.fail(call)
 }
 
 func (f *spyFile) WriteAt(p []byte, off int64) (int, error) {
 	f.note("write %d at %d", len(p), off)
+	if err := f.failed("write"); err != nil {
+		return 0, err
+	}
 	return f.File.WriteAt(p, off)
 }
 
 func (f *spyFile) Sync() error {
 	f.note("sync")
-	if f.failSync != nil && *f.failSync > 0 {
-		if *f.failSync--; *f.failSync == 0 {
-			return errors.New("the drive failed the sync")
-		}
+	if err := f.failed("sync"); err != nil {
+		return err
 	}
 	return f.File.Sync()
 }
 
 func (f *spyFile) Truncate(size int64) error {
 	f.note("truncate to %d", size)
+	if err := f.failed("truncate"); err != nil {
+		return err
+	}
 	return f.File.Truncate(size)
 }
 
 func (f *spyFile) Unlock() error {
 	f.note("unlock")
 	return f.File.Unlock()
+}
+
+// errDrive and errAgain are the errors a spyFile's calls fail with when a
+// test says so: errDrive for the first, and errAgain for any after it.
+var (
+	errDrive = errors.New("the drive failed the call")
+	errAgain = errors.New("the drive failed another call")
+)
+
+// failCalls returns a spy's fail that fails the writes, syncs and truncates
+// numbered ns, counting them together from 1 from when it's set: the first
+// with errDrive, and the rest with errAgain, so a test can tell their errors
+// apart.
+func failCalls(ns ...int) func(string) error {
+	seen := 0
+	return func(string) error {
+		seen++
+		switch i := slices.Index(ns, seen); {
+		case i == 0:
+			return errDrive
+		case i > 0:
+			return errAgain
+		}
+		return nil
+	}
+}
+
+// failFrom returns a spy's fail that fails, with errDrive, every call of the
+// kind call from the nth from when it's set, as on a drive that has started
+// to fail.
+func failFrom(call string, n int) func(string) error {
+	seen := 0
+	return func(c string) error {
+		if c != call {
+			return nil
+		}
+		if seen++; seen >= n {
+			return errDrive
+		}
+		return nil
+	}
 }
 
 // fileBytes reads the file at path.

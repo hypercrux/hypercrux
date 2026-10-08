@@ -49,6 +49,11 @@ var (
 //     and syncs it, prints "written", and exits holding the lock, before it
 //     writes the marker, as a writer killed then would. With
 //     HYPERCRUX_LOGFILE_TAIL=half, it writes half the batch.
+//   - stick: opens the database and commits a batch while every sync
+//     fails, so the commit fails and so does its cut back, and its Log is
+//     stuck. It prints "stuck" once Lock refuses too, then waits for a line
+//     on its standard input, closes the Log, prints "closed", and keeps
+//     running until its standard input closes.
 func helper(role, path string) int {
 	fail := func(err error) int {
 		fmt.Fprintln(os.Stderr, "helper:", role+":", err)
@@ -110,6 +115,34 @@ func helper(role, path string) int {
 			return fail(err)
 		}
 		fmt.Println("written")
+	case "stick":
+		s := &spy{}
+		l, err := Open(spyOn(s), path, &recorder{}, Options{})
+		if err != nil {
+			return fail(err)
+		}
+		if err := l.Lock(); err != nil {
+			return fail(err)
+		}
+		s.fail = failFrom("sync", 1)
+		err = l.Append(helperChanges)
+		if e := l.Unlock(); e != nil {
+			return fail(e)
+		}
+		if !errors.Is(err, errs.ErrStuck) {
+			return fail(fmt.Errorf("the commit gave %v, where errs.ErrStuck is wanted", err))
+		}
+		if err := l.Lock(); !errors.Is(err, errs.ErrStuck) {
+			return fail(fmt.Errorf("Lock gave %v, where errs.ErrStuck is wanted", err))
+		}
+		fmt.Println("stuck")
+		in := bufio.NewReader(os.Stdin)
+		in.ReadString('\n')
+		if err := l.Close(); err != nil {
+			return fail(err)
+		}
+		fmt.Println("closed")
+		io.Copy(io.Discard, in)
 	default:
 		return fail(errors.New("no such role"))
 	}
