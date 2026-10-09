@@ -123,6 +123,9 @@ Import refuses:
 - a link to a record that isn't in the export;
 - anything else `Put` or `Link` would refuse.
 
+The Beta's import also refuses a table that has a vector size and no field
+`vec`, since a table in the Beta can't have one.
+
 ## Writing an export yourself
 
 An export made by another program needs the five kinds of line, in the

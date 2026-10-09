@@ -124,8 +124,12 @@ type DB struct {
 // reads the whole file into memory. As in 0.x, path has to name a file: an
 // empty name, a name holding ? or #, :memory: and names starting with file:
 // are refused with an error that wraps ErrInvalid. The database is opened by
-// its real path, with symbolic links resolved, and a file with more than one
-// hard link is refused.
+// its real path, with symbolic links resolved. A folder, a FIFO, a device or
+// a socket at the path is refused with an error that wraps ErrNotDatabase,
+// before anything opens it, and a file with more than one hard link, or a
+// symbolic link that leads to no file, with one that wraps ErrInvalid. A
+// hard link made while the database is open makes every write fail with
+// ErrInvalid until it's gone.
 //
 // A file that isn't a HyperCrux database fails with an error that wraps
 // ErrNotDatabase, a 0.x database with ErrZeroX, a format version this build

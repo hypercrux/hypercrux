@@ -468,8 +468,9 @@ them directly, and SQL is parsed onto them. The Beta's SQL:
   stored vector;
 - `distance(a, b)` and `vector('[...]')`. Rows without a vector sort first
   under `ORDER BY distance(...)`, as in SQLite, so the crux query's
-  `vec IS NOT NULL` keeps its meaning; with that condition and a `LIMIT`,
-  the planner uses a nearest search;
+  `vec IS NOT NULL` keeps its meaning; with that condition and a `LIMIT`, a
+  query over one table uses a nearest search wherever that gives the same
+  answer;
 - `IN` and `NOT IN` lists, `BETWEEN`, `LIKE`, `IS NULL` and the text and
   number functions listed in [beta/SQL.md](beta/SQL.md), which sets out the
   whole subset;
@@ -508,9 +509,14 @@ functions.
 - Local file systems only. Network file systems such as NFS and SMB, and
   folders shared into containers through a virtual machine, don't keep the
   locks honest.
-- A database is opened by its real path, with symbolic links resolved, and a
-  file with more than one hard link is refused, because compaction can only
-  replace the file at one path.
+- A database is opened by its real path, with symbolic links resolved and a
+  relative path made absolute, and a new one by its folder's real path and
+  its name. Only a regular file with one name is opened: a file with more
+  than one hard link is refused, because compaction can only replace the
+  file at one path, and so is anything else at the path, such as a folder or
+  a FIFO, before anything opens it. A file that breaks these rules and takes
+  the path later is refused at the reload, and a hard link made while the
+  database is open stops its writes until it's gone.
 - Go opens files with `O_CLOEXEC` and can't fork without exec, so no child
   process can end up holding the lock.
 - To back up, copy the file somewhere else. To restore, stop the processes

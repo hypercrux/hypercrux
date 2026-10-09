@@ -23,7 +23,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `conformance/betax/`: the adapter for the Beta, zerox's code over the
   Beta's package. Its tests run the suite on the Beta, once as it is and once
   with the file opened afresh before every read, and skip by name the tests
-  that wait for later tasks.
+  that wait for later tasks. They also move databases from 0.x to the Beta
+  and back through an export, byte for byte.
 - `conformance/cmdtest/`: 0.x's tests of the `hypercrux` command, run from
   outside against the binary `HYPERCRUX_BIN` names, or against 0.x's command,
   built for the test, when it's unset. `HYPERCRUX_CMD_SKIP` lists sections to
@@ -39,7 +40,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
   0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
   `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` without a filter
-  and `TableOf` work through the file, and `Check` counts. `Query`,
+  and `TableOf` work through the file, and so do `Export` and `Import`, in
+  0.x's export format, byte for byte as 0.x writes it. `Check` counts. `Query`,
   `QueryRow`, `Exec` and `SQL()` go through the Beta's database/sql driver,
   which parses each statement and takes its arguments, and `SQL().Begin`
   returns an error; running SQL waits for G4. Each read through a `DB`
@@ -86,7 +88,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   and renamed over the database, while writers wait it out, and the next
   holder removes one a crash left. A process that finds another file at the
   path reads it from its start with `Reload`, once its old copy has gone and
-  a garbage collection has run.
+  a garbage collection has run. It opens a database by its real path, and
+  refuses a file with more than one hard link, and anything at the path
+  that isn't a regular file, before anything opens it.
 - `internal/procs/`: the many-process harness. It runs writer and reader
   processes on one database, copies of the test binary, kills them with
   SIGKILL at random moments and starts new ones in their place. Then it
@@ -100,9 +104,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `internal/query/`: SQL. So far the operator iterator, `Rows`, the parser,
   with the tree it gives and the printer that gives a tree back as SQL, and
   the evaluator, which works out expressions and conditions as SQLite does,
-  with `Arg` for arguments and the dates on 'now' with SQLite's arithmetic,
-  and the operators, which read the store through `store.Reader` and hand
-  rows on through `Rows`, with the aggregates.
+  with `Arg` for arguments and the dates on 'now' with SQLite's arithmetic.
+  The operators read the store through `store.Reader` and hand rows on
+  through `Rows`, with the aggregates, and the planner plans a SELECT over
+  the store and runs it in one call, `Query`.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
@@ -185,6 +190,16 @@ task that plants a bug.
 - **Rules:** a link type that starts with a zero byte, and a put that would
   take a table past 1,999 fields, give `ErrInvalid`. 0.x refuses both too,
   with a plain error.
+- **The file:** a database file with more than one hard link is refused
+  with `ErrInvalid`, and so is a symbolic link that leads to nothing. 0.x
+  opens the first, and makes a database where the second leads. A hard link
+  made while the database is open makes every write fail with `ErrInvalid`
+  until it's gone.
+- **Import** refuses a table that has a vector size and no field `vec`,
+  which 0.x can hold, and refuses a table of more than 1,999 fields as
+  invalid, where 0.x gives SQLite's own error. In its own process, an
+  `Update`'s first change waits for an export under way to end, as it waits
+  for any read, where 0.x's writers carry on through an export.
 - **A write that fails** changes nothing, even inside an `Update` that goes
   on to commit. 0.x keeps the new fields a failed `Put` named. So a later
   `Put` that names such a field in another case spells it its own way in

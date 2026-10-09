@@ -287,9 +287,11 @@ Signs work as SQLite's parser makes them work:
   sources have is an error, "ambiguous column name".
 - The walk as a table has the columns `key` and `depth`.
 - `json_each(walk(...))` has SQLite's columns for json_each when names are
-  looked up (key, value, type, atom, id, parent, fullkey and path), so names
-  clash as they do in SQLite. Only `value` may be used, and the others are
-  outside the subset.
+  looked up (key, value, type, atom, id, parent, fullkey and path, and the
+  hidden json and root), so names clash as they do in SQLite. Only `value`
+  may be used, and the others are outside the subset.
+- Two sources may have the same name. A name with that name before the dot
+  then looks in both, and a column both have is ambiguous.
 - Result columns' aliases can be used only in ORDER BY. WHERE sees fields
   only.
 
@@ -392,6 +394,13 @@ Each term is worked out as SQLite works it out:
    the sources' fields first, and then the result columns' aliases. So
    `ORDER BY 1.5` or `ORDER BY '2'` sorts by a constant and changes nothing.
 
+In such an expression, an alias stands for its column's expression, which is
+worked out again, with its affinity: with `CAST(n AS INTEGER) AS c`,
+`ORDER BY c = '5'` compares as `CAST(n AS INTEGER) = '5'`, which is true
+where n is the text '5'. A query without a FROM has one row, and its ORDER
+BY isn't worked out, apart from an aggregate query's aggregates. Its names
+and numbers are checked all the same.
+
 ASC is the default and DESC reverses. Going up, NULL comes first, then
 numbers, then text, then bytes, as "Comparing" describes. `NULLS FIRST`,
 `NULLS LAST` and `COLLATE` are outside the subset.
@@ -414,10 +423,12 @@ SQLite's `LIMIT m, n` is outside the subset.
 
 `(SELECT f FROM t WHERE key = e)` gives field `f`, or `key`, of the record
 in table `t` whose key is `e`. It gives NULL when there's no such record, or
-when the record has no value for `f`. `e` can't use fields, and the
-subquery is worked out once for each statement. It may go anywhere an
-expression may, for example `distance(vec, (SELECT vec FROM photo WHERE key
-= ?))`. The table and the field must exist.
+when the record has no value for `f`. `e` can't use fields, and the subquery
+is worked out once for each statement: the first time a row reaches it, or
+before any row when it names the records to read, as under "What gets worked
+out". A subquery no row reaches isn't worked out, and raises nothing. It may
+go anywhere an expression may, for example `distance(vec, (SELECT vec FROM
+photo WHERE key = ?))`. The table and the field must exist.
 
 Other subqueries are outside the subset, among them `(SELECT max(n) FROM
 docs)`, `EXISTS (...)` and `IN (SELECT key FROM people)`.
@@ -427,7 +438,7 @@ docs)`, `EXISTS (...)` and `IN (SELECT key FROM people)`.
 `x IN (SELECT key FROM walk(...))` and 0.x's
 `x IN (SELECT value FROM json_each(walk(...)))`, and both with `NOT IN`,
 test x against the keys the walk reaches, worked out once for each
-statement. They follow IN's rules under "Values".
+statement by the same rule. They follow IN's rules under "Values".
 
 ### Nearest's filter
 
@@ -836,20 +847,48 @@ the smallest integer, or `distance()` of two vectors of different sizes.
   stops at the first that's true. 0.x's planner may check conditions in
   another order, or skip rows by their key, so a test shouldn't count on an
   error from one condition when another rules the row out. AND's terms at
-  the top of a WHERE are worked out in turn as written, without the rule
-  for literals above, so `WHERE E AND 0` raises E's error, where
-  `SELECT E AND 0` gives 0.
+  the top of a WHERE are worked out in turn as written, without the rule for
+  literals above, apart from those that use no field, no subquery and no
+  `walk()`. Those are worked out first, once each and in turn, before any
+  row is read, as SQLite's planner takes them out of its loop, and without a
+  FROM every term is one of them. So `WHERE E AND 0` raises E's error when E
+  is one of them, and reads no rows when it isn't, where `SELECT E AND 0`
+  gives 0. When such a term is false or NULL, no row is read, and a walk in
+  the FROM isn't worked out. When one raises an error, the statement fails
+  even when the table has no records.
+- Before anything is worked out, `x AND y` becomes the integer 0 when either
+  side is known to be false by the rule for literals above, an AND made 0
+  included, and neither side calls a function outside a subquery, as
+  SQLite's parser makes it. So
+  `WHERE (SELECT n FROM docs WHERE key = ?) AND 0` never works out its
+  subquery, the list in `1 IN (1, n AND 0, E)` has no fields and is worked
+  out whole, and `ORDER BY n AND 0` is the column number 0, which is out of
+  range.
+- A WHERE term on the key that names the records to read, `key = e` where e
+  uses no field, or else `key IN` with a list whose items use no field, over
+  the one-record subquery or over a walk, is worked out once before any row
+  is read, even when the table has no records, as SQLite looks the records
+  up in the key's index. The first such equality is used, or else the first
+  such IN, and the other terms meet only the records it names, in key order.
+- In a join, the walk comes first, whichever source is written first. A term
+  that uses only the walk's columns, or uses no field and isn't worked out
+  once, is worked out for each record the walk reaches, before the table's
+  record is looked up, so it meets records of other tables too. The other
+  terms are worked out for each row of the join.
 - Without ORDER BY, the rows OFFSET skips are worked out as far as WHERE,
   and their result columns aren't. Once LIMIT's rows are out, no more rows
   are read.
-- With ORDER BY, every row that passes WHERE has its terms worked out,
-  before LIMIT. Without a LIMIT, its result columns are worked out too.
-  With one, SQLite's sorter keeps the best LIMIT plus OFFSET rows so far,
-  and a row's result columns are worked out only when the sorter keeps it
-  as it comes: when fewer than that many have come, or when it comes before
-  the last of them. A row that ties the last comes after it. A term that's
-  a result column, by its alias or its number, is worked out for every row,
-  as a term.
+- An ORDER BY whose first term is the table's key, by name, alias or number,
+  going up or down, is the order of the key's index, and the query is worked
+  out as if it had no ORDER BY, with none of its terms worked out. That
+  holds over a table. A join's rows are sorted. Otherwise, with ORDER BY,
+  every row that passes WHERE has its terms worked out, before LIMIT.
+  Without a LIMIT, its result columns are worked out too. With one, SQLite's
+  sorter keeps the best LIMIT plus OFFSET rows so far, and a row's result
+  columns are worked out only when the sorter keeps it as it comes: when
+  fewer than that many have come, or when it comes before the last of them.
+  A row that ties the last comes after it. A term that's a result column, by
+  its alias or its number, is worked out for every row, as a term.
 
 ## Functions
 

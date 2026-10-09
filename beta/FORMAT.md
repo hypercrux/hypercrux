@@ -448,6 +448,10 @@ then deals with what's left as with what a crash leaves: it marks the
 failed batch when it counts, since the commit's outcome is unknown, and
 cuts it otherwise.
 
+A writer works from the database's real path, with every symbolic link
+resolved, and writes to no file with more than one name, since a compaction
+replaces the file at one path only.
+
 **Creating a database.** A new database starts as a file holding only its
 header, written beside the database under a name of its own, the
 database's name with `.new-` and random letters added. The creator takes

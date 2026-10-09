@@ -69,19 +69,19 @@ work in, and all 133 hours are done after R4.
 | 29 | F6 Following other processes | 3 | done, [F6.md](F6.md) |
 | 30 | F8 Compaction | 3 | done, [F8.md](F8.md), with Q1 and G3 |
 | 31 | F9 Reloading | 2 | done, [F9.md](F9.md), with Q2 and Q4 |
-| 32 | F7 File rules and growth | 2 | next, [F7.md](F7.md) |
+| 32 | F7 File rules and growth | 2 | done, [F7.md](F7.md), with Q5 and G6 |
 | 33 | Q1 Values and functions | 4 | done, [Q1.md](Q1.md) |
 | 34 | Q2 Dates | 2 | done, [Q2.md](Q2.md) |
 | 35 | Q3 Parser | 5 | done, [Q3.md](Q3.md), ahead of Q1 and Q2 |
 | 36 | Q4 Operators | 2 | done, [Q4.md](Q4.md) |
-| 37 | Q5 Planner | 5 | next, [Q5.md](Q5.md) |
-| 38 | Q6 SQL writes | 2 | |
+| 37 | Q5 Planner | 5 | done, [Q5.md](Q5.md) |
+| 38 | Q6 SQL writes | 2 | next, [Q6.md](Q6.md) |
 | 39 | G3 The database/sql driver | 2 | done, [G3.md](G3.md) |
 | 40 | G4 Slice 3: SQL | 2 | |
-| 41 | G6 Import and export in the Beta | 2 | next, [G6.md](G6.md) |
+| 41 | G6 Import and export in the Beta | 2 | done, [G6.md](G6.md) |
 | 42 | G5 The command and `Compact` | 3 | |
-| 43 | G7 `check` | 2 | |
-| 44 | I1 Integration | 3 | |
+| 43 | G7 `check` | 2 | next, [G7.md](G7.md) |
+| 44 | I1 Integration | 3 | next, [I1.md](I1.md) |
 | 45 | R1 Long runs | 3 | |
 | 46 | R2 Independent review | 5 | |
 | 47 | R3 Docs and site | 3 | |
