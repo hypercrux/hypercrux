@@ -1,166 +1,168 @@
 # 0.1's benchmarks on 0.x and on the Beta, side by side on the same data, three runs each, and opening a database on both. Put and Link are one committed transaction each, synced to disk. Nearest compares every vector (exact search) and returns the closest 10
-# recorded 2026-10-08 15:52 UTC with go1.24.7 linux/amd64, SQLite 3.53.4, at commit fb0be77
-# Linux 6.18.44-fc-v80, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs, load average 0.02 0.01 0.00 at the start
+# recorded 2026-10-09 15:29 UTC with go1.24.7 linux/amd64, SQLite 3.53.4, at commit 91d0021
+# Linux 6.18.44-fc-v80, Intel(R) Xeon(R) Processor @ 2.80GHz, 2 CPUs, load average 0.15 0.78 1.12 at the start
 # command: go test -run ^$ -bench . -benchtime 3s -count 3 -timeout 60m -v ./beta/bench
 
 Time per operation, the middle of three runs of each benchmark on each engine,
 with the Beta's targets from BETA.md.
-The run took 8 minutes 17 seconds.
+The run took 8 minutes 44 seconds.
 
 Benchmark                           0.x      Beta          The Beta's target
-Nearest_1k_384dims                  2.7 ms   242 µs
-Nearest_10k_384dims                 28.8 ms  2.44 ms
-Nearest_100k_384dims                315 ms   35 ms         65 ms
-Nearest_100k_384dims_tenthFiltered  87.8 ms  waits for G4  12 ms
-Nearest_10k_1536dims                88.3 ms  11.9 ms       26 ms
-Walk_100k_depth1                    29.6 µs  2.9 µs        3 µs
-Walk_100k_depth2                    93.1 µs  10.1 µs
-Walk_100k_depth3                    429 µs   44.8 µs       40 µs
-Put                                 228 µs   199 µs        no slower than 0.x
-Put_384dims                         264 µs   258 µs
-PutBatch_384dims                    40.5 µs  14.3 µs       5 µs
-Get                                 13.2 µs  2.23 µs       3 µs
-Link                                233 µs   185 µs
-Open_100k_384dims                   456 µs   606 ms [1]    250 ms
+Nearest_1k_384dims                  4.69 ms  308 µs
+Nearest_10k_384dims                 45.6 ms  4.31 ms
+Nearest_100k_384dims                465 ms   35.8 ms       65 ms
+Nearest_100k_384dims_tenthFiltered  156 ms   waits for G4  12 ms
+Nearest_10k_1536dims                130 ms   14.9 ms       26 ms
+Walk_100k_depth1                    53.3 µs  4.72 µs       3 µs
+Walk_100k_depth2                    159 µs   15.8 µs
+Walk_100k_depth3                    611 µs   76.6 µs       40 µs
+Put                                 431 µs   416 µs        no slower than 0.x
+Put_384dims                         512 µs   518 µs
+PutBatch_384dims                    66.7 µs  17.3 µs       5 µs
+Get                                 25.3 µs  3.69 µs       3 µs
+Link                                446 µs   366 µs
+Open_100k_384dims                   662 µs   948 ms [1]    250 ms
 
 [1] Beta: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
 
 goos: linux
 goarch: amd64
 pkg: github.com/hypercrux/hypercrux/beta/bench
-cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+cpu: Intel(R) Xeon(R) Processor @ 2.80GHz
 BenchmarkNearest_1k_384dims
 BenchmarkNearest_1k_384dims/0.x
-BenchmarkNearest_1k_384dims/0.x-2               	    1158	   2670007 ns/op
-BenchmarkNearest_1k_384dims/0.x-2               	    1182	   2769634 ns/op
-BenchmarkNearest_1k_384dims/0.x-2               	    1543	   2700891 ns/op
+BenchmarkNearest_1k_384dims/0.x-2               	     757	   4453024 ns/op
+BenchmarkNearest_1k_384dims/0.x-2               	     756	   4693880 ns/op
+BenchmarkNearest_1k_384dims/0.x-2               	     806	   5103796 ns/op
 BenchmarkNearest_1k_384dims/Beta
-BenchmarkNearest_1k_384dims/Beta-2              	   14828	    241822 ns/op
-BenchmarkNearest_1k_384dims/Beta-2              	   15176	    245396 ns/op
-BenchmarkNearest_1k_384dims/Beta-2              	   14970	    230709 ns/op
+BenchmarkNearest_1k_384dims/Beta-2              	   11044	    296979 ns/op
+BenchmarkNearest_1k_384dims/Beta-2              	   10000	    313085 ns/op
+BenchmarkNearest_1k_384dims/Beta-2              	   10000	    308488 ns/op
 BenchmarkNearest_10k_384dims
 BenchmarkNearest_10k_384dims/0.x
-BenchmarkNearest_10k_384dims/0.x-2              	     128	  29258552 ns/op
-BenchmarkNearest_10k_384dims/0.x-2              	     126	  28762380 ns/op
-BenchmarkNearest_10k_384dims/0.x-2              	     121	  27328756 ns/op
+BenchmarkNearest_10k_384dims/0.x-2              	      79	  45597625 ns/op
+BenchmarkNearest_10k_384dims/0.x-2              	      68	  44947545 ns/op
+BenchmarkNearest_10k_384dims/0.x-2              	      74	  45830416 ns/op
 BenchmarkNearest_10k_384dims/Beta
-BenchmarkNearest_10k_384dims/Beta-2             	    1699	   2252212 ns/op
-BenchmarkNearest_10k_384dims/Beta-2             	    1576	   2515341 ns/op
-BenchmarkNearest_10k_384dims/Beta-2             	    1428	   2442048 ns/op
+BenchmarkNearest_10k_384dims/Beta-2             	     901	   4305003 ns/op
+BenchmarkNearest_10k_384dims/Beta-2             	     759	   4468652 ns/op
+BenchmarkNearest_10k_384dims/Beta-2             	     925	   4309028 ns/op
 BenchmarkNearest_100k_384dims
 BenchmarkNearest_100k_384dims/0.x
-BenchmarkNearest_100k_384dims/0.x-2             	      10	 319640265 ns/op
-BenchmarkNearest_100k_384dims/0.x-2             	      10	 307633078 ns/op
-BenchmarkNearest_100k_384dims/0.x-2             	      13	 315073804 ns/op
+BenchmarkNearest_100k_384dims/0.x-2             	       7	 460990818 ns/op
+BenchmarkNearest_100k_384dims/0.x-2             	       7	 517145880 ns/op
+BenchmarkNearest_100k_384dims/0.x-2             	       7	 464886977 ns/op
 BenchmarkNearest_100k_384dims/Beta
-BenchmarkNearest_100k_384dims/Beta-2            	      97	  34951433 ns/op
-BenchmarkNearest_100k_384dims/Beta-2            	     100	  33381414 ns/op
-BenchmarkNearest_100k_384dims/Beta-2            	     100	  35330626 ns/op
+BenchmarkNearest_100k_384dims/Beta-2            	     100	  33105650 ns/op
+BenchmarkNearest_100k_384dims/Beta-2            	      99	  36049651 ns/op
+BenchmarkNearest_100k_384dims/Beta-2            	     100	  35849381 ns/op
 BenchmarkNearest_100k_384dims_tenthFiltered
 BenchmarkNearest_100k_384dims_tenthFiltered/0.x
-BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      36	  87793157 ns/op
-BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      37	  87931249 ns/op
-BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      38	  84705843 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      24	 164519188 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      22	 156293858 ns/op
+BenchmarkNearest_100k_384dims_tenthFiltered/0.x-2         	      24	 147190491 ns/op
 BenchmarkNearest_100k_384dims_tenthFiltered/Beta
     bench_test.go:29: waits for task G4, which brings Nearest with a filter
 --- SKIP: BenchmarkNearest_100k_384dims_tenthFiltered/Beta
 BenchmarkNearest_10k_1536dims
 BenchmarkNearest_10k_1536dims/0.x
-BenchmarkNearest_10k_1536dims/0.x-2                       	      42	  88251525 ns/op
-BenchmarkNearest_10k_1536dims/0.x-2                       	      36	  90906077 ns/op
-BenchmarkNearest_10k_1536dims/0.x-2                       	      39	  88177415 ns/op
+BenchmarkNearest_10k_1536dims/0.x-2                       	      22	 144780632 ns/op
+BenchmarkNearest_10k_1536dims/0.x-2                       	      28	 129487265 ns/op
+BenchmarkNearest_10k_1536dims/0.x-2                       	      30	 130250908 ns/op
 BenchmarkNearest_10k_1536dims/Beta
-BenchmarkNearest_10k_1536dims/Beta-2                      	     280	  11506613 ns/op
-BenchmarkNearest_10k_1536dims/Beta-2                      	     310	  11891234 ns/op
-BenchmarkNearest_10k_1536dims/Beta-2                      	     301	  13717188 ns/op
+BenchmarkNearest_10k_1536dims/Beta-2                      	     243	  15772151 ns/op
+BenchmarkNearest_10k_1536dims/Beta-2                      	     250	  14889163 ns/op
+BenchmarkNearest_10k_1536dims/Beta-2                      	     248	  14747129 ns/op
 BenchmarkWalk_100k_depth1
 BenchmarkWalk_100k_depth1/0.x
-BenchmarkWalk_100k_depth1/0.x-2                           	  117867	     27658 ns/op	         5.000 records/walk
-BenchmarkWalk_100k_depth1/0.x-2                           	  116422	     30419 ns/op	         5.000 records/walk
-BenchmarkWalk_100k_depth1/0.x-2                           	  110090	     29594 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/0.x-2                           	   74864	     58920 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/0.x-2                           	   76453	     49855 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/0.x-2                           	   64257	     53265 ns/op	         5.000 records/walk
 BenchmarkWalk_100k_depth1/Beta
-BenchmarkWalk_100k_depth1/Beta-2                          	 1290678	      2843 ns/op	         5.000 records/walk
-BenchmarkWalk_100k_depth1/Beta-2                          	 1216020	      3058 ns/op	         5.000 records/walk
-BenchmarkWalk_100k_depth1/Beta-2                          	 1245382	      2904 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/Beta-2                          	  801379	      5164 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/Beta-2                          	  688382	      4652 ns/op	         5.000 records/walk
+BenchmarkWalk_100k_depth1/Beta-2                          	  771987	      4719 ns/op	         5.000 records/walk
 BenchmarkWalk_100k_depth2
 BenchmarkWalk_100k_depth2/0.x
-BenchmarkWalk_100k_depth2/0.x-2                           	   37002	     95268 ns/op	        30.00 records/walk
-BenchmarkWalk_100k_depth2/0.x-2                           	   43214	     93113 ns/op	        30.00 records/walk
-BenchmarkWalk_100k_depth2/0.x-2                           	   36436	     91546 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2/0.x-2                           	   26086	    149850 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2/0.x-2                           	   21848	    159340 ns/op	        30.00 records/walk
+BenchmarkWalk_100k_depth2/0.x-2                           	   24874	    164830 ns/op	        30.00 records/walk
 BenchmarkWalk_100k_depth2/Beta
-BenchmarkWalk_100k_depth2/Beta-2                          	  455583	      9809 ns/op	        29.99 records/walk
-BenchmarkWalk_100k_depth2/Beta-2                          	  441441	     10424 ns/op	        29.99 records/walk
-BenchmarkWalk_100k_depth2/Beta-2                          	  489630	     10131 ns/op	        29.99 records/walk
+BenchmarkWalk_100k_depth2/Beta-2                          	  274616	     17187 ns/op	        29.99 records/walk
+BenchmarkWalk_100k_depth2/Beta-2                          	  245749	     15771 ns/op	        29.99 records/walk
+BenchmarkWalk_100k_depth2/Beta-2                          	  264200	     15732 ns/op	        29.99 records/walk
 BenchmarkWalk_100k_depth3
 BenchmarkWalk_100k_depth3/0.x
-BenchmarkWalk_100k_depth3/0.x-2                           	    8644	    427413 ns/op	       154.9 records/walk
-BenchmarkWalk_100k_depth3/0.x-2                           	    7970	    434126 ns/op	       154.9 records/walk
-BenchmarkWalk_100k_depth3/0.x-2                           	    7770	    428980 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/0.x-2                           	    5910	    611043 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/0.x-2                           	    6387	    622118 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/0.x-2                           	    5284	    598286 ns/op	       154.9 records/walk
 BenchmarkWalk_100k_depth3/Beta
-BenchmarkWalk_100k_depth3/Beta-2                          	  100939	     42615 ns/op	       154.9 records/walk
-BenchmarkWalk_100k_depth3/Beta-2                          	  107794	     47479 ns/op	       154.9 records/walk
-BenchmarkWalk_100k_depth3/Beta-2                          	  102817	     44847 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/Beta-2                          	   58890	     77648 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/Beta-2                          	   62347	     73690 ns/op	       154.9 records/walk
+BenchmarkWalk_100k_depth3/Beta-2                          	   60357	     76578 ns/op	       154.9 records/walk
 BenchmarkPut
 BenchmarkPut/0.x
-BenchmarkPut/0.x-2                                        	   15579	    236560 ns/op
-BenchmarkPut/0.x-2                                        	   14097	    228377 ns/op
-BenchmarkPut/0.x-2                                        	   17235	    214215 ns/op
+BenchmarkPut/0.x-2                                        	    8852	    430602 ns/op
+BenchmarkPut/0.x-2                                        	    8389	    437126 ns/op
+BenchmarkPut/0.x-2                                        	    8521	    409624 ns/op
 BenchmarkPut/Beta
-BenchmarkPut/Beta-2                                       	   20708	    175743 ns/op
-BenchmarkPut/Beta-2                                       	   17450	    198670 ns/op
-BenchmarkPut/Beta-2                                       	   19098	    198941 ns/op
+BenchmarkPut/Beta-2                                       	    9033	    352266 ns/op
+BenchmarkPut/Beta-2                                       	   10000	    456205 ns/op
+BenchmarkPut/Beta-2                                       	    7646	    415706 ns/op
 BenchmarkPut_384dims
 BenchmarkPut_384dims/0.x
-BenchmarkPut_384dims/0.x-2                                	   13795	    264424 ns/op
-BenchmarkPut_384dims/0.x-2                                	   12978	    253760 ns/op
-BenchmarkPut_384dims/0.x-2                                	   13095	    265575 ns/op
+BenchmarkPut_384dims/0.x-2                                	    6266	    541551 ns/op
+BenchmarkPut_384dims/0.x-2                                	    6788	    512011 ns/op
+BenchmarkPut_384dims/0.x-2                                	    6766	    503611 ns/op
 BenchmarkPut_384dims/Beta
-BenchmarkPut_384dims/Beta-2                               	   12252	    295670 ns/op
-BenchmarkPut_384dims/Beta-2                               	   15162	    243557 ns/op
-BenchmarkPut_384dims/Beta-2                               	   15290	    257891 ns/op
+BenchmarkPut_384dims/Beta-2                               	    8179	    428867 ns/op
+BenchmarkPut_384dims/Beta-2                               	    8490	    535997 ns/op
+BenchmarkPut_384dims/Beta-2                               	    8980	    518085 ns/op
 BenchmarkPutBatch_384dims
 BenchmarkPutBatch_384dims/0.x
-BenchmarkPutBatch_384dims/0.x-2                           	   85221	     40482 ns/op
-BenchmarkPutBatch_384dims/0.x-2                           	   96006	     37483 ns/op
-BenchmarkPutBatch_384dims/0.x-2                           	   85881	     43227 ns/op
+BenchmarkPutBatch_384dims/0.x-2                           	   44006	     70289 ns/op
+BenchmarkPutBatch_384dims/0.x-2                           	   53816	     61132 ns/op
+BenchmarkPutBatch_384dims/0.x-2                           	   46504	     66716 ns/op
 BenchmarkPutBatch_384dims/Beta
-BenchmarkPutBatch_384dims/Beta-2                          	  214834	     14299 ns/op
-BenchmarkPutBatch_384dims/Beta-2                          	  321465	     14279 ns/op
-BenchmarkPutBatch_384dims/Beta-2                          	  248377	     14638 ns/op
+BenchmarkPutBatch_384dims/Beta-2                          	  203539	     16853 ns/op
+BenchmarkPutBatch_384dims/Beta-2                          	  234870	     17262 ns/op
+BenchmarkPutBatch_384dims/Beta-2                          	  255409	     17884 ns/op
 BenchmarkGet
 BenchmarkGet/0.x
-BenchmarkGet/0.x-2                                        	  242257	     13444 ns/op
-BenchmarkGet/0.x-2                                        	  261016	     12913 ns/op
-BenchmarkGet/0.x-2                                        	  272914	     13206 ns/op
+BenchmarkGet/0.x-2                                        	  132242	     25998 ns/op
+BenchmarkGet/0.x-2                                        	  129673	     25258 ns/op
+BenchmarkGet/0.x-2                                        	  136182	     24475 ns/op
 BenchmarkGet/Beta
-BenchmarkGet/Beta-2                                       	 1553810	      2232 ns/op
-BenchmarkGet/Beta-2                                       	 1683565	      2413 ns/op
-BenchmarkGet/Beta-2                                       	 1548150	      2175 ns/op
+BenchmarkGet/Beta-2                                       	 1006496	      3694 ns/op
+BenchmarkGet/Beta-2                                       	  820750	      3783 ns/op
+BenchmarkGet/Beta-2                                       	 1000000	      3588 ns/op
 BenchmarkLink
 BenchmarkLink/0.x
-BenchmarkLink/0.x-2                                       	   16551	    214769 ns/op
-BenchmarkLink/0.x-2                                       	   16575	    232944 ns/op
-BenchmarkLink/0.x-2                                       	   13980	    233315 ns/op
+BenchmarkLink/0.x-2                                       	    6958	    446282 ns/op
+BenchmarkLink/0.x-2                                       	    6934	    481826 ns/op
+BenchmarkLink/0.x-2                                       	    6996	    444966 ns/op
 BenchmarkLink/Beta
-BenchmarkLink/Beta-2                                      	   21709	    184532 ns/op
-BenchmarkLink/Beta-2                                      	   18954	    190412 ns/op
-BenchmarkLink/Beta-2                                      	   18244	    183921 ns/op
+BenchmarkLink/Beta-2                                      	    9657	    373097 ns/op
+BenchmarkLink/Beta-2                                      	   10000	    339473 ns/op
+BenchmarkLink/Beta-2                                      	   10000	    365651 ns/op
 BenchmarkOpen_100k_384dims
 BenchmarkOpen_100k_384dims/0.x
-BenchmarkOpen_100k_384dims/0.x-2                          	    8746	    458479 ns/op
-BenchmarkOpen_100k_384dims/0.x-2                          	    8332	    437368 ns/op
-BenchmarkOpen_100k_384dims/0.x-2                          	    9934	    456305 ns/op
+BenchmarkOpen_100k_384dims/0.x-2                          	    5835	    628799 ns/op
+BenchmarkOpen_100k_384dims/0.x-2                          	    5004	    677683 ns/op
+BenchmarkOpen_100k_384dims/0.x-2                          	    5241	    661561 ns/op
 BenchmarkOpen_100k_384dims/Beta
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-BenchmarkOpen_100k_384dims/Beta-2                         	       6	 606396677 ns/op
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-BenchmarkOpen_100k_384dims/Beta-2                         	       6	 591889778 ns/op
+BenchmarkOpen_100k_384dims/Beta-2                         	       4	 952878745 ns/op
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
     bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
-BenchmarkOpen_100k_384dims/Beta-2                         	       6	 607934490 ns/op
+BenchmarkOpen_100k_384dims/Beta-2                         	       4	 862300231 ns/op
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+    bench_test.go:226: the file is a log of the 20 commits that built it, until compaction (tasks F8 and G5)
+BenchmarkOpen_100k_384dims/Beta-2                         	       4	 947846875 ns/op
 PASS
-ok  	github.com/hypercrux/hypercrux/beta/bench	496.872s
+ok  	github.com/hypercrux/hypercrux/beta/bench	524.154s

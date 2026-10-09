@@ -241,12 +241,15 @@ means the commit isn't in the file, unless the handle is stuck, when its
 outcome is unknown.
 
 Each sync of a growing file also commits its new size, which can cost more
-than overwriting space that's already there. Task F7 measures it. Reserving
-space ahead with `fallocate` wouldn't help, since on ext4 and XFS the first
-write into that space still needs a journal commit. Writing zeros ahead of
-the log would, but then readers couldn't trust the file's size to show where
-the log ends, so it waits until after the Beta and comes only if the
-measurement calls for it.
+than overwriting space that's already there. Task F7 measured it on a cloud
+machine's ext4 disk: a commit of a 96-byte put synced in 346 µs where the
+file grew, against 270 µs over zeros written ahead, and a commit of 1.6 MB
+in 3.35 ms against 2.68 ms. Reserving space ahead with `fallocate` helped
+less, 320 µs and 3.83 ms, since on ext4 and XFS the first write into that
+space still needs a journal commit. Writing zeros ahead of the log would,
+but then readers couldn't trust the file's size to show where the log ends,
+so it waits until after the Beta and comes only if the measurement calls for
+it.
 
 On Linux, a sync returns only once the data is on the drive, and drives that
 honour cache flushes keep it through a power cut. That one rule covers
@@ -749,7 +752,7 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 | Memory | Every process holds the whole database, about 1.7 GB at a million records with 384-value vectors, and Go's collector can let the heap grow to twice the live data | The limit is documented, `check` reports sizes, and `GOMEMLIMIT`, set a little above the live size, keeps the heap near it |
 | Opening and reloading | Opening reads the whole file, so does every run of the command, and other processes reload after each compaction | Heavy scripting at large sizes belongs in the Go package; carrying on without a reload can come later |
 | Pauses | Writers wait while a compaction runs, for longer as the data grows | Writers wait out a running compaction instead of failing; compacting in the background can come later |
-| A growing file | Each sync also commits a size change | Measured in F7; writing zeros ahead of the log can follow the Beta if needed |
+| A growing file | Each sync also commits a size change | Measured in F7: a quarter more for a small commit than a sync over zeros; writing zeros ahead of the log can follow the Beta if needed |
 | Search speed | A plain Go loop is slower than C with SIMD instructions, and the loop, more than memory, sets the pace of a search | The targets are set for the plain loop; Go assembly that keeps the 8 sums can come later |
 | SQL scope | People expect all of SQLite's SQL | A documented subset; anything outside it can go back to 0.x through `export` and `import` |
 | Parallel work | Interfaces that change under several agents, and bugs that only show when the parts meet | Interfaces fixed in P3, slice 1 running them end to end early, the differential harness on every merge, one agent owning the file tasks |
