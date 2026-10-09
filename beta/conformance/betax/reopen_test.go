@@ -8,6 +8,7 @@ package betax
 import (
 	"database/sql"
 	"fmt"
+	"io"
 	"maps"
 	"math"
 	"slices"
@@ -38,6 +39,20 @@ func TestConformanceAfterAReopen(t *testing.T) {
 		t.Errorf("the run reopened %d times, closed %d databases and compared %d keys after a last reopen", e.log.reopens, e.log.closes, e.log.keys)
 	}
 	t.Logf("%d reopens; %d databases closed, with %d keys read the same before and after a last reopen", e.log.reopens, e.log.closes, e.log.keys)
+}
+
+// TestExportAndImportAfterAReopen runs the suite's round trip through
+// Export and Import with the file opened afresh before every read, the
+// exports among them, so what each import put in the file is what's read.
+func TestExportAndImportAfterAReopen(t *testing.T) {
+	e := reopening{log: &problems{}}
+	conformance.RoundTrip(t, e)
+	for _, p := range e.log.list {
+		t.Error(p)
+	}
+	if e.log.reopens < 10 {
+		t.Errorf("the round trip reopened the file %d times", e.log.reopens)
+	}
 }
 
 // reopening is the Beta as a conformance.Engine whose databases reopen the
@@ -224,6 +239,20 @@ func (d *reopened) Check() (conformance.Report, error) {
 }
 
 func (d *reopened) SQL() *sql.DB { return d.now().SQL() }
+
+// Export reads the file afresh, as every other read does, so the export
+// shows what the file holds.
+func (d *reopened) Export(w io.Writer) error {
+	db, err := d.fresh()
+	if err != nil {
+		return err
+	}
+	return db.Export(w)
+}
+
+// Import is a write, through the database as it is. The reads after it
+// open the file again, so they see what the import put in the file.
+func (d *reopened) Import(r io.Reader) error { return d.now().Import(r) }
 
 // Update runs fn through the database as it is. Its transaction reads its
 // own changes, which aren't in the file yet.

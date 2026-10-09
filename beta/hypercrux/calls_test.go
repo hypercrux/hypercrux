@@ -6,6 +6,7 @@
 package hypercrux_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -39,11 +40,12 @@ func within(t *testing.T, fn func()) {
 }
 
 // TestCallsThroughTheDatabaseInsideUpdate makes every call through the
-// database inside its own Update. A write, Close and a nested Update fail at
-// once with ErrInsideUpdate, before the first change and after it. A read
-// goes ahead before the first change, seeing what was committed, and fails
-// after it, as BETA.md's "Transactions" says. The same reads through the
-// transaction see its changes.
+// database inside its own Update. A write, Import among them, Close and a
+// nested Update fail at once with ErrInsideUpdate, before the first change
+// and after it. A read, Export among them, goes ahead before the first
+// change, seeing what was committed, and fails after it, as BETA.md's
+// "Transactions" says. The same reads through the transaction see its
+// changes.
 func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 	db := open(t, filepath.Join(t.TempDir(), "test.hcx"))
 	ok(t, db.Update(func(tx *hc.Tx) error {
@@ -61,6 +63,7 @@ func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 			"Unlink": db.Unlink("docs:1", "", "docs:2"),
 			"Update": db.Update(func(*hc.Tx) error { return nil }),
 			"Close":  db.Close(),
+			"Import": db.Import(strings.NewReader(emptyExport)),
 		} {
 			if !errors.Is(err, hc.ErrInsideUpdate) {
 				t.Errorf("%s: db.%s gave %v", when, name, err)
@@ -82,6 +85,9 @@ func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 		if check != nil {
 			rep, err := check()
 			got["Check"] = fmt.Sprint(rep.Records, " ", rep.Links, " ", err)
+			var out bytes.Buffer
+			err = db.Export(&out)
+			got["Export"] = fmt.Sprintf("%q %v", out.String(), err)
 		}
 		return got
 	}
@@ -167,6 +173,11 @@ func TestReadersWaitFromTheFirstChange(t *testing.T) {
 			rep, err := db.Check()
 			return fmt.Sprint(rep.Records, rep.Links, err)
 		},
+		"Export": func() string {
+			var out bytes.Buffer
+			err := db.Export(&out)
+			return fmt.Sprint(strings.Count(out.String(), "\n"), err)
+		},
 	}
 	start := func() map[string]chan string {
 		out := map[string]chan string{}
@@ -177,8 +188,8 @@ func TestReadersWaitFromTheFirstChange(t *testing.T) {
 		}
 		return out
 	}
-	before := map[string]string{"Get": "1 <nil>", "Scan": "2 <nil>", "Neighbours": "0 <nil>", "Walk": "0 <nil>", "Nearest": "docs:2", "Check": "2 0 <nil>"}
-	after := map[string]string{"Get": "10 <nil>", "Scan": "3 <nil>", "Neighbours": "1 <nil>", "Walk": "1 <nil>", "Nearest": "docs:1", "Check": "3 1 <nil>"}
+	before := map[string]string{"Get": "1 <nil>", "Scan": "2 <nil>", "Neighbours": "0 <nil>", "Walk": "0 <nil>", "Nearest": "docs:2", "Check": "2 0 <nil>", "Export": "5 <nil>"}
+	after := map[string]string{"Get": "10 <nil>", "Scan": "3 <nil>", "Neighbours": "1 <nil>", "Walk": "1 <nil>", "Nearest": "docs:1", "Check": "3 1 <nil>", "Export": "7 <nil>"}
 	var waiting map[string]chan string
 	ok(t, db.Update(func(tx *hc.Tx) error {
 		for name, c := range start() {
@@ -212,7 +223,7 @@ func TestReadersWaitFromTheFirstChange(t *testing.T) {
 // transaction once its Update has returned, on a database once it's
 // closed, and on a DB or Tx that nothing opened. Each fails with ErrClosed,
 // before it checks its arguments, and Close itself does nothing the second
-// time.
+// time. Export writes nothing then, and Import reads nothing.
 func TestCallsAfterTheEnd(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.hcx")
 	db, err := hc.Open(path)
@@ -251,10 +262,17 @@ func TestCallsAfterTheEnd(t *testing.T) {
 		all := calls(d)
 		all["Update"] = d.Update(func(*hc.Tx) error { return nil })
 		all["Check"] = errOf(d.Check())
+		var out bytes.Buffer
+		all["Export"] = d.Export(&out)
+		in := strings.NewReader("not an export\n")
+		all["Import"] = d.Import(in)
 		for name, err := range all {
 			if !errors.Is(err, hc.ErrClosed) || errors.Is(err, hc.ErrInvalid) || errors.Is(err, hc.ErrNotFound) {
 				t.Errorf("db.%s on a closed database gave %v", name, err)
 			}
+		}
+		if out.Len() != 0 || in.Len() != len("not an export\n") {
+			t.Errorf("on a closed database, Export wrote %q, and Import read %d bytes", out.String(), len("not an export\n")-in.Len())
 		}
 		ok(t, d.Close())
 	}

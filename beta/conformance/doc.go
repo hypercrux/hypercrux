@@ -6,6 +6,9 @@
 // on the Beta engine. An engine joins in with an adapter that implements
 // Engine; package zerox is the adapter for 0.x.
 //
+// RoundTrip and Across test export and import, on one engine and from one
+// engine to another and back. Each adapter's tests call them, beside Run.
+//
 // The tests are Linux only, like the rest of the beta folder. On other
 // systems this package is empty.
 package conformance

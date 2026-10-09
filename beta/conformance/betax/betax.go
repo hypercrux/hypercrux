@@ -7,6 +7,7 @@ package betax
 
 import (
 	"database/sql"
+	"io"
 	"maps"
 
 	c "github.com/hypercrux/hypercrux/beta/conformance"
@@ -195,5 +196,7 @@ func (d *database) Check() (c.Report, error) {
 	return c.Report{Tables: r.Tables, Records: r.Records, Links: r.Links, Vectors: r.Vectors, Problems: r.Problems}, err
 }
 
-func (d *database) SQL() *sql.DB { return d.db.SQL() }
-func (d *database) Close() error { return d.db.Close() }
+func (d *database) SQL() *sql.DB             { return d.db.SQL() }
+func (d *database) Export(w io.Writer) error { return d.db.Export(w) }
+func (d *database) Import(r io.Reader) error { return d.db.Import(r) }
+func (d *database) Close() error             { return d.db.Close() }

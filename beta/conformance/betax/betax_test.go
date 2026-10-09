@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/hypercrux/hypercrux/beta/conformance"
+	"github.com/hypercrux/hypercrux/beta/conformance/zerox"
 	hc "github.com/hypercrux/hypercrux/beta/hypercrux"
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 )
@@ -21,6 +22,17 @@ func TestMain(m *testing.M) { conformance.Main(m, Engine{}) }
 // TestConformance runs the whole suite on the Beta, which must pass it as
 // 0.x does, apart from the tests Skip names, which wait for later tasks.
 func TestConformance(t *testing.T) { conformance.Run(t, Engine{}) }
+
+// TestExportAndImport runs the suite's round trip through Export and
+// Import on the Beta, as on 0.x.
+func TestExportAndImport(t *testing.T) { conformance.RoundTrip(t, Engine{}) }
+
+// TestMovingAcross moves a database from 0.x to the Beta and back, and
+// from the Beta to 0.x and back, byte for byte.
+func TestMovingAcross(t *testing.T) {
+	t.Run("from 0.x", func(t *testing.T) { conformance.Across(t, zerox.Engine{}, Engine{}) })
+	t.Run("from the Beta", func(t *testing.T) { conformance.Across(t, Engine{}, zerox.Engine{}) })
+}
 
 // TestTheAdapterReachesTheBeta checks what the adapter hands the suite,
 // without running it: the Beta's errors, which are errs' values, its

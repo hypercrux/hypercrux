@@ -6,10 +6,8 @@
 package hypercrux_test
 
 import (
-	"bytes"
 	"errors"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	zx "github.com/hypercrux/hypercrux"
@@ -36,12 +34,9 @@ func TestTheStubsSayWhatsMissing(t *testing.T) {
 	}
 	db, tx := new(hc.DB), new(hc.Tx)
 	q := hc.Vector{1, 0}
-	var out bytes.Buffer
 	stubs := []stub{
 		{"DB.Nearest", "G4", errOf(db.Nearest("docs", q, 10, "status = ?", "open"))},
 		{"Tx.Nearest", "G4", errOf(tx.Nearest("docs", q, 10, "status = ?", "open"))},
-		{"DB.Export", "G6", db.Export(&out)},
-		{"DB.Import", "G6", db.Import(strings.NewReader(""))},
 		{"DB.Compact", "G5", db.Compact()},
 	}
 
@@ -77,9 +72,6 @@ func TestTheStubsSayWhatsMissing(t *testing.T) {
 		case s.err.Error() != want:
 			t.Errorf("%s: %q, want %q", s.name, s.err, want)
 		}
-	}
-	if out.Len() != 0 {
-		t.Errorf("Export wrote %q", out.String())
 	}
 	if db.Path() != "" {
 		t.Errorf("a DB that was never opened has the path %q", db.Path())

@@ -9,6 +9,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/binary"
+	"io"
 	"math"
 	"strconv"
 	"strings"
@@ -142,5 +143,11 @@ type DB interface {
 	Check() (Report, error)
 	// SQL returns the database/sql handle behind Query and Exec.
 	SQL() *sql.DB
+	// Export writes the database to w as JSON lines, in the format
+	// EXPORT.md describes, and Import reads such an export into a database
+	// that holds no record tables yet. Both engines write and read the
+	// same format, so a database moves between them either way.
+	Export(w io.Writer) error
+	Import(r io.Reader) error
 	Close() error
 }

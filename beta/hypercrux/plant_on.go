@@ -70,6 +70,26 @@ import (
 //   - hypercrux/failed-reload-read: after a reload that failed, a read that
 //     finds an Update holding the write lock reads the copy, which holds part
 //     of the new file, where it should give the reload's error.
+//
+// G6's, in export and import:
+//
+//   - hypercrux/export-fields-sorted: Export writes each table's fields,
+//     and so each record's, in byte order of name, where 0.x writes them in
+//     the table's order. An export and an import in the Beta alone still
+//     agree, and 0.x's export doesn't.
+//   - hypercrux/export-unlocked: Export reads the copy without its Read, so
+//     it neither waits for an Update's changes to commit nor fails inside
+//     one, and can write changes that roll back.
+//   - hypercrux/import-size-dropped: Import makes each table without its
+//     vector size, so the table's first vector sets it again, and a table
+//     whose vectors have all gone loses it.
+//   - hypercrux/import-kept-in-part: an import that fails on a line commits
+//     what came before it, and still gives the error.
+//   - hypercrux/import-twice-merged: a record that's there twice is merged
+//     into the first, as Put merges, and a link that's there twice is taken
+//     as made, where both are refused.
+//   - hypercrux/import-over-tables: Import goes ahead in a database that
+//     holds tables, where it should refuse.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -77,7 +97,9 @@ var plant = func() string {
 		"hypercrux/nearest-nil-for-none", "hypercrux/filter-ignored",
 		"hypercrux/blob-shared", "hypercrux/time-layout", "hypercrux/tx-dropped", "hypercrux/row-kept",
 		"hypercrux/rows-pulled-late", "hypercrux/write-kept", "hypercrux/sql-wraps-invalid",
-		"hypercrux/reads-never-follow", "hypercrux/reload-unheld", "hypercrux/reload-keeps-the-old-copy", "hypercrux/failed-reload-read":
+		"hypercrux/reads-never-follow", "hypercrux/reload-unheld", "hypercrux/reload-keeps-the-old-copy", "hypercrux/failed-reload-read",
+		"hypercrux/export-fields-sorted", "hypercrux/export-unlocked", "hypercrux/import-size-dropped",
+		"hypercrux/import-kept-in-part", "hypercrux/import-twice-merged", "hypercrux/import-over-tables":
 		return p
 	}
 	return ""

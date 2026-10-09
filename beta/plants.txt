@@ -181,3 +181,9 @@ query/join-terms-after-lookup ./beta/internal/query
 query/and-not-folded ./beta/internal/query
 query/order-alias-first ./beta/internal/query
 query/filter-first-term-dropped ./beta/internal/query
+hypercrux/export-fields-sorted ./beta/hypercrux
+hypercrux/export-unlocked ./beta/hypercrux
+hypercrux/import-size-dropped ./beta/hypercrux
+hypercrux/import-kept-in-part ./beta/hypercrux
+hypercrux/import-twice-merged ./beta/hypercrux
+hypercrux/import-over-tables ./beta/hypercrux
