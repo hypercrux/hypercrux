@@ -7,6 +7,7 @@
 // tree that tree.go describes. Compile and CompileCondition turn an
 // expression from the tree into a function that works it out (eval.go),
 // and Arg makes a caller's argument a value. The operators read the store
-// through store.Reader and hand rows on through Rows. Like the rest of
-// beta/, it builds only on Linux.
+// through store.Reader and hand rows on through Rows, and Query plans a
+// SELECT over a store and runs it (plan.go). Like the rest of beta/, it
+// builds only on Linux.
 package query

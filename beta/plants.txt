@@ -168,3 +168,16 @@ logfile/any-kind-of-file ./beta/internal/logfile
 logfile/fifo-opened-first ./beta/internal/logfile
 logfile/links-unchecked ./beta/internal/logfile
 logfile/dangling-link-retried ./beta/internal/logfile
+query/nearest-ignores-filter ./beta/internal/query
+query/nearest-without-vec-check ./beta/internal/query
+query/nearest-k-is-the-limit ./beta/internal/query
+query/walk-join-drops-a-depth ./beta/internal/query
+query/walk-lookup-in-walk-order ./beta/internal/query
+query/null-not-in-walk-kept ./beta/internal/query
+query/record-every-time ./beta/internal/query
+query/record-of-any-table ./beta/internal/query
+query/once-terms-for-each-row ./beta/internal/query
+query/join-terms-after-lookup ./beta/internal/query
+query/and-not-folded ./beta/internal/query
+query/order-alias-first ./beta/internal/query
+query/filter-first-term-dropped ./beta/internal/query
