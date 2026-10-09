@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"slices"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	val "github.com/hypercrux/hypercrux/beta/internal/value"
@@ -89,13 +90,19 @@ func AppendBatch(dst []byte, gen, seq uint64, changes []Change) ([]byte, uint32,
 	case len(changes) == 0:
 		return dst, 0, fmt.Errorf("%w: a batch with no changes", errs.ErrInvalid)
 	}
+	size := BatchHeadSize + 4
 	for i := range changes {
 		if why := changes[i].problem(); why != "" {
 			return dst, 0, fmt.Errorf("%w: change %d of the batch: %s", errs.ErrInvalid, i+1, why)
 		}
+		size += changes[i].size()
 	}
+	// The room for the whole batch, at once: grown an append at a time, a
+	// batch of a thousand puts with 384-value vectors, 1.6 MB, was copied
+	// about five times over as it grew, which took a fifth of the time such a
+	// commit spent (F7).
 	start := len(dst)
-	b := append(dst, magicBatch...)
+	b := append(slices.Grow(dst, size), magicBatch...)
 	b = binary.LittleEndian.AppendUint64(b, gen)
 	b = binary.LittleEndian.AppendUint64(b, 0) // the length, once it's known
 	b = binary.LittleEndian.AppendUint64(b, seq)
@@ -136,6 +143,42 @@ func appendChange(b []byte, c *Change) []byte {
 		b = appendString(b, c.Table)
 	}
 	return b
+}
+
+// size is how many bytes c takes in a batch, as appendChange writes it.
+func (c *Change) size() int {
+	n := 1 // the kind
+	switch c.Op {
+	case CreateTable:
+		n += 2 + len(c.Table) + 4 + 2
+		for _, name := range c.Names {
+			n += 2 + len(name)
+		}
+	case Put:
+		n += 2 + len(c.Key) + 2
+		for _, f := range c.Fields {
+			n += 2 + len(f.Name) + valueSize(f.Value)
+		}
+	case Delete:
+		n += 2 + len(c.Key)
+	case Link, Unlink:
+		n += 2 + len(c.Key) + 2 + len(c.Type) + 2 + len(c.To)
+	case Drop:
+		n += 2 + len(c.Table)
+	}
+	return n
+}
+
+// valueSize is how many bytes v takes in a put, as appendValue writes it: its
+// kind, then what the kind holds.
+func valueSize(v val.Value) int {
+	switch v.Kind() {
+	case val.KindInt, val.KindReal:
+		return 1 + 8
+	case val.KindText, val.KindBytes, val.KindVector:
+		return 1 + 4 + len(v.Raw())
+	}
+	return 1
 }
 
 // appendString appends a string: a u16 holding its length, then its bytes.

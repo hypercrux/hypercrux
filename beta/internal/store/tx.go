@@ -78,10 +78,17 @@ func (s *Store) Begin() (*Tx, error) {
 	}
 	s.writer.Lock()
 	s.owner.Store(me)
-	tx := &Tx{s: s}
+	tx := &Tx{s: s, undo: s.spare}
+	s.spare = nil
 	s.tx = tx
 	return tx, nil
 }
+
+// maxSpare is the most entries an undo list keeps for the next transaction,
+// about a megabyte of them. A thousand puts of new records make 3,000, and an
+// undo list grown from nothing for each transaction took about a sixteenth of
+// a batched put's time (F7).
+const maxSpare = 8192
 
 // Read calls fn with the store as a Reader, under the copy's lock held
 // shared, and returns fn's error. fn sees one point in the log: the copy as
@@ -386,10 +393,16 @@ func (tx *Tx) Rollback() {
 }
 
 // end releases the copy's lock, if the transaction took it, and then the
-// store for the next transaction.
+// store for the next transaction. The undo list's room goes to the next
+// transaction, unless it's grown large, with every entry cleared first, so it
+// keeps nothing alive.
 func (tx *Tx) end() {
 	s := tx.s
 	tx.done = true
+	if cap(tx.undo) <= maxSpare {
+		clear(tx.undo)
+		s.spare = tx.undo[:0]
+	}
 	tx.undo, tx.changes = nil, nil
 	s.tx = nil
 	if tx.locked {

@@ -190,9 +190,7 @@ func TestAReaderReadsAgainUnderTheLock(t *testing.T) {
 		if err := os.WriteFile(path, torn, 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Link(path, filepath.Join(dir, "old")); err != nil { // keeps the first file to look at
-			t.Fatal(err)
-		}
+		kept := holdOpen(t, path) // the first file to look at, kept open, since a second name would be refused (F7)
 		another(t, filepath.Join(dir, "new"), "n1", "n2")
 		release := holdLock(t, path)
 		defer release()
@@ -211,7 +209,7 @@ func TestAReaderReadsAgainUnderTheLock(t *testing.T) {
 		if rec.resets != 1 {
 			t.Errorf("the Target was reset %d times", rec.resets)
 		}
-		if !bytes.Equal(fileBytes(t, filepath.Join(dir, "old")), torn) {
+		if !bytes.Equal(heldBytes(t, kept), torn) {
 			t.Error("the file Open read first changed")
 		}
 	})

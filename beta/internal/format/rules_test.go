@@ -6,6 +6,7 @@
 package format
 
 import (
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"strings"
@@ -301,6 +302,52 @@ func TestTheRulesEdges(t *testing.T) {
 		if ruleBad != c.bad || codecBad != c.bad {
 			t.Errorf("%s %.50q (%d bytes, %d characters): rules refuses it: %v; the codec: %v; want %v",
 				c.rule, c.s, len(c.s), utf8.RuneCountInString(c.s), ruleBad, codecBad, c.bad)
+		}
+	}
+}
+
+// TestTheVectorCheck holds vectorProblem, which reads two values at a time,
+// to the words of a check one value at a time: the first value that's NaN or
+// infinite is the one named, wherever it falls, at an even place or an odd
+// one, the last of a vector of an odd length included. A vector of zeros and
+// -0 is all zero, and one value that isn't zero, anywhere, keeps it from
+// being so.
+func TestTheVectorCheck(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 2))
+	bad := []float32{float32(math.NaN()), math.Float32frombits(0x7fc00001), math.Float32frombits(0xffffffff),
+		float32(math.Inf(1)), float32(math.Inf(-1)), math.Float32frombits(0x7f800001)}
+	zero := []float32{0, float32(math.Copysign(0, -1))}
+	for range 5000 {
+		n := 1 + r.IntN(9)
+		if r.IntN(50) == 0 {
+			n = []int{384, 385, 1536, rules.MaxDims}[r.IntN(4)]
+		}
+		v := make([]float32, n)
+		for i := range v {
+			switch k := r.IntN(10); {
+			case k < 1 && r.IntN(n) < 2:
+				v[i] = bad[r.IntN(len(bad))]
+			case k < 6:
+				v[i] = zero[r.IntN(2)]
+			default:
+				v[i] = math.Float32frombits(r.Uint32() &^ 0x40000000) // never NaN or infinite
+			}
+		}
+		// The words of a check one value at a time.
+		want := ""
+		allZero := true
+		for i, x := range v {
+			if math.Float32bits(x)&0x7f800000 == 0x7f800000 {
+				want = fmt.Sprintf("a vector whose value %d is %v", i, x)
+				break
+			}
+			allZero = allZero && math.Float32bits(x)&0x7fffffff == 0
+		}
+		if want == "" && allZero {
+			want = "a vector whose values are all zero"
+		}
+		if got := vectorProblem(val.Vector(v).Raw()); got != want {
+			t.Fatalf("a vector of %d values starting %v: %q, where %q is wanted", n, v[:min(n, 9)], got, want)
 		}
 	}
 }

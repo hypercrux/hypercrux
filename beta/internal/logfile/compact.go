@@ -39,8 +39,10 @@ import (
 //     its markers need no sync of their own.
 //  4. Just before the rename, the file at the path is checked to be the one
 //     this Log holds, so a backup moved into place meanwhile is never
-//     replaced. The rename over the database is the switch, and the folder's
-//     sync makes it last.
+//     replaced, and by the file rules to have one name still, at a path
+//     whose last element hasn't become a symbolic link (rules.go). The
+//     rename over the database is the switch, and the folder's sync makes it
+//     last.
 //  5. The Log moves over to the new file (switchTo). The old file is closed,
 //     which lets go of its lock, and the caller's Unlock lets go of the new
 //     file's lock and then the mutex, in BETA.md's order. A writer waiting
@@ -143,6 +145,12 @@ func (l *Log) liveBase() int64 {
 // until Close, and the error wraps errs.ErrStuck, as every Lock and Append
 // after it does. Either way, a commit made under the same lock before the
 // compaction has succeeded.
+//
+// Just before the rename, by the file rules, a database file that has been
+// given a second name by a hard link, or a path whose last element has
+// become a symbolic link, fails the compaction before the switch, with an
+// error that wraps errs.ErrInvalid: the rename would leave the other name, or
+// the file the link leads to, holding the old data (rules.go).
 func (l *Log) Compact(snapshot iter.Seq[format.Change]) error {
 	switch {
 	case !l.locked:
@@ -170,9 +178,18 @@ func (l *Log) Compact(snapshot iter.Seq[format.Change]) error {
 			return l.dropCompact(c, err, "syncing %s")
 		}
 	}
+	// The file at the path is still this one, with one name, and the path's
+	// last element is still its own name, so the rename replaces exactly
+	// the database (rules.go).
 	there, err := l.fsys.Stat(l.path)
-	if err == nil && !there.Same(l.file) {
+	switch {
+	case err != nil:
+	case !there.Same(l.file):
 		err = fmt.Errorf("another file has taken the database's path, which the compacted file would replace")
+	case there.Nlink > 1 && plant != "logfile/second-name-unseen":
+		err = l.names(there.Nlink)
+	default:
+		err = l.stillReal()
 	}
 	if err != nil {
 		return l.dropCompact(c, err, "checking the database's path before renaming %s over it")
@@ -446,11 +463,12 @@ func (l *Log) switchTo(c *compaction) {
 // in a process that locked a file the path named before a backup was moved
 // into place, or a waiter looking for one holds it for a moment. Errors are
 // ignored, since a leftover costs room on the disk and nothing else, and the
-// next holder of the lock tries again. With nothing there, it costs one call.
+// next holder of the lock tries again. With nothing there, it costs one call,
+// a stat, and nothing but a regular file is ever opened (openLeftover).
 func (l *Log) removeCompact() {
 	name := l.compactName()
-	f, err := l.fsys.Open(name)
-	if err != nil {
+	f := l.openLeftover(name) // opened only when a stat finds a regular file there (rules.go)
+	if f == nil {
 		return
 	}
 	defer f.Close()
@@ -471,10 +489,11 @@ func (l *Log) removeCompact() {
 // flock looks between its tries. When it can take the lock, the file is a
 // leftover or a compaction's file in the moment before its lock, and the lock
 // goes again at once, with the file (startCompact tries again for that).
-// With nothing there, it costs one call.
+// With nothing there, it costs one call, a stat, and nothing but a regular
+// file is ever opened (openLeftover, in rules.go).
 func (l *Log) compacting() bool {
-	f, err := l.fsys.Open(l.compactName())
-	if err != nil {
+	f := l.openLeftover(l.compactName())
+	if f == nil {
 		return false
 	}
 	ok, err := f.TryLock()

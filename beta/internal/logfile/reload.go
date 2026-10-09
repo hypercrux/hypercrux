@@ -125,6 +125,15 @@ func (l *Log) loaded(err error) {
 // tries again. A stuck Log keeps its file and its lock until
 // it's closed, so its Reload fails with an error that wraps errs.ErrStuck,
 // and after Close Reload gives errs.ErrClosed.
+//
+// A new file that breaks the file rules is refused before it's opened, as
+// Open refuses it (rules.go): one that isn't a regular file, with an error
+// that wraps errs.ErrNotDatabase, and one with two names, or a path whose
+// last element has become a symbolic link, with one that wraps
+// errs.ErrInvalid. Nothing has changed then: the Log keeps the file it holds,
+// if any, and the Target what it holds, and Follow reports ErrReplaced again,
+// so every read gives the refusal until a file that keeps the rules is at the
+// path.
 func (l *Log) Reload() error {
 	l.fol.Lock()
 	defer l.fol.Unlock()
@@ -155,7 +164,9 @@ func (l *Log) reload() error {
 	}
 	var deadline time.Time // for the wait for the write lock, when the check has to read again holding it
 	for range maxTries {
-		f, err := l.fsys.Open(l.path)
+		// The new file has to keep the file rules, or nothing is opened, and
+		// the refusal is the reload's error (rules.go).
+		f, err := l.openPath()
 		if err != nil {
 			// The first time, nothing has changed: the Log keeps the file it
 			// holds, if any, and the Target what it holds. After another file

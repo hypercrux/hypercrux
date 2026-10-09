@@ -444,6 +444,33 @@ func fileBytes(t *testing.T, path string) []byte {
 	return b
 }
 
+// holdOpen opens the file at path for reading and keeps it open until the
+// test ends, so a test can read a file after another has taken its path. A
+// hard link would keep it too, but a database with two names is refused (F7).
+func holdOpen(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// heldBytes reads the whole of a file holdOpen keeps open.
+func heldBytes(t *testing.T, f *os.File) []byte {
+	t.Helper()
+	info, err := f.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, info.Size())
+	if _, err := f.ReadAt(b, 0); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 // inode returns the device and inode of the file at path.
 func inode(t *testing.T, path string) fsys.Info {
 	t.Helper()

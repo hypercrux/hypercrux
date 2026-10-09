@@ -52,6 +52,10 @@ type Store struct {
 	// tx is the open transaction, or nil. Only the goroutine using the
 	// transaction reads it.
 	tx *Tx
+	// spare is the room the last transaction's undo list left, cleared, which
+	// the next transaction takes (Begin), so a run of transactions doesn't
+	// grow an undo list from nothing each time. writer guards it.
+	spare []undo
 
 	records map[string]*record // the hash table, from key to record
 	tables  map[string]*table  // by name

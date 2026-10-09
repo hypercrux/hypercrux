@@ -351,6 +351,15 @@ func TestRandomRoundTrips(t *testing.T) {
 		if err != nil {
 			t.Fatalf("round %d: %v", round, err)
 		}
+		// The room AppendBatch makes for a batch, at once, is the batch's
+		// length to the byte, so a buffer with that room is never grown.
+		n := BatchHeadSize + 4
+		for i := range cs {
+			n += cs[i].size()
+		}
+		if in, _, _ := AppendBatch(make([]byte, 0, n), gen, seq, cs); n != len(b) || cap(in) != n {
+			t.Fatalf("round %d: the changes' sizes come to a batch of %d bytes, which is %d, and a buffer of that room grew to %d", round, n, len(b), cap(in))
+		}
 		bt, err := DecodeBatch(b, gen, seq)
 		if err != nil || !sameChanges(bt.Changes, cs) || bt.Length != len(b) || bt.Sum != s || bt.Seq != seq {
 			t.Fatalf("round %d: %v\ncomes back as %+v, %v", round, cs, bt, err)

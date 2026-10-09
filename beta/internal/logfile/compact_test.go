@@ -323,9 +323,7 @@ func TestACompactionSwitchesFiles(t *testing.T) {
 	before := d.state()
 	old := inode(t, path)
 	oldBytes := fileBytes(t, path)
-	if err := os.Link(path, filepath.Join(dir, "old")); err != nil { // keeps the old file to look at
-		t.Fatal(err)
-	}
+	kept := holdOpen(t, path) // the old file to look at, kept open, since a second name would be refused (F7)
 	from, _ := format.DecodeMarker(d.l.last[:], d.l.hdr.ID, d.l.hdr.Gen)
 	const part = 300
 	d.l.part = part
@@ -368,10 +366,10 @@ func TestACompactionSwitchesFiles(t *testing.T) {
 	if !linked {
 		t.Error("the compacted part holds no links")
 	}
-	if got := names(t, dir); got != "db old" {
+	if got := names(t, dir); got != "db" {
 		t.Errorf("the folder holds %q", got)
 	}
-	if !bytes.Equal(fileBytes(t, filepath.Join(dir, "old")), oldBytes) {
+	if !bytes.Equal(heldBytes(t, kept), oldBytes) {
 		t.Error("the old file changed")
 	}
 	if d.c.resets != 0 || d.state() != before {

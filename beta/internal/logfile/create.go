@@ -34,7 +34,9 @@ var errAppeared = errors.New("hypercrux: a database appeared at the path during 
 
 // create makes a new database at the path, where nothing was a moment ago.
 // The rename into place fails if a file has appeared there meanwhile, and
-// then create removes its own file and returns errAppeared. On a file
+// then create removes its own file and returns errAppeared. When the name
+// at the path is a symbolic link that leads to no file, the rename fails the
+// same way, and create refuses the path (appeared, in rules.go). On a file
 // system that can't rename that way, creating a database fails with an
 // error that matches errors.ErrUnsupported, since a plain rename could
 // replace a database that appeared meanwhile. On success, l holds the new
@@ -48,7 +50,7 @@ func (l *Log) create() error {
 		l.fsys.Remove(n.name)
 		n.f.Close()
 		if errors.Is(err, fs.ErrExist) {
-			return errAppeared
+			return l.appeared()
 		}
 		return fmt.Errorf("hypercrux: creating %s: %w", l.path, err)
 	}
@@ -109,10 +111,17 @@ func (l *Log) fill(info fsys.Info) error {
 // If the folder's sync fails after the rename, nobody can tell which file
 // a power cut would leave at the path. So l keeps the new file's lock until
 // Close, and refuses writes: stuck is set. On any other error, l still
-// holds the empty file, locked.
+// holds the empty file, locked. Just before the rename, the path's last
+// element is checked not to have become a symbolic link to the empty file,
+// which the rename would replace (stillReal, in rules.go).
 func (l *Log) adopt(info fsys.Info) error {
 	n, err := l.newFile(info.Mode.Perm(), info.Uid, info.Gid)
 	if err != nil {
+		return err
+	}
+	if err := l.stillReal(); err != nil {
+		l.fsys.Remove(n.name)
+		n.f.Close()
 		return err
 	}
 	if err := l.fsys.Rename(n.name, l.path); err != nil {
@@ -222,9 +231,10 @@ func (l *Log) use(n *fresh) {
 // database when they crashed: the ones it can lock. One that's locked is
 // a creation under way, and stays. It goes by the name's shape, the
 // database's name, .new- and letters only, and removes a regular file
-// only, and only while the name still leads to the file it locked. Errors
-// are ignored, since a leftover costs a few bytes, and a later writer
-// tries again.
+// only, which it opens only once a stat has found one (openLeftover), and
+// only while the name still leads to the file it locked. Errors are
+// ignored, since a leftover costs a few bytes, and a later writer tries
+// again.
 func (l *Log) removeLeftovers() {
 	names, err := l.fsys.List(l.dir)
 	if err != nil {
@@ -236,8 +246,8 @@ func (l *Log) removeLeftovers() {
 			continue
 		}
 		path := filepath.Join(l.dir, name)
-		f, err := l.fsys.Open(path)
-		if err != nil {
+		f := l.openLeftover(path)
+		if f == nil {
 			continue
 		}
 		if ok, err := f.TryLock(); err == nil && ok {

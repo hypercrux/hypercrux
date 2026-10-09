@@ -154,6 +154,34 @@ import (
 //   - logfile/reload-unchecked: Reload reads the new file's log and stops
 //     there, without the check Open makes, so a batch a killed writer left
 //     at its end stays unmarked, and damage past its end goes unreported.
+//
+// F7's, in the file rules:
+//
+//   - logfile/path-as-given: Open works from the path as it's given, with
+//     its symbolic links and relative to the working folder, so a compaction
+//     through a link renames its file over the link and leaves the file the
+//     link led to with the old data, and once the working folder changes, a
+//     relative path names another file.
+//   - logfile/hard-link-let-through: a file with two names is opened, at
+//     Open and at a reload, so a compaction would replace one name and leave
+//     the other the old file.
+//   - logfile/second-name-unseen: a writer doesn't look at the number of
+//     names once it holds the lock, nor does a compaction before its rename,
+//     so a commit and a compaction go ahead in a file that a hard link made
+//     while it was open has given a second name.
+//   - logfile/any-kind-of-file: a FIFO, a socket or a device at the path is
+//     opened as a file, which reads as an empty one, so the first Lock would
+//     make a database of it and rename the database over it.
+//   - logfile/fifo-opened-first: the kind of file at the path is checked
+//     only by an fstat once it's open, so a FIFO is opened, which lets a
+//     writer at its other end go, and an open for reading would wait for one.
+//   - logfile/links-unchecked: a path whose last element has become a
+//     symbolic link is reloaded through the link, and a compaction renames
+//     its file over the link, leaving the file the link leads to with the
+//     old data.
+//   - logfile/dangling-link-retried: a symbolic link to nothing at the path
+//     is taken for a database another creator has just put there, so Open
+//     makes a new file and fails to rename it into place again and again.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -166,7 +194,9 @@ var plant = func() string {
 		"logfile/compact-rename-before-sync", "logfile/compact-no-folder-sync", "logfile/compact-folder-sync-ignored",
 		"logfile/compact-lets-go-early", "logfile/compact-wait-ignored", "logfile/compact-left-behind", "logfile/compact-one-batch",
 		"logfile/compact-locked-removed", "logfile/compact-leftover-before-inode-check",
-		"logfile/reload-without-collecting", "logfile/reload-waits-for-the-mutex", "logfile/reload-unchecked":
+		"logfile/reload-without-collecting", "logfile/reload-waits-for-the-mutex", "logfile/reload-unchecked",
+		"logfile/path-as-given", "logfile/hard-link-let-through", "logfile/second-name-unseen", "logfile/any-kind-of-file",
+		"logfile/fifo-opened-first", "logfile/links-unchecked", "logfile/dangling-link-retried":
 		return p
 	}
 	return ""

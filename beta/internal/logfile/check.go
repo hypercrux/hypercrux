@@ -185,7 +185,7 @@ func (l *Log) markLeft(size int64) error {
 		at, again = off-format.MarkerSize, append(again, l.last[:]...)
 	}
 	again = append(again, b[:n]...)
-	if cap(again) <= window {
+	if cap(again) <= maxKept {
 		l.batch = again // kept for the next commit, as Append keeps its own
 	}
 	if plant != "logfile/sync-without-rewrite" {

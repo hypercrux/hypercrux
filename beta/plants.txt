@@ -161,3 +161,10 @@ query/sum-text-as-real ./beta/internal/query
 query/sum-wraps ./beta/internal/query
 query/max-later-tie-wins ./beta/internal/query
 query/aggregates-as-compiled ./beta/internal/query
+logfile/path-as-given ./beta/internal/logfile
+logfile/hard-link-let-through ./beta/internal/logfile
+logfile/second-name-unseen ./beta/internal/logfile
+logfile/any-kind-of-file ./beta/internal/logfile
+logfile/fifo-opened-first ./beta/internal/logfile
+logfile/links-unchecked ./beta/internal/logfile
+logfile/dangling-link-retried ./beta/internal/logfile

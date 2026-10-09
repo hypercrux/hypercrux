@@ -41,9 +41,12 @@ import (
 // in reload.go: when another file has taken the path, Open, Lock (reopen)
 // and Reload read it from its start, after the Target has dropped what it
 // held and a garbage collection has run (drop), and a Target that's a
-// Reloader hears when the log is done with the new file (loaded).
-//
-//   - F7, the file rules: in Open, before anything else.
+// Reloader hears when the log is done with the new file (loaded). F7's file
+// rules are in rules.go: Open makes the path real before anything else
+// (realPath), every file opened at the path is a regular file with one name,
+// checked before it's opened (openPath), a writer that holds the lock checks
+// that its file still has one name (lockFile), and the renames over the path
+// check that its last element hasn't become a symbolic link (stillReal).
 
 // DefaultWait is how long Lock waits for the write lock, as 0.x does.
 const DefaultWait = 10 * time.Second
@@ -51,6 +54,14 @@ const DefaultWait = 10 * time.Second
 // maxPause is the longest pause between two tries at flock. The first
 // pause is a millisecond, and each one after it twice as long.
 const maxPause = 16 * time.Millisecond
+
+// maxKept is the most room a commit's buffer keeps for the next commit.
+// A thousand puts with 384-value vectors make a batch of 1.6 MB, and with
+// 1,536 values one of 6.2 MB, so a buffer of those sizes is kept, where one
+// made afresh for each commit added 1.6 KB a put to what the garbage
+// collector had to keep up with (F7). A larger batch, as an import makes,
+// gets a buffer of its own each time, which goes once its commit has.
+const maxKept = 8 << 20
 
 // maxTries bounds the loops that start again when something changes under
 // them: a name taken, a file appearing or going, another file taking the
@@ -207,15 +218,27 @@ type Log struct {
 // the file is changed. When a write, a sync or a cut fails in the check,
 // Open fails, and the end of the log is left for the next check, which
 // starts again from it (unfinished).
+//
+// The database is opened by its real path, with every symbolic link
+// resolved and a relative path made absolute, and a new one by its folder's
+// real path and its name. The Log works from that path from then on (Path).
+// Only a regular file with one name is opened, by the file rules in
+// rules.go: a folder, a FIFO, a device or a socket at the path is refused
+// before anything opens it, with an error that wraps errs.ErrNotDatabase,
+// and a file with two names or more, made by hard links, with one that wraps
+// errs.ErrInvalid, and so is a symbolic link that leads to no file.
 func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
-	l := &Log{fsys: files, path: path, dir: filepath.Dir(path), t: t, wait: o.Wait, id: o.ID, mu: make(chan struct{}, 1)}
+	// F7 goes first: the path made real, with every symbolic link resolved
+	// (rules.go). Everything the Log does from here on starts from it.
+	real, err := realPath(files, path)
+	if err != nil {
+		return nil, err
+	}
+	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, mu: make(chan struct{}, 1)}
 	if l.wait <= 0 {
 		l.wait = DefaultWait
 	}
-	// F7 goes first: the path made real, with every symbolic link
-	// resolved, and a file with more than one name, or one that isn't a
-	// regular file, refused.
-	err := l.open()
+	err = l.open()
 	// When another file took the path while Open read, the Target was reset
 	// on the way, and a Reloader is owed a Loaded (reload.go).
 	l.loaded(err)
@@ -226,14 +249,14 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	return l, nil
 }
 
-// open is Open's work: it opens the file at the path, or creates one when
-// nothing's there, and reads and checks it, starting again on the file at
-// the path while other files keep taking it. On an error, l holds no file
-// that's open.
+// open is Open's work: it opens the file at the path by the file rules
+// (openPath), or creates one when nothing's there, and reads and checks it,
+// starting again on the file at the path while other files keep taking it.
+// On an error, l holds no file that's open.
 func (l *Log) open() error {
 	var deadline time.Time // for the wait for the write lock, when Open has to read again holding it
 	for range maxTries {
-		f, err := l.fsys.Open(l.path)
+		f, err := l.openPath()
 		if errors.Is(err, fs.ErrNotExist) {
 			err = l.create()
 			if errors.Is(err, errAppeared) {
@@ -282,10 +305,13 @@ func (l *Log) open() error {
 // path, a compaction's or a backup moved into place, Lock lets go of the
 // old file, calls the Target's Reset, runs a garbage collection, reads the
 // new file from its start, tells a Reloader so (Loaded), and takes the lock
-// there instead: the commit starts again on the new file (reload.go). Once
-// the file it locked is the one at the path, it removes a leftover
-// NAME.compact, which a compaction left when its process died, unless
-// it's locked. An empty file at the path becomes a database now, as
+// there instead: the commit starts again on the new file (reload.go), when
+// the new file keeps the file rules, or Lock fails with the refusal. Once
+// the file it locked is the one at the path, Lock fails, with an error that
+// wraps errs.ErrInvalid, when the file has more than one name, since a hard
+// link has been made to it since it was opened (rules.go). Then it removes a
+// leftover NAME.compact, which a compaction left when its process died,
+// unless it's locked. An empty file at the path becomes a database now, as
 // FORMAT.md's "Creating a database" says. Then Lock checks that what this
 // Log has read is still in the file, as FORMAT.md's "Writing" asks, reads
 // on to the end of the log, handing each new marked batch to the Target,
@@ -395,6 +421,13 @@ func (l *Log) lockFile(deadline time.Time) error {
 			l.f = nil
 			continue
 		}
+		// A file that a hard link has given a second name since it was opened
+		// is refused for writing, since a compaction would leave the other
+		// name the old file (rules.go).
+		if info.Nlink > 1 && plant != "logfile/second-name-unseen" {
+			l.f.Unlock()
+			return l.names(info.Nlink)
+		}
 		// Now that the file locked is the one at the path, nobody else holds
 		// the write lock, so a NAME.compact that isn't locked is a leftover
 		// (compact.go).
@@ -490,10 +523,12 @@ func (l *Log) atPath() (fsys.Info, bool, error) {
 // garbage collection has run, so the process doesn't hold the old copy and
 // the new one at once (drop). Then a Reloader hears that the log is done
 // with the new file's log, before Lock waits for flock on it, so it keeps
-// its readers off no longer than the read takes (reload.go). When it fails,
-// l has no file, and the next Lock tries again.
+// its readers off no longer than the read takes (reload.go). The new file
+// has to keep the file rules (openPath), or nothing is opened and the Target
+// keeps what it has. When it fails, l has no file, and the next Lock tries
+// again.
 func (l *Log) reopen() error {
-	f, err := l.fsys.Open(l.path)
+	f, err := l.openPath()
 	if err != nil {
 		return err
 	}
@@ -556,7 +591,7 @@ func (l *Log) Append(changes []format.Change) error {
 	}
 	n := len(b)
 	b = format.AppendMarker(b, l.hdr.ID, l.hdr.Gen, format.Marker{Seq: seq, Sum: sum})
-	if cap(b) <= window {
+	if cap(b) <= maxKept {
 		l.batch = b // kept for the next commit, unless it's grown large
 	}
 	batch, marker := b[:n], b[n:]

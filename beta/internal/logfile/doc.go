@@ -25,8 +25,11 @@
 // in this process and in others (compact.go). A process that finds another
 // file at the path, a compaction's or a backup moved into place, reads it
 // from its start, once its old copy has gone and a garbage collection has
-// run, so memory never holds both (reload.go). It reaches the file only
-// through fsys, so the crash tests can put a fault layer under it.
+// run, so memory never holds both (reload.go). It opens a database by its
+// real path, with symbolic links resolved, and opens nothing at the path but
+// a regular file with one name, whose names a writer counts again each time
+// it takes the lock (rules.go). It reaches the file only through fsys, so the
+// crash tests can put a fault layer under it.
 //
 // Tasks F2 to F9 build it. log.go says where each later task fits in. Like
 // the rest of beta/, it builds only on Linux.
