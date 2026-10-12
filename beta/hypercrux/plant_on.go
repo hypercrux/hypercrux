@@ -106,6 +106,10 @@ import (
 //     at the path, as if it held the database.
 //   - hypercrux/export-unchecked: Export writes a copy that Check finds
 //     problems in, where it should refuse, as 0.x's does.
+//   - hypercrux/vector-bits-shared: a Vector put in the vector field becomes
+//     a value that shares the caller's memory, so a caller that fills the
+//     same buffer again before the commit changes what the batch holds, and
+//     the file differs from the copy.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -117,7 +121,7 @@ var plant = func() string {
 		"hypercrux/export-fields-sorted", "hypercrux/export-unlocked", "hypercrux/import-size-dropped",
 		"hypercrux/import-kept-in-part", "hypercrux/import-twice-merged", "hypercrux/import-over-tables",
 		"hypercrux/check-file-skipped", "hypercrux/check-marker-at-the-batch", "hypercrux/check-follow-damage-dropped",
-		"hypercrux/check-reload-copy-read", "hypercrux/export-unchecked":
+		"hypercrux/check-reload-copy-read", "hypercrux/export-unchecked", "hypercrux/vector-bits-shared":
 		return p
 	}
 	return ""

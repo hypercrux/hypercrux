@@ -41,14 +41,17 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
   `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` without a filter
   and `TableOf` work through the file, and so do `Export` and `Import`, in
-  0.x's export format, byte for byte as 0.x writes it. `Check` counts. `Query`,
-  `QueryRow`, `Exec` and `SQL()` go through the Beta's database/sql driver,
-  which parses each statement and takes its arguments, and `SQL().Begin`
-  returns an error; running SQL waits for G4. Each read through a `DB`
-  follows what other processes commit, and reloads the file after a
-  compaction or a backup moved into place. The helpers that hold no
+  0.x's export format, byte for byte as 0.x writes it. `Check` checks the
+  copy in memory and reads the file again for damage, and gives the file's
+  size and the copy's, and Export and Import refuse a database it finds
+  problems in. `Query`, `QueryRow`, `Exec` and `SQL()` go through the Beta's
+  database/sql driver, which parses each statement and takes its arguments,
+  and `SQL().Begin` returns an error; running SQL waits for G4. Each read
+  through a `DB` follows what other processes commit, and reloads the file
+  after a compaction or a backup moved into place. The helpers that hold no
   state work already, and the rest are stubs that name the task that makes
-  them work.
+  them work. Its tests drive the crash-point driver through it, on the fault
+  layer, and time opening a compacted file.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/crash/`: the crash-point driver. It runs a workload of commits
@@ -100,14 +103,18 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   bug, and the real log with readers that open the file afresh and with
   followers. Runs can leave gaps with no writer, wait for counts of a
   workload's own, and move backups into place at random moments, checking
-  each era of the log against its own file.
+  each era of the log against its own file. Runs can insist on writers
+  killed in the middle of a commit. Its tests run the public package under
+  it: the 200 SIGKILLs, and writers and readers through compactions and
+  backups.
 - `internal/query/`: SQL. So far the operator iterator, `Rows`, the parser,
   with the tree it gives and the printer that gives a tree back as SQL, and
   the evaluator, which works out expressions and conditions as SQLite does,
   with `Arg` for arguments and the dates on 'now' with SQLite's arithmetic.
   The operators read the store through `store.Reader` and hand rows on
   through `Rows`, with the aggregates, and the planner plans a SELECT over
-  the store and runs it in one call, `Query`.
+  the store and runs it in one call, `Query`. The writes run an INSERT,
+  UPDATE or DELETE inside a transaction in one call, `Exec`.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
   types, vectors and stored values, with 0.x's errors and messages. The
   store and `FromGo` check with it, and the public package can share it.
@@ -121,7 +128,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   `Snapshot` gives the copy as a compacted part. Reads share it through
   `Read`, and writes go through a transaction from `Begin`, which holds
   readers off from its first change until it ends, and puts the copy back
-  with its undo list when it rolls back.
+  with its undo list when it rolls back. `Check` checks that the copy's
+  parts agree, and adds up its size.
 - `internal/value/`: the value type, holding FORMAT.md's six kinds of value
   bit for bit, `FromGo`, 0.x's conversions from Go values, and SQLite's
   routines for reading numbers from text and writing reals as text.

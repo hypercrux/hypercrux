@@ -75,18 +75,18 @@ work in, and all 133 hours are done after R4.
 | 35 | Q3 Parser | 5 | done, [Q3.md](Q3.md), ahead of Q1 and Q2 |
 | 36 | Q4 Operators | 2 | done, [Q4.md](Q4.md) |
 | 37 | Q5 Planner | 5 | done, [Q5.md](Q5.md) |
-| 38 | Q6 SQL writes | 2 | next, [Q6.md](Q6.md) |
+| 38 | Q6 SQL writes | 2 | done, [Q6.md](Q6.md), with G7 and I1 |
 | 39 | G3 The database/sql driver | 2 | done, [G3.md](G3.md) |
-| 40 | G4 Slice 3: SQL | 2 | |
+| 40 | G4 Slice 3: SQL | 2 | next, [G4.md](G4.md) |
 | 41 | G6 Import and export in the Beta | 2 | done, [G6.md](G6.md) |
 | 42 | G5 The command and `Compact` | 3 | |
-| 43 | G7 `check` | 2 | next, [G7.md](G7.md) |
-| 44 | I1 Integration | 3 | next, [I1.md](I1.md) |
+| 43 | G7 `check` | 2 | done, [G7.md](G7.md) |
+| 44 | I1 Integration | 3 | done, [I1.md](I1.md) |
 | 45 | R1 Long runs | 3 | |
 | 46 | R2 Independent review | 5 | |
 | 47 | R3 Docs and site | 3 | |
 | 48 | R4 Release run | 2 | |
-| | V2 Vector blocks, only if I1 finds the open target missed | (2) | |
+| | V2 Vector blocks, only if I1 finds the open target missed | (2) | next, [V2.md](V2.md), once its scope is settled |
 
 Hours done so far: 108 of 133. The five early tasks, P1 to P5, S1 to S5, V1, F1 to F9, G1 to G3, G6, Q1 to Q5 and T1 to T5 are done. G2 is the first working version. The recorded run after F7, Q5 and G6, `test/results/beta-bench.txt`, was made on a slower machine than the runs before it: the same benchmarks on 0.x took 1.4 to 1.9 times as long. In it a committed put is 416 µs on the Beta against 431 µs on 0.x, so the check in F7's contract passes, by 3.5 per cent where the Beta was 13 per cent faster before. F7.md has more runs, and its measure of the sync: zeros written ahead of the log would take about 76 µs off a committed put here, which BETA.md leaves until after the Beta. Both searches without a filter meet their targets. `Get` is 3.69 µs and a walk one link out 4.72 µs, against 3 µs each, and a walk three links out is 76.6 µs against 40 µs. Two targets are missed by more than double: a put among 1,000 in a transaction, 17.3 µs against 5 µs, though F7 took it from 35 per cent of 0.x's time to 26, and opening 100,000 records with vectors, 948 ms against 250 ms, from a log that compaction will replace, which I1 measures again. The next round is Q6, G7 and I1. G4 comes after Q6, since A1's SQL cases write through `Exec`, and G5 after G4.
 

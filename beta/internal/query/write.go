@@ -526,7 +526,7 @@ type updater struct {
 	tx    *store.Tx
 	t     store.Table
 	sets  []setField // in the order of the table's columns
-	set   *Plan      // SELECT with the SET values FROM the table, never run
+	set   *Plan      // SELECT with the SET values FROM the table, prepared and not run
 	frame *Frame
 }
 

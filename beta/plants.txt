@@ -207,4 +207,5 @@ hypercrux/check-marker-at-the-batch ./beta/hypercrux
 hypercrux/check-follow-damage-dropped ./beta/hypercrux
 hypercrux/check-reload-copy-read ./beta/hypercrux
 hypercrux/export-unchecked ./beta/hypercrux
+hypercrux/vector-bits-shared ./beta/hypercrux
 procs/killed-under-way-ignored ./beta/internal/procs

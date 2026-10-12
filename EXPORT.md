@@ -99,7 +99,10 @@ record:
 Change the value with SQL, and export again. Export also refuses a file that
 `hypercrux check` finds problems in, from its own checks to SQLite's
 integrity check. What it wrote before stopping has no last line, so import
-won't take it.
+won't take it. The Beta's Export refuses a database whose copy in memory
+Check finds problems in. It doesn't read the file again first, so damage in
+a part of the file the process read before leaves the export to save what
+the copy holds.
 
 Export reads one moment of the file, so writers carry on while it runs.
 

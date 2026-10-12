@@ -544,18 +544,21 @@ Each write works on one table and goes through the checks of `Put` and
 ### INSERT
 
 `INSERT INTO t (f, ...) VALUES (e, ...), ...` adds a record for each row of
-values. The list of fields must name `key`, and may name any of the table's
-fields, each once. Fields left out have no value. Each row has as many values
-as there are fields. The count of changed rows is the number of records
-added.
+values. The list of fields may name `key` and any of the table's fields,
+each once. An INSERT without `key` fails on its first row, "NOT NULL
+constraint failed", once every row's values are worked out. Fields left out
+have no value. Each row has as many values as there are fields. The count of
+changed rows is the number of records added.
 
 ### UPDATE
 
-`UPDATE t SET f = e, ... [WHERE c]` changes each record that matches `c`,
-or every record without a WHERE. Each field may be set once. The values come
+`UPDATE t SET f = e, ... [WHERE c]` changes each record that matches `c`, or
+every record without a WHERE. Each field may be set once. The values come
 from the record as it was, so `SET a = b, b = a` swaps two fields. `key` may
-only be set to the value it has, exactly. The count is the number of records
-that matched, whether or not a value changed.
+only be set to the value it has, exactly. That's text with the same bytes,
+so NULL, bytes or a number changes it. A SET that names `key` alone changes
+nothing, and counts the records it matched. The count is the number of
+records that matched, whether or not a value changed.
 
 ### DELETE
 
@@ -576,10 +579,25 @@ deleted.
     counting as zero. The first vector a table takes sets its size;
   - any other field takes NULL, an integer, a finite real, valid UTF-8 text,
     or bytes.
+- A record's vector written into any other field goes in as bytes, as SQL
+  reads it.
 - A statement that writes no rows can't break these rules.
 - A statement is all or nothing. If one of its rows fails, none of its
   changes stay. Inside `Update`, the transaction goes back to where it was
   before the statement and carries on.
+- A write's errors come in 0.x's order. An INSERT works out every row's
+  values before it puts the first row: one row's in the order of the table's
+  fields, key first, and several rows' row by row, each as written. Then
+  each row in turn: a NULL key, then a key the table has, one put earlier in
+  the statement included, then a key that doesn't fit the table, then a
+  `vec` the table doesn't take, then the other values `Put` refuses. An
+  UPDATE's SET values are worked out in the order of the table's fields, key
+  first. When the SET names neither `key` nor `vec` and the WHERE holds no
+  subquery, each record's values are worked out as the WHERE passes it.
+  Otherwise the WHERE goes over every record first, and then each record in
+  turn has its values worked out, its key checked, its `vec` checked and its
+  changes put, before the next. A DELETE's WHERE goes over every record
+  before the first is deleted.
 - A statement's conditions and values come from the data as it was before
   the statement changed anything. Its changes then go in: an INSERT's rows
   in the order given, an UPDATE's or a DELETE's records in key order.
@@ -855,7 +873,10 @@ the smallest integer, or `distance()` of two vectors of different sizes.
   is one of them, and reads no rows when it isn't, where `SELECT E AND 0`
   gives 0. When such a term is false or NULL, no row is read, and a walk in
   the FROM isn't worked out. When one raises an error, the statement fails
-  even when the table has no records.
+  even when the table has no records. 0.x's SQLite can also take two passes
+  over an UPDATE where the Beta takes one, for a WHERE it answers from the
+  key's index more than once, such as `key = 'a' OR key > 'b'`, so a test
+  shouldn't count on which of a WHERE's error and a SET's comes first there.
 - Before anything is worked out, `x AND y` becomes the integer 0 when either
   side is known to be false by the rule for literals above, an AND made 0
   included, and neither side calls a function outside a subquery, as
@@ -1089,6 +1110,11 @@ On purpose, and outside the corpus:
   never reaches the call gives no error.
 - An argument with a name, from `sql.Named`, is an error. 0.x leaves the
   mark it falls on NULL.
+- A one-record subquery in an UPDATE's SET that no record reaches until the
+  UPDATE has changed a record reads that record as it was before the
+  statement. 0.x reads the change, so `UPDATE docs SET n = coalesce(n * 2,
+  (SELECT n FROM docs WHERE key = 'docs:1'))` gives docs:4, whose n is NULL,
+  the n docs:1 had in the Beta, and the n the UPDATE gave docs:1 in 0.x.
 
 ## The named tests
 
