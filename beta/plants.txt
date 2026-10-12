@@ -187,3 +187,15 @@ hypercrux/import-size-dropped ./beta/hypercrux
 hypercrux/import-kept-in-part ./beta/hypercrux
 hypercrux/import-twice-merged ./beta/hypercrux
 hypercrux/import-over-tables ./beta/hypercrux
+query/statement-takes-all-back ./beta/internal/query
+query/func-error-kept ./beta/internal/query
+query/insert-values-as-written ./beta/internal/query
+query/insert-row-by-row ./beta/internal/query
+query/taken-before-statement ./beta/internal/query
+query/key-of-any-table ./beta/internal/query
+query/set-in-written-order ./beta/internal/query
+query/update-in-one-pass ./beta/internal/query
+query/update-writes-as-it-reads ./beta/internal/query
+query/key-change-let-through ./beta/internal/query
+query/count-every-record ./beta/internal/query
+query/delete-as-it-reads ./beta/internal/query

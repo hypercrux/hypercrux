@@ -116,11 +116,8 @@ func (p *parser) checkInsert(s *Insert) {
 		}
 		seen[f.Folded()] = true
 	}
-	if !seen["key"] {
-		// Every record has a key, so an INSERT that doesn't give one fails
-		// on its first row, as in 0.x, whose key is NOT NULL.
-		p.fail(s.At, "NOT NULL constraint failed: %s.key", s.Table.Folded())
-	}
+	// An INSERT without key parses. Its first row fails NOT NULL as it goes
+	// in, once every row's values are worked out, as in 0.x (Q6).
 	for i, row := range s.Rows {
 		if i > 0 && len(row) != len(s.Rows[0]) {
 			p.fail(row[0].Pos(), "all VALUES must have the same number of terms")

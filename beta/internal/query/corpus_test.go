@@ -35,7 +35,6 @@ func loadCorpus(t testing.TB) []sqlcorpus.Case {
 // parser finds itself, before anything runs. Each gives an error of kind
 // "error", as 0.x does.
 var refusedHere = map[string]string{
-	"statement-0205": "an INSERT without key, which fails NOT NULL on its first row",
 	"statement-0281": "abs() with two arguments",
 	"statement-0282": "a function neither SQLite nor the subset has",
 }

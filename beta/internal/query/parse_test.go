@@ -621,7 +621,6 @@ func TestRefusals(t *testing.T) {
 		{"INSERT INTO t (key) VALUES (1), (1, 2)", "all VALUES must have the same number of terms"},
 		{"INSERT INTO t (key, KEY) VALUES (1, 2)", "the field KEY is named twice"},
 		{"INSERT INTO t (key, a, \"A\") VALUES (1, 2, 3)", "the field A is named twice"},
-		{"INSERT INTO DOCS (title) VALUES ('no key')", "NOT NULL constraint failed: docs.key"},
 		{"INSERT INTO t (key) VALUES (title)", "an INSERT's values can't use fields: title"},
 		{"INSERT INTO t (key) VALUES (count(*))", "misuse of aggregate function count()"},
 		{"UPDATE OR IGNORE t SET a = 1", "UPDATE OR IGNORE is outside"},

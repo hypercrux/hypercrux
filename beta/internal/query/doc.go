@@ -8,6 +8,7 @@
 // expression from the tree into a function that works it out (eval.go),
 // and Arg makes a caller's argument a value. The operators read the store
 // through store.Reader and hand rows on through Rows, and Query plans a
-// SELECT over a store and runs it (plan.go). Like the rest of beta/, it
-// builds only on Linux.
+// SELECT over a store and runs it (plan.go). Exec runs an INSERT, UPDATE or
+// DELETE inside a store.Tx and gives its count of changed rows (write.go).
+// Like the rest of beta/, it builds only on Linux.
 package query
