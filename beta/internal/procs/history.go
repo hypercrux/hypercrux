@@ -46,9 +46,10 @@ type history struct {
 	killedSeeing           int // readers killed once they had seen a commit
 	seen                   int // the commits the readers saw, each once for each reader
 
-	counts   map[string]int // what the workload's processes counted, by name
-	least    map[string]int // Options.Least
-	restores int            // the least restores the run makes: 2 with Options.Restores, or 0
+	counts      map[string]int // what the workload's processes counted, by name
+	least       map[string]int // Options.Least
+	killedLeast int            // the least writers killed with a commit under way: 3, or Options.KilledUnderWay when that's more
+	restores    int            // the least restores the run makes: 2 with Options.Restores, or 0
 }
 
 // era is one era of the log: the file at the path from one restore to the
@@ -96,7 +97,7 @@ type sight struct {
 
 func newHistory() *history {
 	return &history{begun: map[string]*commit{}, writers: map[int]*writerLog{}, readers: map[int]*readerLog{},
-		eras: []*era{newEra(nil)}, counts: map[string]int{}}
+		eras: []*era{newEra(nil)}, counts: map[string]int{}, killedLeast: leastWriterKills}
 }
 
 // last is the era of the file at the path now.
@@ -247,13 +248,13 @@ func (h *history) enough() bool {
 			return false
 		}
 	}
-	return h.done >= leastDone && h.killedUnderWay >= leastWriterKills && h.killedSeeing >= leastReaderKills && h.last() >= h.restores
+	return h.done >= leastDone && h.killedUnderWay >= h.killedLeast && h.killedSeeing >= leastReaderKills && h.last() >= h.restores
 }
 
 // lacks says what the run has done of the least it has to do.
 func (h *history) lacks() string {
 	s := fmt.Sprintf("writers saw %s succeed, %s killed with a commit under way, and %s killed once they had seen a commit, where at least %d, %d and %d are wanted",
-		counted(h.done, "commit"), counted(h.killedUnderWay, "writer"), counted(h.killedSeeing, "reader"), leastDone, leastWriterKills, leastReaderKills)
+		counted(h.done, "commit"), counted(h.killedUnderWay, "writer"), counted(h.killedSeeing, "reader"), leastDone, h.killedLeast, leastReaderKills)
 	if h.restores > 0 {
 		s += fmt.Sprintf("; %s moved into place, where at least %d are wanted", counted(h.last(), "backup"), h.restores)
 	}
@@ -416,7 +417,7 @@ func (h *history) inOrder() []*commit {
 // count fills in the report's counts of commits, with final the commits
 // the file held at the end.
 func (h *history) count(rep *Report, final []string) {
-	rep.Begun, rep.Done, rep.Errors, rep.UnderWay = len(h.begun), h.done, h.errors, h.underWay
+	rep.Begun, rep.Done, rep.Errors, rep.UnderWay, rep.KilledUnderWay = len(h.begun), h.done, h.errors, h.underWay, h.killedUnderWay
 	rep.Seen, rep.Commits = h.seen, len(final)
 	rep.Counts = nil
 	if len(h.counts) > 0 {

@@ -26,8 +26,11 @@ import (
 // disk. Each workload makes its commits as the public package will: m.Begin
 // with the state the commit gives, Lock, Append, then m.Done once Append has
 // returned nil, then Unlock. Reopen opens the database as a process started
-// after a crash, which checks the end of the log when it gets the lock, and
-// a state is each batch the Target was handed, a line each.
+// after a crash, which checks the end of the log when it gets the lock, with
+// the real store as its Target, joined as the public package joins it, and a
+// state is the copy's snapshot as text (dump), so a crash's outcome is
+// checked on the copy a process would read (I1). The public package's own
+// crash tests are in beta/hypercrux.
 
 // crashPath is where the crash tests' database is.
 const crashPath = "/db/crash.hcx"
@@ -36,19 +39,28 @@ const crashPath = "/db/crash.hcx"
 // bytes in every run and a crash point replays from its seed.
 var crashOptions = Options{ID: [16]byte{'c', 'r', 'a', 's', 'h', ' ', 't', 'e', 's', 't', 's'}}
 
-// crashBatch is commit i's batch: a put of the record t:i with a text field
+// crashBatch is commit i's batch when the commits before it are in the file:
+// crashBatchAt, with commit 1's batch the file's first.
+func crashBatch(i int) []format.Change { return crashBatchAt(i, i == 1) }
+
+// crashBatchAt is commit i's batch: a put of the record t:i with a text field
 // of 1 to 1,300 letters, as many as i picks, so that batches and their
 // markers fall across sectors in many ways, as in the crash package's toy
-// log.
-func crashBatch(i int) []format.Change {
+// log. As the file's first batch, it creates the table t first, as a
+// writer's first put into a table does, so the store takes every batch.
+func crashBatchAt(i int, first bool) []format.Change {
 	text := make([]byte, i*389%1300+1)
 	for j := range text {
 		text[j] = 'a' + byte((i+j)%26)
 	}
-	return []format.Change{{Op: format.Put, Key: fmt.Sprintf("t:%d", i), Fields: []format.Field{{Name: "x", Value: value.Text(string(text))}}}}
+	put := format.Change{Op: format.Put, Key: fmt.Sprintf("t:%d", i), Fields: []format.Field{{Name: "x", Value: value.Text(string(text))}}}
+	if first {
+		return []format.Change{{Op: format.CreateTable, Table: "t"}, put}
+	}
+	return []format.Change{put}
 }
 
-// crashState is the state after commit i, as a recorder writes it.
+// crashState is the state after commit i, as a copy holds it (dump).
 func crashState(i int) string {
 	commits := make([]int, i)
 	for j := range commits {
@@ -58,13 +70,15 @@ func crashState(i int) string {
 }
 
 // stateOf is the state of a file holding the batches of the commits given,
-// in order and numbered from 1, as a recorder writes it.
+// in order and numbered from 1, as a copy that reads it holds it (dump).
 func stateOf(commits []int) string {
-	rec := &recorder{}
+	s := store.New()
 	for j, c := range commits {
-		rec.Apply(uint64(j+1), crashBatch(c))
+		if err := s.LoadBatch(uint64(j+1), crashBatchAt(c, j == 0)); err != nil {
+			panic(err) // the tests' batches keep the store's rules
+		}
 	}
-	return rec.state()
+	return dump(s)
 }
 
 // model is what the commits tell a crash.Model, when there's one.
@@ -112,7 +126,7 @@ func carryOn(l *Log, m model, done []int, first, last int) {
 		if err := l.Lock(); err != nil {
 			continue // nothing was written: a call failed, or the Log is stuck
 		}
-		if err := l.Append(crashBatch(i)); err != nil {
+		if err := l.Append(crashBatchAt(i, len(done) == 0)); err != nil {
 			l.Unlock()
 			continue
 		}
@@ -123,15 +137,16 @@ func carryOn(l *Log, m model, done []int, first, last int) {
 }
 
 // crashOpen opens the database at crashPath through sys, as a process
-// started after a crash would, and returns the state it reads, once the
-// check of the end of the log has run.
+// started after a crash would, with the store as the log's Target, and
+// returns the state the copy holds, once the check of the end of the log has
+// run.
 func crashOpen(sys fsys.FS) (string, error) {
-	rec := &recorder{}
-	l, err := Open(sys, crashPath, rec, crashOptions)
+	d, err := openDB(sys, crashPath, crashOptions)
 	if err != nil {
 		return "", err
 	}
-	return rec.state(), l.Close()
+	state := d.state()
+	return state, d.l.Close()
 }
 
 // runCommits is a workload's Run: it opens the database and makes the

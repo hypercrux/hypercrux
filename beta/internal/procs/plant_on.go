@@ -27,9 +27,15 @@ import "os"
 //     the last era to its file, and leaves out the eras that a restore
 //     replaced, so a reader that saw a commit of such an era that its file
 //     never held, or held otherwise, goes unreported.
+//
+// I1's, in the harness's least work:
+//
+//   - procs/killed-under-way-ignored: a run takes no notice of
+//     Options.KilledUnderWay, and ends once 3 writers have been killed with a
+//     commit under way, however many the run asked for.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
-	case "procs/marker-before-batch", "procs/replaced-eras-unchecked":
+	case "procs/marker-before-batch", "procs/replaced-eras-unchecked", "procs/killed-under-way-ignored":
 		return p
 	}
 	return ""

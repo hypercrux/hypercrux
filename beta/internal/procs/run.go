@@ -75,11 +75,11 @@ const (
 //
 // The run goes on past Time until it has done enough to mean something:
 // 10 commits that writers saw succeed, 3 writers killed with a commit under
-// way, 2 readers killed once they had seen a commit, 2 restores when
-// o.Restores asks for them, and the counts in o.Least. A slow machine makes
-// fewer commits in the time, so the run waits for them, and fails with the
-// problem Idle only after a minute without them, or ten times Time when
-// that's longer.
+// way, or o.KilledUnderWay when that's more, 2 readers killed once they had
+// seen a commit, 2 restores when o.Restores asks for them, and the counts in
+// o.Least. A slow machine makes fewer commits in the time, so the run waits
+// for them, and fails with the problem Idle only after a minute without
+// them, or ten times Time when that's longer.
 //
 // Run returns a *Failure for the first problem it finds, and a plain
 // error when the workload or the options can't be used, or a child can't
@@ -203,7 +203,7 @@ func newRun(w Workload, o Options) (*run, error) {
 		return nil, errors.New("procs: a Workload needs a Name, a Write, a Read and a Final")
 	case !filepath.IsAbs(o.Path):
 		return nil, fmt.Errorf("procs: Options.Path is %q, where an absolute path is wanted", o.Path)
-	case o.Writers < 0 || o.Readers < 0 || o.Time < 0 || o.Kills < 0:
+	case o.Writers < 0 || o.Readers < 0 || o.Time < 0 || o.Kills < 0 || o.KilledUnderWay < 0:
 		return nil, errors.New("procs: Options with a number below 0")
 	}
 	if o.Writers == 0 {
@@ -266,6 +266,10 @@ func newRun(w Workload, o Options) (*run, error) {
 	}
 	h := newHistory()
 	h.least = o.Least
+	h.killedLeast = max(leastWriterKills, o.KilledUnderWay)
+	if plant == "procs/killed-under-way-ignored" {
+		h.killedLeast = leastWriterKills
+	}
 	if o.Restores != (Span{}) {
 		h.restores = leastRestores
 	}

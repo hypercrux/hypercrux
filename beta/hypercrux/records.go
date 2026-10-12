@@ -6,9 +6,12 @@
 package hypercrux
 
 import (
+	"encoding/binary"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
+	"unsafe"
 
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
@@ -134,13 +137,76 @@ func convert(key string, f Fields) ([]format.Field, error) {
 	}
 	fields := make([]format.Field, len(names))
 	for i, name := range names {
-		v, err := value.FromGo(name, f[name])
+		var vec []float32
+		switch x := f[name].(type) {
+		case Vector:
+			vec = x
+		case []float32:
+			vec = x
+		}
+		var v value.Value
+		var err error
+		if vec != nil && rules.IsVec(name) {
+			v, err = vectorValue(vec)
+		} else {
+			v, err = value.FromGo(name, f[name])
+		}
 		if err != nil {
 			return nil, err
 		}
 		fields[i] = format.Field{Name: name, Value: v}
 	}
 	return fields, nil
+}
+
+// vectorValue is value.FromGo for a Vector or a []float32 in the vector
+// field, which every put with a vector gives, in one pass: it writes each
+// value's bits as it adds up the values' squares, and makes the value of
+// those bits with no copy of its own. value.FromGo knows the Vector type
+// only by reflection, checks the values by rules.Vector in a pass of their
+// own, and copies their bits twice (I1, the batched put).
+//
+// The sum of squares is the whole check, as the store's checkVector has it:
+// it's finite only when every value is, and above zero once any value isn't
+// zero. When it fails, rules.Vector says what's wrong, as FromGo would.
+func vectorValue(vec []float32) (value.Value, error) {
+	n := len(vec)
+	if n == 0 || n > rules.MaxDims {
+		return value.Value{}, rules.Vector(vec)
+	}
+	bits := make([]byte, 4*n)
+	var sums [4]float64 // four running sums, so the additions overlap
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		v := vec[i : i+4 : i+4]
+		b := bits[4*i : 4*i+16 : 4*i+16]
+		binary.LittleEndian.PutUint32(b[0:], math.Float32bits(v[0]))
+		binary.LittleEndian.PutUint32(b[4:], math.Float32bits(v[1]))
+		binary.LittleEndian.PutUint32(b[8:], math.Float32bits(v[2]))
+		binary.LittleEndian.PutUint32(b[12:], math.Float32bits(v[3]))
+		x0, x1, x2, x3 := float64(v[0]), float64(v[1]), float64(v[2]), float64(v[3])
+		sums[0] += x0 * x0
+		sums[1] += x1 * x1
+		sums[2] += x2 * x2
+		sums[3] += x3 * x3
+	}
+	for ; i < n; i++ {
+		binary.LittleEndian.PutUint32(bits[4*i:], math.Float32bits(vec[i]))
+		x := float64(vec[i])
+		sums[0] += x * x
+	}
+	if dot := sums[0] + sums[1] + sums[2] + sums[3]; !(dot > 0 && dot <= math.MaxFloat64) {
+		if err := rules.Vector(vec); err != nil {
+			return value.Value{}, err
+		}
+		panic(fmt.Sprintf("hypercrux: a vector whose values' squares add up to %v keeps rules.Vector's rules", dot))
+	}
+	if plant == "hypercrux/vector-bits-shared" {
+		return value.VectorBits(unsafe.String((*byte)(unsafe.Pointer(unsafe.SliceData(vec))), 4*n)), nil
+	}
+	// Nothing else holds bits, so the value can share it, as a
+	// strings.Builder shares its buffer.
+	return value.VectorBits(unsafe.String(unsafe.SliceData(bits), len(bits))), nil
 }
 
 // unique returns 0.x's error for the first of the sorted names that matches

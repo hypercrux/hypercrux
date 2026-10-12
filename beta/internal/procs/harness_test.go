@@ -85,6 +85,7 @@ func TestOptionsThatCantBeUsed(t *testing.T) {
 		{"no name", Workload{Write: toy.Write, Read: toy.Read, Final: toy.Final}, Options{Path: path}},
 		{"a relative path", toy, Options{Path: "toy"}},
 		{"writers below 0", toy, Options{Path: path, Writers: -1}},
+		{"writers killed in a commit below 0", toy, Options{Path: path, KilledUnderWay: -1}},
 		{"a life that ends before it starts", toy, Options{Path: path, ReaderLife: Span{Min: time.Second, Max: time.Millisecond}}},
 		{"a life of nothing", toy, Options{Path: path, WriterLife: Span{Min: 0, Max: 0}, ReaderLife: Span{Min: -time.Second}}},
 		{"a gap that ends before it starts", toy, Options{Path: path, WriterGap: Span{Min: time.Second, Max: time.Millisecond}}},

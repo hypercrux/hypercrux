@@ -93,6 +93,13 @@ type Options struct {
 	// been killed, if that comes before Time is up.
 	Kills int
 
+	// KilledUnderWay is how many writers the run has to kill with a commit
+	// under way, between its Begin and its Done or Failed, before it ends: 3
+	// when it's 0, as for every run (see Run). A run that's about killing
+	// writers in the middle of their commits asks for more, and goes on past
+	// Time until it has them.
+	KilledUnderWay int
+
 	// WriterLife and ReaderLife are how long each process of the kind
 	// lives, drawn evenly from the span, from when it starts its work to
 	// its kill. A zero span means 10 to 200 milliseconds. A process that
@@ -212,6 +219,10 @@ type Report struct {
 	// ones under way when their writer was killed, of which UnderWayIn
 	// were in the file at the end.
 	Begun, Done, Errors, UnderWay, UnderWayIn int
+
+	// KilledUnderWay counts the writers the harness killed with a commit
+	// under way (Options.KilledUnderWay).
+	KilledUnderWay int
 
 	// Commits is how many commits the file held at the end.
 	Commits int

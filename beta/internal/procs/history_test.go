@@ -173,8 +173,18 @@ func TestTheHistoryCounts(t *testing.T) {
 	}
 	var rep Report
 	h.count(&rep, final)
-	if rep.Begun != 14 || rep.Done != 10 || rep.Errors != 1 || rep.UnderWay != 3 || rep.UnderWayIn != 1 || rep.Commits != 11 || rep.Seen != 12 || rep.Counts != nil {
+	if rep.Begun != 14 || rep.Done != 10 || rep.Errors != 1 || rep.UnderWay != 3 || rep.KilledUnderWay != 3 || rep.UnderWayIn != 1 || rep.Commits != 11 || rep.Seen != 12 || rep.Counts != nil {
 		t.Errorf("the counts are %+v", rep)
+	}
+
+	// A run that asks for more writers killed with a commit under way
+	// (Options.KilledUnderWay) goes on until it has them.
+	h.killedLeast = 4
+	if h.enough() || !strings.Contains(h.lacks(), "3 writers killed with a commit under way") || !strings.Contains(h.lacks(), "at least 10, 4 and 2 are wanted") {
+		t.Errorf("with 3 of the 4 writers killed with a commit under way that the run wants, it has done enough: %v: %s", h.enough(), h.lacks())
+	}
+	if replay(h, []step{begin(6, "the fourth under way"), killed(6)}, final) != nil || !h.enough() {
+		t.Errorf("with the 4 writers killed with a commit under way that the run wants, it hasn't done enough: %s", h.lacks())
 	}
 
 	// The workload's own counts, and the least of them a run wants.

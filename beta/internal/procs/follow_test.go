@@ -72,10 +72,12 @@ const (
 func realFollow(r *Reader) error {
 	r.Reset()
 	files := &tallyFS{FS: fsys.OS{}}
-	l, err := logfile.Open(files, r.Path(), readerTarget{r}, logfile.Options{})
+	target := newReaderTarget(r.Apply, r.Reset)
+	l, err := logfile.Open(files, r.Path(), target, logfile.Options{})
 	if err != nil {
 		return err
 	}
+	target.opened()
 	defer l.Close()
 	for {
 		files.calls = tally{}
