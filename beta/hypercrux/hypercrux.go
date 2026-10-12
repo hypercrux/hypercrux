@@ -112,6 +112,10 @@ type DB struct {
 	unread error
 	// log is the file, with the write lock.
 	log *logfile.Log
+	// files are the file calls the log goes through, the real ones or a
+	// test's fault layer, which Check reads the file again through
+	// (check.go).
+	files fsys.FS
 	// sql is the handle SQL gives, over the Beta's driver, made in Open
 	// and closed by Close (driver.go).
 	sql *sql.DB

@@ -70,7 +70,8 @@ func openFault(t *testing.T, d *fault.Disk, path string) *hc.DB {
 }
 
 // look describes what db holds at the keys named, with each one's links
-// both ways, and Check's counts, with every number's bits.
+// both ways, and Check's counts and problems, with every number's bits. It
+// leaves out the sizes Check gives, which a compaction or a reload changes.
 func look(db *hc.DB, keys ...string) string {
 	var b strings.Builder
 	for _, k := range keys {
@@ -80,7 +81,7 @@ func look(db *hc.DB, keys ...string) string {
 		fmt.Fprintf(&b, "  links %q %s\n", links, describeErr(err))
 	}
 	rep, err := db.Check()
-	fmt.Fprintf(&b, "check: %+v %v", rep, err)
+	fmt.Fprintf(&b, "check: %d tables, %d records, %d links, %d vectors, problems %q %v", rep.Tables, rep.Records, rep.Links, rep.Vectors, rep.Problems, err)
 	return b.String()
 }
 
@@ -526,7 +527,8 @@ func (nothing) Reset()                              {}
 // A DB that has the file open already finds the batch at its next Update,
 // which fails the same way, and at each read, which follows the file first
 // (F9), and its copy takes none of the batch: the change before the bad one
-// doesn't go in either.
+// doesn't go in either. Check names the batch among its problems, and
+// counts the copy as the batch before it left it (G7).
 func TestABatchThatBreaksTheRulesIsDamage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.hcx")
 	n := func(i int64) []format.Field { return []format.Field{{Name: "n", Value: value.Int(i)}} }
@@ -546,8 +548,11 @@ func TestABatchThatBreaksTheRulesIsDamage(t *testing.T) {
 	isDamage("an Update after the bad batch", db.Update(func(*hc.Tx) error { return nil }))
 	_, err := db.Get("docs:1")
 	isDamage("a read after the bad batch", err)
-	_, err = db.Check()
-	isDamage("Check after the bad batch", err)
+	rep, err := db.Check()
+	if err != nil || len(rep.Problems) != 1 || !strings.HasPrefix(rep.Problems[0], "the file is damaged: batch 2 at offset ") ||
+		!strings.Contains(rep.Problems[0], "change 2") || rep.Tables != 1 || rep.Records != 1 {
+		t.Fatalf("Check after the bad batch gave %+v, %v, where the damage to batch 2 and its change 2 is wanted, with the table and the record before it", rep, err)
+	}
 	ok(t, hc.ReadTheCopy(db, func(r store.Reader) error {
 		if rec, err := r.Get("docs:1"); err != nil || rec.Field(0) != value.Int(1) {
 			t.Errorf("after the bad batch, the copy has docs:1 as %v, %v", rec, err)

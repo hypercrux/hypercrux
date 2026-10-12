@@ -500,9 +500,9 @@ func TestTableOfIs0xs(t *testing.T) {
 	}
 }
 
-// TestCheckCounts checks the counts Check gives until G7 adds the rest: a
-// table stays once its records have gone, and a record counts as having a
-// vector until its vector is cleared.
+// TestCheckCounts checks the counts Check gives: a table stays once its
+// records have gone, and a record counts as having a vector until its vector
+// is cleared.
 func TestCheckCounts(t *testing.T) {
 	db := open(t, filepath.Join(t.TempDir(), "test.hcx"))
 	count := func(want hc.Report) {

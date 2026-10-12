@@ -628,8 +628,13 @@ func TestAReloadThatFailsPartway(t *testing.T) {
 		}
 		_, err = db.Get("good:1")
 		isDamage("a read", err)
-		_, err = db.Check()
-		isDamage("Check", err)
+		// Check names the damage, and counts nothing of the copy, which holds
+		// part of the file (G7).
+		rep, err := db.Check()
+		if err != nil || len(rep.Problems) != 1 || !strings.HasPrefix(rep.Problems[0], "the file is damaged: batch 3 at offset ") ||
+			rep.Tables+rep.Records+rep.Links+rep.Vectors != 0 || rep.MemoryBytes != 0 || rep.FileBytes == 0 {
+			t.Fatalf("Check gave %+v, %v, where the damage to batch 3 alone is wanted, with the file's size", rep, err)
+		}
 		isDamage("an Update", db.Update(func(tx *hc.Tx) error { return tx.Put("docs:2", nil) }))
 		ok(t, hc.ReadTheCopy(db, func(r store.Reader) error {
 			for _, k := range []string{"good:1", "good:2"} {

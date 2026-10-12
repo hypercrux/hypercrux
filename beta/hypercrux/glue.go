@@ -114,7 +114,7 @@ func (t *target) Loaded(err error) {
 // ones or a test's fault layer, with the log's options o. Open checks the
 // path's rules first.
 func open(files fsys.FS, path string, o logfile.Options) (*DB, error) {
-	db := &DB{path: path}
+	db := &DB{path: path, files: files}
 	db.mem.Store(store.New())
 	t := &target{db: db, opening: true}
 	// F7's rules for the file, its real path and a file with more than one
@@ -184,20 +184,43 @@ func (db *DB) follow() error {
 // Update after its first change, with ErrInsideUpdate at once, since Read
 // would wait for that Update.
 func (db *DB) read(fn func(r store.Reader) error) error {
-	if _, err := db.current(); err != nil {
-		return err
-	}
-	if err := db.follow(); err != nil {
-		return err
-	}
-	db.gate.RLock()
-	defer db.gate.RUnlock()
-	s, err := db.current()
+	s, err := db.enter()
 	if err != nil {
 		return err
 	}
-	if db.unread != nil && plant != "hypercrux/failed-reload-read" {
-		return db.unread
-	}
+	defer db.gate.RUnlock()
 	return s.Read(fn)
+}
+
+// readStore is read, handing fn the copy itself beside the Reader its Read
+// gives, for Export, which runs the copy's own check first (check.go).
+func (db *DB) readStore(fn func(s *store.Store, r store.Reader) error) error {
+	s, err := db.enter()
+	if err != nil {
+		return err
+	}
+	defer db.gate.RUnlock()
+	return s.Read(func(r store.Reader) error { return fn(s, r) })
+}
+
+// enter is the start of read: it follows the file, takes the gate shared,
+// and returns the copy, which the caller reads before it lets go of the
+// gate. On an error it holds nothing.
+func (db *DB) enter() (*store.Store, error) {
+	if _, err := db.current(); err != nil {
+		return nil, err
+	}
+	if err := db.follow(); err != nil {
+		return nil, err
+	}
+	db.gate.RLock()
+	s, err := db.current()
+	if err == nil && db.unread != nil && plant != "hypercrux/failed-reload-read" {
+		err = db.unread
+	}
+	if err != nil {
+		db.gate.RUnlock()
+		return nil, err
+	}
+	return s, nil
 }

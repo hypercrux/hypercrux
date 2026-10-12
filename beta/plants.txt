@@ -199,3 +199,11 @@ query/update-writes-as-it-reads ./beta/internal/query
 query/key-change-let-through ./beta/internal/query
 query/count-every-record ./beta/internal/query
 query/delete-as-it-reads ./beta/internal/query
+store/check-skips-mirror ./beta/internal/store
+store/check-zeros-let-through ./beta/internal/store
+store/check-free-slots-counted ./beta/internal/store
+hypercrux/check-file-skipped ./beta/hypercrux
+hypercrux/check-marker-at-the-batch ./beta/hypercrux
+hypercrux/check-follow-damage-dropped ./beta/hypercrux
+hypercrux/check-reload-copy-read ./beta/hypercrux
+hypercrux/export-unchecked ./beta/hypercrux

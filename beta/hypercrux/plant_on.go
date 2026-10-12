@@ -90,6 +90,22 @@ import (
 //     as made, where both are refused.
 //   - hypercrux/import-over-tables: Import goes ahead in a database that
 //     holds tables, where it should refuse.
+//
+// G7's, in Check, and in Export's check:
+//
+//   - hypercrux/check-file-skipped: Check reads the copy alone, and never
+//     reads the file again, so damage in the part of the file this process
+//     read long ago goes unseen until the next Open.
+//   - hypercrux/check-marker-at-the-batch: Check names damage in a batch's
+//     marker at the batch's offset, where it should name the marker's.
+//   - hypercrux/check-follow-damage-dropped: Check takes no notice of
+//     damage the read before it meets as it follows the file, and reports
+//     the copy alone.
+//   - hypercrux/check-reload-copy-read: after a reload that failed on
+//     damage, Check checks and counts the copy, which holds part of the file
+//     at the path, as if it held the database.
+//   - hypercrux/export-unchecked: Export writes a copy that Check finds
+//     problems in, where it should refuse, as 0.x's does.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -99,7 +115,9 @@ var plant = func() string {
 		"hypercrux/rows-pulled-late", "hypercrux/write-kept", "hypercrux/sql-wraps-invalid",
 		"hypercrux/reads-never-follow", "hypercrux/reload-unheld", "hypercrux/reload-keeps-the-old-copy", "hypercrux/failed-reload-read",
 		"hypercrux/export-fields-sorted", "hypercrux/export-unlocked", "hypercrux/import-size-dropped",
-		"hypercrux/import-kept-in-part", "hypercrux/import-twice-merged", "hypercrux/import-over-tables":
+		"hypercrux/import-kept-in-part", "hypercrux/import-twice-merged", "hypercrux/import-over-tables",
+		"hypercrux/check-file-skipped", "hypercrux/check-marker-at-the-batch", "hypercrux/check-follow-damage-dropped",
+		"hypercrux/check-reload-copy-read", "hypercrux/export-unchecked":
 		return p
 	}
 	return ""

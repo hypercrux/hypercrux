@@ -7,7 +7,9 @@
 // Engine; package zerox is the adapter for 0.x.
 //
 // RoundTrip and Across test export and import, on one engine and from one
-// engine to another and back. Each adapter's tests call them, beside Run.
+// engine to another and back, and CheckCounts and SameCounts test Check's
+// counts, on one engine and on two. Each adapter's tests call them, beside
+// Run.
 //
 // The tests are Linux only, like the rest of the beta folder. On other
 // systems this package is empty.

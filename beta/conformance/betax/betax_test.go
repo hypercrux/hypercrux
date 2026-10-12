@@ -27,6 +27,14 @@ func TestConformance(t *testing.T) { conformance.Run(t, Engine{}) }
 // Import on the Beta, as on 0.x.
 func TestExportAndImport(t *testing.T) { conformance.RoundTrip(t, Engine{}) }
 
+// TestCheckCounts holds the Beta's Check to counts known in advance, as on
+// 0.x.
+func TestCheckCounts(t *testing.T) { conformance.CheckCounts(t, Engine{}) }
+
+// TestCheckCountsAs0xDoes makes the same calls on 0.x and on the Beta, and
+// Check counts the same on both.
+func TestCheckCountsAs0xDoes(t *testing.T) { conformance.SameCounts(t, zerox.Engine{}, Engine{}) }
+
 // TestMovingAcross moves a database from 0.x to the Beta and back, and
 // from the Beta to 0.x and back, byte for byte.
 func TestMovingAcross(t *testing.T) {

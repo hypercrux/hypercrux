@@ -35,10 +35,18 @@ import (
 // memory. Other processes carry on writing while it runs. In this process,
 // an Update waits from its first change until the export ends, as it waits
 // for any read, and inside an Update, Export works only until the first
-// change, as every read through the database does. Once task G7 gives
-// Check its checks, Export refuses a database that Check finds problems in,
-// as 0.x's does. An export that stops on an error, such as one from w, has
-// no last line, and Import refuses an export without it.
+// change, as every read through the database does. An export that stops on
+// an error, such as one from w, has no last line, and Import refuses an
+// export without it.
+//
+// As 0.x's does, Export refuses a database that Check finds problems in,
+// before it writes anything, with an error that wraps ErrInvalid and gives
+// the first problem. It runs the part of Check that reads the copy, in the
+// same read. It doesn't read the file again, as Check does: damage in a
+// part of the file this process read long ago leaves the copy as it was,
+// and an export is then the way to keep what it holds. Damage that the read
+// meets as it takes in other processes' commits fails Export, as it fails
+// every read.
 func (db *DB) Export(w io.Writer) error {
 	if plant == "hypercrux/export-unlocked" {
 		s, err := db.current()
@@ -47,7 +55,14 @@ func (db *DB) Export(w io.Writer) error {
 		}
 		return exportAll(s, export.NewWriter(w))
 	}
-	return db.read(func(r store.Reader) error { return exportAll(r, export.NewWriter(w)) })
+	return db.readStore(func(s *store.Store, r store.Reader) error {
+		if plant != "hypercrux/export-unchecked" {
+			if err := refuse(s, "it isn't exported"); err != nil {
+				return err
+			}
+		}
+		return exportAll(r, export.NewWriter(w))
+	})
 }
 
 // exportAll writes what r holds to w, from r's snapshot. The snapshot comes
@@ -148,12 +163,14 @@ type placed struct {
 // wherever the Beta's rules are 0.x's. Each refusal wraps ErrInvalid:
 // input that isn't a valid export reads "not a valid HyperCrux export", a
 // database that holds tables, even empty ones, reads "already holds record
-// tables", and anything Put or Link would refuse, or a record or a link
-// that's there twice, names the line of the export. Two refusals are the
-// Beta's own. A table can't have a vector size without a vector field in
-// the Beta, as it can in 0.x. And a table of more than 1,999 fields, which
-// 0.x's SQLite refuses with a plain error of its own, is invalid here, as
-// a Put that made one would be.
+// tables", a database that Check finds problems in reads "hypercrux check
+// finds problems in the file" and gives the first, as Export does, and
+// anything Put or Link would refuse, or a record or a link that's there
+// twice, names the line of the export. Two refusals are the Beta's own. A
+// table can't have a vector size without a vector field in the Beta, as it
+// can in 0.x. And a table of more than 1,999 fields, which 0.x's SQLite
+// refuses with a plain error of its own, is invalid here, as a Put that made
+// one would be.
 func (db *DB) Import(r io.Reader) error {
 	s, err := db.current()
 	if err != nil {
@@ -168,7 +185,7 @@ func (db *DB) Import(r io.Reader) error {
 	}
 	var kept error // the error of an import that commits all the same, a planted bug's
 	err = db.Update(func(tx *Tx) error {
-		err := importAll(tx.stx, rd)
+		err := importAll(db.mem.Load(), tx.stx, rd)
 		if err != nil && plant == "hypercrux/import-kept-in-part" {
 			kept = err
 			return nil
@@ -182,16 +199,26 @@ func (db *DB) Import(r io.Reader) error {
 }
 
 // importAll reads the export's tables, records and links from rd into tx,
-// which must hold no tables. It stops at the first that breaks a rule, and
-// the Update then rolls tx back.
-func importAll(tx *store.Tx, rd *export.Reader) error {
+// a transaction on s, which must hold no tables. It stops at the first that
+// breaks a rule, and the Update then rolls tx back.
+func importAll(s *store.Store, tx *store.Tx, rd *export.Reader) error {
 	if holdsTables(tx) && plant != "hypercrux/import-over-tables" {
 		return fmt.Errorf("%w: the file already holds record tables; import into a new file", ErrInvalid)
 	}
-	// 0.x also refuses a file that Check finds problems in, since there the
-	// rules an import relies on are the file's own triggers. In the Beta
-	// the engine keeps the rules, and Check finds no problems until task
-	// G7, which settles whether Import runs it here.
+	// 0.x then refuses a file that Check finds problems in, since there the
+	// rules an import relies on are the file's own triggers. In the Beta the
+	// engine keeps the rules, and a copy without tables holds nothing to
+	// check unless it's broken, so the copy's check costs next to nothing
+	// here, and keeps 0.x's refusal. The Update's Lock has just read on to
+	// the end of the log and checked it, and the file isn't read again. A
+	// read before the transaction's first change goes ahead.
+	var err error
+	if e := s.Read(func(store.Reader) error { err = refuse(s, "nothing was imported"); return nil }); e != nil {
+		return e
+	}
+	if err != nil {
+		return err
+	}
 	im := importer{tx: tx}
 	for {
 		item, err := rd.Next()

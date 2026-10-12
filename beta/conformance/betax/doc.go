@@ -9,7 +9,9 @@
 // every read, skipping the tests that wait for later tasks. From task G6
 // on they also run the suite's round trip through export and import, as it
 // is and with the file opened again before every read, and move a database
-// from 0.x to the Beta and back, and from the Beta to 0.x and back.
+// from 0.x to the Beta and back, and from the Beta to 0.x and back. From
+// task G7 on they hold Check's counts to counts known in advance, and to
+// 0.x's on the same calls.
 //
 // Like the rest of the beta folder it's Linux only; on other systems this
 // package is empty.

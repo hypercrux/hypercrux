@@ -55,6 +55,20 @@ func TestExportAndImportAfterAReopen(t *testing.T) {
 	}
 }
 
+// TestCheckCountsAfterAReopen holds Check's counts to counts known in
+// advance with the file opened afresh before every read, so each Check
+// counts what the file holds.
+func TestCheckCountsAfterAReopen(t *testing.T) {
+	e := reopening{log: &problems{}}
+	conformance.CheckCounts(t, e)
+	for _, p := range e.log.list {
+		t.Error(p)
+	}
+	if e.log.reopens < 10 {
+		t.Errorf("the counts reopened the file %d times", e.log.reopens)
+	}
+}
+
 // reopening is the Beta as a conformance.Engine whose databases reopen the
 // file before every read.
 type reopening struct{ log *problems }

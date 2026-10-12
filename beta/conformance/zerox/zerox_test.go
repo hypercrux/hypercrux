@@ -19,3 +19,6 @@ func TestConformance(t *testing.T) { conformance.Run(t, Engine{}) }
 // TestExportAndImport runs the suite's round trip through Export and
 // Import on 0.x, where it came from.
 func TestExportAndImport(t *testing.T) { conformance.RoundTrip(t, Engine{}) }
+
+// TestCheckCounts holds 0.x's Check to counts known in advance.
+func TestCheckCounts(t *testing.T) { conformance.CheckCounts(t, Engine{}) }

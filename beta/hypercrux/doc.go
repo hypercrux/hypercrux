@@ -20,7 +20,9 @@
 // Unlink, Neighbours, Walk and Nearest without a filter (task G2). Export
 // and Import on DB write and read 0.x's export format, the one EXPORT.md
 // describes, byte for byte as 0.x does, so a database moves between the
-// two either way (task G6). Check only counts until task G7. Each read
+// two either way (task G6). Check checks the copy in memory, reads the file
+// again for damage, and gives the file's size and the copy's (task G7),
+// and Export and Import refuse a database it finds problems in. Each read
 // through a DB follows what other processes commit, and reloads the file
 // when a compaction or a backup moved into place has put another at the
 // path (tasks F6 and F9); Compact, and the compaction a commit sets off,

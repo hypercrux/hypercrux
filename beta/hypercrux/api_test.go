@@ -44,20 +44,31 @@ var added = []string{
 	"ErrZeroX",
 }
 
+// addedFields are the fields the Beta's structs have beyond 0.x's, written
+// as Type.Field, in the order they come. They come after 0.x's fields, each
+// with a comment, and TestTheAPIMatches0x compares the rest of the struct
+// with 0.x's. Report's two give the sizes Check reports (G7).
+var addedFields = []string{"Report.FileBytes", "Report.MemoryBytes"}
+
 // decl is one exported name as TestTheAPIMatches0x compares it.
 type decl struct {
 	kind  string // const, var, type, func or method
 	shape string // what has to match: the types of a func or method, a type's definition, or a const's or var's declared type
 	doc   bool   // whether it has a comment
+	// added are a struct's fields that addedFields names, as Type.Field, in
+	// the order they come, each followed by what's wrong with it, if
+	// anything: no comment, or a field of 0.x's after it.
+	added []string
 }
 
 // TestTheAPIMatches0x holds the Beta's exported API to 0.x's. Every
 // exported name in 0.x's package, apart from those in leftOut, is in the
 // Beta's, as the same kind of name, with the same types, and with a comment
-// where 0.x has one. Types are compared by their exported parts. Beyond
-// 0.x's names the Beta exports only those in added, and each of them has a
-// comment. The test reads both packages' source, so it needs neither to
-// work.
+// where 0.x has one. Types are compared by their exported parts, apart from
+// the fields in addedFields, which come after 0.x's, each with a comment.
+// Beyond 0.x's names the Beta exports only those in added, and each of them
+// has a comment. The test reads both packages' source, so it needs neither
+// to work.
 func TestTheAPIMatches0x(t *testing.T) {
 	root := filepath.Join("..", "..")
 	mod, err := os.ReadFile(filepath.Join(root, "go.mod"))
@@ -112,6 +123,16 @@ func TestTheAPIMatches0x(t *testing.T) {
 		} else if _, ok := beta[name]; !ok {
 			t.Errorf("added names %s, which the Beta doesn't export", name)
 		}
+	}
+	var found []string
+	for _, name := range sortedKeys(beta) {
+		found = append(found, beta[name].added...)
+		if len(zero[name].added) != 0 {
+			t.Errorf("0.x's %s has the fields %q, which addedFields names", name, zero[name].added)
+		}
+	}
+	if strings.Join(found, ", ") != strings.Join(addedFields, ", ") {
+		t.Errorf("the Beta's structs have the added fields %q, where addedFields names %q, each after 0.x's fields and with a comment", found, addedFields)
 	}
 }
 
@@ -220,12 +241,12 @@ func exported(t *testing.T, dir string) map[string]decl {
 					continue
 				}
 				if d.Recv == nil {
-					add(d.Name.Name, decl{"func", funcShape(fset, d.Type), d.Doc != nil})
+					add(d.Name.Name, decl{kind: "func", shape: funcShape(fset, d.Type), doc: d.Doc != nil})
 					continue
 				}
 				recv, base := receiver(fset, d.Recv)
 				if ast.IsExported(base) {
-					add(base+"."+d.Name.Name, decl{"method", recv + " " + funcShape(fset, d.Type), d.Doc != nil})
+					add(base+"."+d.Name.Name, decl{kind: "method", shape: recv + " " + funcShape(fset, d.Type), doc: d.Doc != nil})
 				}
 			case *ast.GenDecl:
 				// A constant without a type or values repeats the last one
@@ -235,7 +256,8 @@ func exported(t *testing.T, dir string) map[string]decl {
 					switch s := spec.(type) {
 					case *ast.TypeSpec:
 						if s.Name.IsExported() {
-							add(s.Name.Name, decl{"type", typeShape(fset, s), d.Doc != nil || s.Doc != nil || s.Comment != nil})
+							shape, extra := typeShape(fset, s)
+							add(s.Name.Name, decl{kind: "type", shape: shape, doc: d.Doc != nil || s.Doc != nil || s.Comment != nil, added: extra})
 						}
 					case *ast.ValueSpec:
 						kind, typ := "var", s.Type
@@ -247,7 +269,7 @@ func exported(t *testing.T, dir string) map[string]decl {
 						}
 						for _, n := range s.Names {
 							if n.IsExported() {
-								add(n.Name, decl{kind, text(fset, typ), d.Doc != nil || s.Doc != nil || s.Comment != nil})
+								add(n.Name, decl{kind: kind, shape: text(fset, typ), doc: d.Doc != nil || s.Doc != nil || s.Comment != nil})
 							}
 						}
 					}
@@ -303,7 +325,9 @@ func receiver(fset *token.FileSet, recv *ast.FieldList) (string, string) {
 // typeShape is what a type's declaration exports: whether it's an alias,
 // and its definition, or for a struct its exported fields in order and
 // every embedded field, since an embedded field's methods join the type's.
-func typeShape(fset *token.FileSet, s *ast.TypeSpec) string {
+// A field addedFields names is left out of the shape, and comes back in
+// added, as decl's added says.
+func typeShape(fset *token.FileSet, s *ast.TypeSpec) (string, []string) {
 	shape := ""
 	if s.Assign.IsValid() {
 		shape = "= "
@@ -313,21 +337,30 @@ func typeShape(fset *token.FileSet, s *ast.TypeSpec) string {
 	}
 	st, ok := s.Type.(*ast.StructType)
 	if !ok {
-		return shape + text(fset, s.Type)
+		return shape + text(fset, s.Type), nil
 	}
-	var fields []string
+	var fields, added []string
 	for _, f := range st.Fields.List {
 		typ := text(fset, f.Type)
 		if len(f.Names) == 0 {
 			fields = append(fields, "embedded "+typ)
 		}
 		for _, n := range f.Names {
-			if n.IsExported() {
+			switch name := s.Name.Name + "." + n.Name; {
+			case slices.Contains(addedFields, name):
+				if f.Doc == nil && f.Comment == nil {
+					name += " (without a comment)"
+				}
+				added = append(added, name)
+			case n.IsExported():
 				fields = append(fields, n.Name+" "+typ)
+				if len(added) > 0 {
+					added = append(added, name+" (a field of 0.x's, after the added ones)")
+				}
 			}
 		}
 	}
-	return shape + "struct{" + strings.Join(fields, "; ") + "}"
+	return shape + "struct{" + strings.Join(fields, "; ") + "}", added
 }
 
 // text prints an expression as Go source, or "" for none.
