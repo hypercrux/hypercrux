@@ -174,7 +174,9 @@ passes as a batch. The changes are:
 - put fields;
 - delete a record;
 - add or remove a link;
-- drop a table.
+- drop a table;
+- and, in a compacted part alone, a vector block: a run of one table's
+  vectors, as its array holds them.
 
 After a batch is synced, the writer adds a small marker naming the batch's
 sequence number and checksum, with a check value of its own so that a
@@ -361,8 +363,11 @@ well, which rewrites its data about once more in all:
    header naming the database ID, generation N+1, the batch it continues
    from and where the compacted part ends. Each table starts with a change
    that creates it, with its vector size and its fields in order, so empty
-   tables and vector sizes come through. Vectors go in as ordinary fields of
-   their records.
+   tables and vector sizes come through. Each table's vectors follow its
+   records in vector blocks, written from its vector array as they are, each
+   block alone in a batch of about a megabyte. Opening puts each vector
+   straight into its table's array, checking its values and working out its
+   norm, as FORMAT.md's "Vector blocks" describes.
 3. It syncs the new file.
 4. It checks that the file at the path is still the one it compacted, so a
    backup moved into place meanwhile is never replaced. Then it renames the
@@ -402,14 +407,16 @@ off. It takes about as long as writing and syncing the live data once, and
 the pause grows with the live data, so compacting earlier would only make
 pauses more frequent. Task F8 measured about 0.37 GB a second on a two-core
 cloud machine, where the sync itself ran at about 1.4 GB a second and
-building the batches took most of the time, so a million records with
-384-value vectors, about 1.6 GB, would hold writers up for about four and a
-half seconds. A waiting writer that finds `NAME.compact` locked keeps
-waiting past the usual 10 seconds, until the compaction ends, and 10 seconds
-more, so a writer has time to get the lock as the compaction lets go, and
-one stuck after its rename holds writers up no longer than a stuck commit.
-Compacting in the background would take most of the pause away later without
-changing the format.
+building the batches took most of the time. Since V2 the vectors go from the
+arrays into the batches as they are, and on such a machine 100,000 records
+with 384-value vectors, 159 MB, compacted in 0.33 to 0.40 seconds, where
+they took about 0.6 before, so a million records, about 1.6 GB, would hold
+writers up for about four seconds. A waiting writer that finds
+`NAME.compact` locked keeps waiting past the usual 10 seconds, until the
+compaction ends, and 10 seconds more, so a writer has time to get the lock
+as the compaction lets go, and one stuck after its rename holds writers up
+no longer than a stuck commit. Compacting in the background would take most
+of the pause away later without changing the format.
 
 `Compact()` in Go and `hypercrux compact` run a compaction on demand. A
 compacted file holds only live data, so that's also how deleted data leaves
@@ -781,8 +788,10 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
 - Read-only opening and a restore command. 0.x has neither.
 - Carrying on after a compaction without reloading. The header keeps the
   fields it needs.
-- Vector blocks that open without parsing, unless the open target needs them
-  (task V2).
+- Loading a compacted part's records without the general put path, and
+  decoding them from the read buffer without copying each batch into a
+  string, which the rest of the open target needs (I1.md and V2.md). The
+  owner left them out of V2, knowing the target stays missed.
 - Writing zeros ahead of the log, which can follow the Beta if F7's
   measurement calls for it.
 - Speed-ups that can come later without changing the format: splitting one

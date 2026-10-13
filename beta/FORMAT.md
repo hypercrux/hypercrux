@@ -12,9 +12,12 @@ describes, and its export format is in [EXPORT.md](../EXPORT.md). The design
 behind this format, and the reasons for it, are in [BETA.md](../BETA.md).
 
 The Beta hasn't been released, and this format can still change before it
-is. Every change raises the format version, even before the release, so a
-build of the Beta refuses a file from another build whose format differs,
-and never misreads it.
+is. A change that an older build could misread raises the format version,
+even before the release, so a build of the Beta refuses a file from another
+build whose format differs. A change that an older build reports as damage
+keeps the version. The vector block is one: it's a change of a kind a build
+from before it doesn't know, so that build refuses a file that holds one,
+and reads every other file as before. Either way, no build misreads a file.
 
 ## The layout
 
@@ -191,6 +194,7 @@ dump shows which change is which.
 | `L` | `4c` | Add a link | the key the link is from, its type and the key it's to (strings) |
 | `U` | `55` | Remove a link | the same as for adding one |
 | `X` | `58` | Drop a table | the table's name (string) |
+| `V` | `56` | Vector block | the table's name (string), the vector size (u32), the number of vectors (u32), then each record's key (string), then each record's vector, as Vector blocks describes |
 
 Changes apply in order, each to the state the ones before it left, and each
 has to be valid there:
@@ -227,6 +231,8 @@ has to be valid there:
 - **Drop a table.** The table exists. It goes with its records, every link
   to or from them, its field list and its vector size. A later put into a
   table of the same name needs a new create change first.
+- **Vector block.** Only a compacted part holds one. It gives records of one
+  table their vectors, by the rules in Vector blocks.
 
 Puts are always written, even when they set the values a record already
 has. Any other change that would do nothing isn't written: adding a link
@@ -269,8 +275,9 @@ Keys and names follow 0.x's rules, which the Beta keeps:
 
 The format's own widths set the other limits. A table has at most 65,535
 fields, and a put sets at most 65,535. A text or bytes value holds at most
-4,294,967,295 bytes. HyperCrux's own limits can be lower: a put can't take
-a table past 1,999 fields, which is 0.x's limit.
+4,294,967,295 bytes, and a vector block at most 4,294,967,295 vectors.
+HyperCrux's own limits can be lower: a put can't take a table past 1,999
+fields, which is 0.x's limit.
 
 ## Compaction
 
@@ -281,8 +288,9 @@ part: ordinary batches, each with its marker, holding
 
 - every table, in byte order of its name, as a create change with its vector
   size and its whole field list, then a put for each of its records, in byte
-  order of their keys, carrying every field that holds a value, the vector
-  included, and no nulls;
+  order of their keys, carrying every field that holds a value apart from
+  the vector, and no nulls, then the vectors of the records that hold one,
+  in vector blocks, in byte order of their keys (see Vector blocks);
 - then every link, as an add change, in byte order of the key it's from,
   then its type, then the key it's to. That's the order of whole keys,
   which can differ from the order of their tables: `users2:zed` comes
@@ -290,25 +298,71 @@ part: ordinary batches, each with its marker, holding
 
 The writer splits the compacted part into batches as it likes, keeping each
 change whole, so it can stream a large database out without building it all
-in memory. The batches are numbered from 1, and the first commit after them
-takes the next number, which a reader finds in the marker just before the
-end of the compacted part, or is 1 when nothing was compacted. The header's
-last field points just past the last compacted batch's marker; a database
-with no tables has no compacted batches, and then it's 68. The writer only
-knows that offset at the end, so it can write the header last.
+in memory. HyperCrux gives each vector block a batch of its own, filled to
+about a megabyte, so a table's vectors take a run of blocks. The batches are
+numbered from 1, and the first commit after them takes the next number,
+which a reader finds in the marker just before the end of the compacted
+part, or is 1 when nothing was compacted. The header's last field points
+just past the last compacted batch's marker; a database with no tables has
+no compacted batches, and then it's 68. The writer only knows that offset at
+the end, so it can write the header last.
 
 Nobody can read the new file before the rename, and the file is synced
 once before it, so the compacted part's markers need no sync of their own
 either.
 
-A reader applies the compacted part like any other batches. A compacted
-file is whole before anyone can see it, so a file shorter than its
-compacted part, or a log that ends inside it, is damage, and nothing before
-the end of the compacted part is ever cut. The continues-from fields aren't
-needed to read the file. They're there for a later version that has the
-old file open, so it can carry on after a compaction without reading the
-new file from the start: the state at the end of the compacted part is the
-state after the batch the header names.
+A reader applies the compacted part like any other batches. A put in it
+can carry its record's vector in place of a vector block, and a reader
+takes either. A compacted file is whole before anyone can see it, so a file
+shorter than its compacted part, or a log that ends inside it, is damage,
+and nothing before the end of the compacted part is ever cut. The
+continues-from fields aren't needed to read the file. They're there for a
+later version that has the old file open, so it can carry on after a
+compaction without reading the new file from the start: the state at the end
+of the compacted part is the state after the batch the header names.
+
+## Vector blocks
+
+A vector block gives records of one table their vectors, back to back, as
+the table's array in memory holds them, so a reader puts them straight into
+its own array. Compaction writes them, after each table's puts, and nothing
+else does.
+
+| Size | Field |
+|---|---|
+| 1 | Kind: `V`, `56` |
+| string | The table's name |
+| 4 | The vector size, u32 |
+| 4 | The number of vectors, u32 |
+| a string each | Each record's key, in byte order |
+| 4 times the vector size, each | Each record's vector, in the order of the keys, each value an f32 |
+
+The keys come first and the vectors after them, so the values are one run of
+bytes. A block names each record it gives a vector, and leaves out the
+records without one, so every vector says whose it is. The norms aren't in
+the block: a reader works each one out from the values, in the pass that
+checks them.
+
+A block applies to the state the changes before it left, as any change
+does, and has to be valid there:
+
+- The table exists, and its vector size is the block's, which is 1 to
+  65,536.
+- The block holds one vector at least. Each key belongs to the table, and
+  the keys come in byte order, so none comes twice.
+- Each key names a record of the table that holds no vector, and the vector
+  becomes that record's. Its values follow the rules for a vector's values:
+  none is NaN or infinite, and they aren't all zero.
+
+A vector block anywhere but in a compacted part is damage: in a batch past
+the compacted part, or in a file of generation 1, which has none. So is a
+block that breaks the rules above. The batch's checksum covers a block as it
+covers any change, and the syntax shows a count that disagrees with the keys
+and the values given, since the change then runs past the end of its batch,
+or leaves bytes over.
+
+A build from before vector blocks reads one as a change of a kind it doesn't
+know, which is damage, so it refuses the file.
 
 ## Reading the log
 

@@ -75,7 +75,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   carry, and the format's golden fixtures in `internal/format/testdata`,
   annotated hex for each part of the format and two small databases, with
   the test that checks them against FORMAT.md, and the codec, which reads
-  and writes headers, batches and markers as pure functions.
+  and writes headers, batches and markers as pure functions. A batch of
+  vector blocks alone can be read without a copy (`DecodeBatchInPlace`).
 - `internal/fsys/`: the file calls, `File` and `FS`, which the crash tests'
   fault layers wrap, and the real ones, `OS`, through Go's `syscall`
   package.
@@ -92,11 +93,14 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   follows other processes' commits with `Follow`: one stat, then each new
   batch's head, its marker and the rest, and the check of the end of the
   log when the writer has gone. The holder of the write lock compacts the
-  database from a snapshot of the copy into `NAME.compact`, which is synced
-  and renamed over the database, while writers wait it out, and the next
+  database from a snapshot of the copy into `NAME.compact`, each table's
+  vectors in vector blocks of about a megabyte, which is synced and renamed
+  over the database, while writers wait it out, and the next
   holder removes one a crash left. A process that finds another file at the
   path reads it from its start with `Reload`, once its old copy has gone and
-  a garbage collection has run. It opens a database by its real path, and
+  a garbage collection has run. A Target that keeps nothing of a vector
+  block can take a batch of blocks straight from the log's read buffer
+  (`Options.BlocksInPlace`). It opens a database by its real path, and
   refuses a file with more than one hard link, and anything at the path
   that isn't a regular file, before anything opens it. Its first commit
   into a file whose name it didn't make last itself syncs the folder first.
@@ -131,7 +135,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   each table's vectors in an array of their own, which `Nearest` searches.
   Its writes give the change lists the log writes, `ApplyBatch` and
   `LoadBatch` take a batch the log has read whole or not at all, and
-  `Snapshot` gives the copy as a compacted part. Reads share it through
+  `Snapshot` gives the copy as a compacted part, and `Compacted` gives it as
+  compaction writes it, each table's vectors straight from its array for
+  vector blocks. Reads share it through
   `Read`, and writes go through a transaction from `Begin`, which holds
   readers off from its first change until it ends, and puts the copy back
   with its undo list when it rolls back. `Check` checks that the copy's

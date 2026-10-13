@@ -18,9 +18,9 @@ import (
 // is due. Both go the way F8 set out. Holding the log's write lock, a read
 // of the copy hands its compacted snapshot to the log's Compact, which
 // writes it into NAME.compact, each table's vectors in vector blocks (V2),
-// syncs it, renames it over the database and syncs the folder. The copy holds that state already, so this process reads nothing
-// afresh, and other processes read the new file at their next read or Lock
-// (F9).
+// syncs it, renames it over the database and syncs the folder. The copy
+// holds that state already, so this process reads nothing afresh, and other
+// processes read the new file at their next read or Lock (F9).
 //
 // The lock order holds: the log's mutex and flock, then the copy's lock,
 // which Read holds shared. Reads in this process go on during a compaction,
