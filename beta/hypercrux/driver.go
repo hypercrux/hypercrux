@@ -37,9 +37,10 @@ import (
 //     changes. A pool limit a program sets on SQL() can't make them wait.
 //
 // database/sql turns each argument into a value with CheckNamedValue, by
-// its usual conversion and then go-sqlite3's (argument). The driver parses
-// the text, takes exactly one argument for each ? mark (bind), and runs the
-// statement where its via puts it (via.run):
+// its usual conversion and then go-sqlite3's, which query.Arg makes
+// (argument). The driver parses the text, takes exactly one argument for
+// each ? mark (bind), and runs the statement where its via puts it
+// (via.run):
 //
 //   - a SELECT through the database in one read of the copy, and through a
 //     Tx on the copy's transaction, with every row copied out before the
@@ -48,11 +49,11 @@ import (
 //     Tx in its transaction, which goes back to where it was before the
 //     statement when the statement fails (write).
 //
-// The engine runs a statement once the driver has it ready. Task G4 writes
-// the Beta's; until then a statement that parses gives a stub's error.
+// The engine runs a statement once the driver has it ready (engine.go).
 
 // engine runs the statements that parse, with their arguments in the order
-// of their ? marks, as Param.Index numbers them.
+// of their ? marks, as Param.Index numbers them. The Beta's is sqlEngine,
+// and a test can hand a DB one of its own (UseEngine, in export_test.go).
 type engine interface {
 	// query runs the SELECT s on r and gives the names of its result
 	// columns and its rows. The driver reads every row, copying it, and
@@ -64,17 +65,6 @@ type engine interface {
 	// of rows it changed. When it fails, the driver takes back every change
 	// it made, and the transaction carries on.
 	write(tx *store.Tx, s query.Statement, args []value.Value) (changed int64, err error)
-}
-
-// notYetEngine is the engine until task G4 writes the Beta's.
-type notYetEngine struct{}
-
-func (notYetEngine) query(store.Reader, *query.Select, []value.Value) ([]string, query.Rows, error) {
-	return nil, nil, notYet("SQL", "G4")
-}
-
-func (notYetEngine) write(*store.Tx, query.Statement, []value.Value) (int64, error) {
-	return 0, notYet("SQL", "G4")
 }
 
 // via is what a call through the package's methods puts in its statement's
@@ -249,10 +239,8 @@ func (v via) statement(text string, s query.Statement, args []driver.NamedValue)
 // has ? marks only and the arguments fill them in order, and so are fewer
 // arguments than marks or more (SQL.md, "Arguments").
 func bind(s query.Statement, args []driver.NamedValue) ([]value.Value, error) {
-	for _, a := range args {
-		if a.Name != "" {
-			return nil, fmt.Errorf("hypercrux: the argument named %s has no mark to fill: the Beta's SQL has ? marks only, which the arguments fill in order", a.Name)
-		}
+	if err := unnamed(args); err != nil {
+		return nil, err
 	}
 	if want := s.Params(); len(args) != want {
 		noun := "arguments"
@@ -278,57 +266,39 @@ func bind(s query.Statement, args []driver.NamedValue) ([]value.Value, error) {
 	return vals, nil
 }
 
-// timeLayout is the layout go-sqlite3 writes a time.Time argument in, the
-// first of its SQLiteTimestampFormats.
-const timeLayout = "2006-01-02 15:04:05.999999999-07:00"
+// unnamed refuses an argument with a name, from sql.Named: the Beta's SQL
+// has ? marks only, which the arguments fill in order. 0.x leaves the mark
+// such an argument falls on NULL.
+func unnamed(args []driver.NamedValue) error {
+	for _, a := range args {
+		if a.Name != "" {
+			return fmt.Errorf("hypercrux: the argument named %s has no mark to fill: the Beta's SQL has ? marks only, which the arguments fill in order", a.Name)
+		}
+	}
+	return nil
+}
 
-// argument turns a Go value given as an argument into its SQL value, as 0.x
-// does through database/sql and go-sqlite3 (SQL.md, "Arguments").
-// database/sql's usual conversion comes first: a driver.Valuer gives its
-// Value, a nil pointer is NULL, another pointer gives what it points to,
-// and named types go to their kinds, so whole numbers become an int64,
-// apart from a uint64 of 2^63 or more, which it refuses, and float32
-// widens. Other types are refused there. Then go-sqlite3's binding: nil is
-// NULL, a whole number an integer, a bool 1 or 0, a float64 a real with NaN
-// as NULL, a string text as given, a []byte bytes with a nil slice as NULL,
-// and a time.Time text in timeLayout, in the time's own zone.
+// argument turns a Go value given as an argument into its SQL value, by the
+// one conversion the Beta has, query.Arg, which makes it as 0.x does through
+// database/sql and go-sqlite3 (SQL.md, "Arguments"): database/sql's usual
+// conversion, which takes a driver.Valuer, pointers and named types and
+// refuses other types, then go-sqlite3's binding, with NaN as NULL, a nil
+// []byte as NULL, and a time.Time as text in go-sqlite3's layout, in the
+// time's own zone. A Vector gives its bytes through its Value method, so the
+// value holds a copy of the caller's vector, and so does one made of a
+// []byte. Nearest's arguments come through here too (vectors.go).
 func argument(a any) (value.Value, error) {
-	d, err := driver.DefaultParameterConverter.ConvertValue(a)
-	if err != nil {
-		return value.Value{}, err
-	}
-	switch x := d.(type) {
-	case nil:
-		return value.Null(), nil
-	case int64:
-		return value.Int(x), nil
-	case bool:
-		if x {
-			return value.Int(1), nil
-		}
-		return value.Int(0), nil
-	case float64:
-		if math.IsNaN(x) {
-			return value.Null(), nil
-		}
-		return value.Real(x), nil
-	case string:
-		return value.Text(x), nil
-	case []byte:
-		if x == nil {
-			return value.Null(), nil
-		}
-		return value.Bytes(string(x)), nil
+	switch x := a.(type) {
 	case time.Time:
-		layout := timeLayout
 		if plant == "hypercrux/time-layout" {
-			layout = time.RFC3339Nano
+			return value.Text(x.Format(time.RFC3339Nano)), nil
 		}
-		return value.Text(x.Format(layout)), nil
+	case Vector:
+		if plant == "hypercrux/vector-argument-shared" && len(x) > 0 {
+			return value.Bytes(sharedVector(x)), nil
+		}
 	}
-	// database/sql passes on a decimal type that describes itself, which
-	// go-sqlite3 can't bind either.
-	return value.Value{}, fmt.Errorf("unsupported type %T", a)
+	return query.Arg(a)
 }
 
 // run runs a statement whose arguments are bound, where the via puts it,

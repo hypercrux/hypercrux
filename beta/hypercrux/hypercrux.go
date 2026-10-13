@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -120,8 +121,14 @@ type DB struct {
 	// and closed by Close (driver.go).
 	sql *sql.DB
 	// engine runs the statements that parse, through SQL and the methods
-	// alike (driver.go).
+	// alike (driver.go, engine.go).
 	engine engine
+	// clock gives the moment each statement reads once for 'now', and each
+	// search's filter: time.Now when it's nil, or a test's (engine.go).
+	clock func() time.Time
+	// first is the first moment read, kept for every later statement only
+	// by a planted bug.
+	first atomic.Pointer[time.Time]
 }
 
 // Open opens the database at path, creating it if it doesn't exist, and
@@ -239,6 +246,12 @@ func (t *Tx) open() (*store.Tx, error) {
 // outcome is unknown, and every later write through db fails with an error
 // that wraps ErrStuck until db is closed, while other handles and processes
 // wait for the write lock.
+//
+// So an error from Update means that nothing fn did is in the file, unless
+// it wraps ErrStuck. Once the commit is in the file, Update returns nil,
+// even when letting go of the write lock fails after it, so a caller never
+// makes a commit twice. A lock that stays held that way goes at this DB's
+// next Update, or at Close.
 func (db *DB) Update(fn func(tx *Tx) error) (err error) {
 	s, err := db.current()
 	if err != nil {
@@ -255,8 +268,18 @@ func (db *DB) Update(fn func(tx *Tx) error) (err error) {
 	}
 	defer func() {
 		// The lock goes last, after the copy's transaction has ended, and
-		// on a panic too.
-		if e := db.log.Unlock(); e != nil && err == nil {
+		// on a panic too. When fn or the commit failed, that's the error to
+		// give. When both worked, the commit is in the file and in the copy
+		// and stays there, so a failure to let go of flock doesn't fail the
+		// Update: an error from Update means its commit isn't in the file,
+		// unless it wraps ErrStuck (BETA.md, "Commits"), as an error from
+		// 0.x's Update means its COMMIT didn't happen (G4, after I1's
+		// finding). The Log lets go of its mutex either way. When flock is
+		// still held, this DB's next Update takes it again, since the file
+		// that holds it can, and lets go of it, or Close does as it closes
+		// the file.
+		e := db.log.Unlock()
+		if plant == "hypercrux/unlock-error-kept" && e != nil && err == nil {
 			err = fmt.Errorf("hypercrux: %s: letting go of the write lock after the Update failed: %w", db.path, e)
 		}
 	}()

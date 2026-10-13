@@ -32,15 +32,22 @@ import (
 // So the caller makes Nearest's own checks first, in 0.x's order, and calls
 // NearestFilter only for a table with a vector size, as 0.x prepares its
 // query only then. A where that holds only spaces is no filter at all.
+//
+// The search hands the filter only records with a vector, so 0.x's first
+// term, vec IS NOT NULL, holds for every record the filter sees, and the
+// plan leaves it out. It would give no other terms, no other order and no
+// other errors, since it reads a field and can't fail, and x AND 0 folds
+// the same with it or without it. Without it, the filter fills a record's
+// vector into its row only when where reads it, where a copy of 384 values
+// for each record took most of a search's time (G4).
 func NearestFilter(r store.Reader, table string, where Expr, params int, f *Frame) (keep store.Filter, none bool, err error) {
 	if len(f.Args) != params {
 		return nil, false, &Error{Pos: 0, Msg: "the filter has " + strconv.Itoa(params) + " ? marks and " + strconv.Itoa(len(f.Args)) + " arguments: it takes one argument for each"}
 	}
-	vec := &Column{Name: Ident{Name: "vec"}}
 	sel := &Select{
 		Results: []Result{{Expr: &Column{Name: Ident{Name: "key"}}, Text: "key"}},
 		From:    &From{Sources: []*Source{{Table: &Ident{Name: table}}}},
-		Where:   &Binary{Op: OpAnd, L: &Binary{Op: OpIsNot, L: vec, R: &Literal{Kind: LitNull, Text: "NULL"}}, R: where},
+		Where:   where,
 		params:  params,
 	}
 	p, err := prepare(r, sel, false)
@@ -58,9 +65,7 @@ func NearestFilter(r store.Reader, table string, where Expr, params int, f *Fram
 			return nil, true, nil
 		}
 	}
-	// The search sees only records with a vector, so vec IS NOT NULL, the
-	// first term for each row, holds for each it sees.
-	terms := p.conds[1:]
+	terms := p.conds
 	if plant == "query/filter-first-term-dropped" && len(terms) > 0 {
 		terms = terms[1:]
 	}

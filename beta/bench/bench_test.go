@@ -37,9 +37,7 @@ func both(b *testing.B, bench func(b *testing.B, e engine)) {
 // with the task that makes it run and the Beta's calls that wait for that
 // task. TestTheSkipsStillWait fails once those calls work, so the task that
 // makes them work takes its lines out, and the results fill in.
-var later = map[string]wait{
-	"Nearest_100k_384dims_tenthFiltered": {"G4", []string{"Nearest with a filter"}},
-}
+var later = map[string]wait{}
 
 // wait is what a benchmark on the Beta waits for.
 type wait struct {

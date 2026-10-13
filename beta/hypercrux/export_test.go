@@ -6,6 +6,8 @@
 package hypercrux
 
 import (
+	"time"
+
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 	"github.com/hypercrux/hypercrux/beta/internal/logfile"
 	"github.com/hypercrux/hypercrux/beta/internal/query"
@@ -21,26 +23,28 @@ func OpenWith(files fsys.FS, path string, o logfile.Options) (*DB, error) {
 }
 
 // Engine runs the statements that parse, for the driver's tests, in place
-// of the engine task G4 writes: Query runs a SELECT, giving its columns and
-// its rows, and Write runs an INSERT, UPDATE or DELETE, giving the count of
+// of the Beta's engine: Query runs a SELECT, giving its columns and its
+// rows, and Write runs an INSERT, UPDATE or DELETE, giving the count of
 // rows it changed. Each is handed what the driver hands the engine (the
-// engine interface in driver.go). A nil func gives the stub's error, as the
-// engine does until G4.
+// engine interface in driver.go). A nil func leaves that kind of statement
+// to the Beta's engine.
 type Engine struct {
 	Query func(r store.Reader, s *query.Select, args []value.Value) ([]string, query.Rows, error)
 	Write func(tx *store.Tx, s query.Statement, args []value.Value) (int64, error)
+
+	db *DB // the database UseEngine gave it to
 }
 
 func (e Engine) query(r store.Reader, s *query.Select, args []value.Value) ([]string, query.Rows, error) {
 	if e.Query == nil {
-		return notYetEngine{}.query(r, s, args)
+		return sqlEngine{e.db}.query(r, s, args)
 	}
 	return e.Query(r, s, args)
 }
 
 func (e Engine) write(tx *store.Tx, s query.Statement, args []value.Value) (int64, error) {
 	if e.Write == nil {
-		return notYetEngine{}.write(tx, s, args)
+		return sqlEngine{e.db}.write(tx, s, args)
 	}
 	return e.Write(tx, s, args)
 }
@@ -48,7 +52,14 @@ func (e Engine) write(tx *store.Tx, s query.Statement, args []value.Value) (int6
 // UseEngine has db run the statements that parse through e from now on,
 // through SQL() and the methods alike. A test calls it before it hands db
 // to anything else.
-func UseEngine(db *DB, e Engine) { db.engine = e }
+func UseEngine(db *DB, e Engine) {
+	e.db = db
+	db.engine = e
+}
+
+// UseClock has db read the moment for each statement, and for each search's
+// filter, from now on. A test calls it before it hands db to anything else.
+func UseClock(db *DB, now func() time.Time) { db.clock = now }
 
 // ReadTheCopy runs fn on db's copy as it is, inside the copy's Read, without
 // following the file and whatever a reload left, for a test that looks at

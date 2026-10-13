@@ -6,8 +6,11 @@
 package difftest
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"math"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -72,20 +75,21 @@ func TestZeroxAgainstItself(t *testing.T) {
 	check(t, zerox.Engine{}, zerox.Engine{}, 1)
 }
 
-// betaLeaves are the kinds of step the Beta can't take yet: SQL, and
-// Nearest's filters, which are SQL too. Both wait for task G4.
-var betaLeaves = []string{"sql", "where"}
+// betaLeaves are the kinds of step the Beta can't take yet. SQL and
+// Nearest's filters waited for task G4, and none waits now.
+var betaLeaves = []string{}
 
 // TestZeroxAgainstTheBeta runs 0.x against the Beta, 0.x being the judge,
-// on sequences without the steps in betaLeaves.
+// on sequences without the steps in betaLeaves. Since G4 they take every
+// kind of step, the crux query and Nearest's filters among them.
 func TestZeroxAgainstTheBeta(t *testing.T) {
 	check(t, zerox.Engine{}, betax.Engine{}, 1, betaLeaves...)
 }
 
 // TestSavedSequences replays every sequence saved in testdata, with 0.x
 // against the Beta. A saved one stays as a test after the difference it
-// found is fixed. A sequence with a step the Beta can't take yet replays
-// with 0.x against itself until task G4.
+// found is fixed. A sequence with a step the Beta can't take yet, one of
+// betaLeaves's kinds, replays with 0.x against itself.
 func TestSavedSequences(t *testing.T) {
 	files, err := filepath.Glob(filepath.Join("testdata", "*.json"))
 	if err != nil {
@@ -111,7 +115,7 @@ func TestSavedSequences(t *testing.T) {
 			t.Errorf("%s still fails, with 0.x against %s:\n%v", path, b.Name(), m)
 		}
 	}
-	t.Logf("replayed %d saved sequences, %d of them with 0.x against itself until task G4", len(files), waiting)
+	t.Logf("replayed %d saved sequences, %d of them with 0.x against itself, for a step the Beta can't take yet", len(files), waiting)
 }
 
 // takes reports whether a sequence has a step of one of the kinds named,
@@ -168,6 +172,55 @@ func TestABrokenEngineIsCaught(t *testing.T) {
 			}
 			t.Logf("caught at seed %d, shrunk to %d steps: %s", f.Seed, len(f.Ops), m.Detail)
 		})
+	}
+}
+
+// TestTheGeneratorKnowsEachTablesSize runs sequences on 0.x a step at a
+// time, and after each step holds the generator's idea of each table's
+// vector size to the size 0.x's table has, 0 for a table with none. The
+// harness counts on it since SQL came in (G4): a Put that fails on its
+// vector's size inside an Update that commits leaves new fields in 0.x and
+// nothing in the Beta, and the generator gives a vector it knows to be the
+// wrong size a Put of its own, so that no field comes about that way.
+func TestTheGeneratorKnowsEachTablesSize(t *testing.T) {
+	e := zerox.Engine{}
+	dir := scratch(t)
+	steps, sized := 0, 0
+	for i := range 200 {
+		seed := uint64(1 + i)
+		n := 5 + rand.New(rand.NewPCG(seed, 1)).IntN(80-4)
+		g := newGen(seed)
+		d, err := os.MkdirTemp(dir, "sizes")
+		if err != nil {
+			t.Fatal(err)
+		}
+		db, err := open(e, d)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for step := range n {
+			op := g.op(true)
+			do(e, db, db.Update, op)
+			steps++
+			for _, tbl := range tables {
+				var dims sql.NullInt64
+				err := db.SQL().QueryRow("SELECT dims FROM hc_tables WHERE name = ?", tbl).Scan(&dims)
+				if err != nil && !errors.Is(err, sql.ErrNoRows) {
+					t.Fatal(err)
+				}
+				if int(dims.Int64) != g.dims[tbl] {
+					t.Fatalf("seed %d, step %d, %s: the generator takes %s's vector size for %d, where 0.x's is %d", seed, step, opJSON(op), tbl, g.dims[tbl], dims.Int64)
+				}
+				if dims.Valid {
+					sized++
+				}
+			}
+		}
+		db.Close()
+		os.RemoveAll(d)
+	}
+	if sized < steps/2 {
+		t.Errorf("tables had a vector size after %d of %d steps", sized, steps)
 	}
 }
 

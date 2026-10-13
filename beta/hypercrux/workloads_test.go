@@ -98,31 +98,22 @@ func workloadOps(tx *hc.Tx, i int) error {
 // the next commit's state is built without it, as the driver's model wants of
 // a workload that carries on.
 //
-// Update can return an error for a commit that succeeded: when the commit is
-// in the file and only letting go of flock fails, it gives that error. The
-// copy keeps a commit only once Append has written it, synced it and marked
-// it, so when Update fails and the copy holds the commit's state, the commit
-// counts as done, and every check after it holds the file to that.
+// Update returns nil for a commit that's in the file, even when only letting
+// go of flock fails after it (G4, after I1's finding), so the copy never
+// holds a commit Update reports as failed, and the next commit's state is
+// built without it.
 func workloadCommit(db *hc.DB, m *crash.Model, i int) error {
-	var state string
 	err := db.Update(func(tx *hc.Tx) error {
 		if err := workloadOps(tx, i); err != nil {
 			return err
 		}
-		state = hc.TxState(tx)
 		if m != nil {
-			m.Begin(state)
+			m.Begin(hc.TxState(tx))
 		}
 		return nil
 	})
-	switch {
-	case m == nil:
-	case err == nil:
+	if m != nil && err == nil {
 		m.Done()
-	case state != "":
-		if now, e := hc.ReadState(db); e == nil && now == state {
-			m.Done()
-		}
 	}
 	return err
 }

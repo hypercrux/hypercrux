@@ -35,8 +35,7 @@ import (
 //   - hypercrux/nearest-nil-for-none: Nearest gives nil for a search that
 //     finds nothing in a table with a vector size, where 0.x gives an empty
 //     list.
-//   - hypercrux/filter-ignored: Nearest with a filter searches without it,
-//     where it should wait for task G4 as a stub.
+//   - hypercrux/filter-ignored: Nearest with a filter searches without it.
 //   - hypercrux/blob-shared: the driver hands bytes and vectors to
 //     database/sql without copying them, so a caller that writes into a
 //     sql.RawBytes writes into the store's copy.
@@ -110,6 +109,25 @@ import (
 //     a value that shares the caller's memory, so a caller that fills the
 //     same buffer again before the commit changes what the batch holds, and
 //     the file differs from the copy.
+//
+// G4's, in the engine, Nearest's filter and Update:
+//
+//   - hypercrux/moment-kept: the engine reads its moment for the first
+//     statement only, and every later statement gets the same one, so
+//     date('now') stands still.
+//   - hypercrux/vector-argument-shared: a Vector given as an argument
+//     becomes a value that shares the caller's memory, so a caller that
+//     changes the vector after a write changes what the copy holds, and the
+//     file differs from it.
+//   - hypercrux/filter-checks-reordered: Nearest reads its filter before
+//     0.x's checks, so a broken filter fails a search of a table with no
+//     vectors yet, or of one that doesn't exist, where 0.x gives no hits or
+//     says the table isn't found.
+//   - hypercrux/filter-none-nil: a filter whose constant terms rule every
+//     record out gives no hits as nil, where 0.x gives an empty list.
+//   - hypercrux/unlock-error-kept: when only letting go of flock fails after
+//     a commit, Update returns an error, though the commit is in the file,
+//     so a caller makes it again.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -121,7 +139,9 @@ var plant = func() string {
 		"hypercrux/export-fields-sorted", "hypercrux/export-unlocked", "hypercrux/import-size-dropped",
 		"hypercrux/import-kept-in-part", "hypercrux/import-twice-merged", "hypercrux/import-over-tables",
 		"hypercrux/check-file-skipped", "hypercrux/check-marker-at-the-batch", "hypercrux/check-follow-damage-dropped",
-		"hypercrux/check-reload-copy-read", "hypercrux/export-unchecked", "hypercrux/vector-bits-shared":
+		"hypercrux/check-reload-copy-read", "hypercrux/export-unchecked", "hypercrux/vector-bits-shared",
+		"hypercrux/moment-kept", "hypercrux/vector-argument-shared", "hypercrux/filter-checks-reordered",
+		"hypercrux/filter-none-nil", "hypercrux/unlock-error-kept":
 		return p
 	}
 	return ""
@@ -134,4 +154,12 @@ func shared(s string) []byte {
 		return []byte{}
 	}
 	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+// sharedVector returns v's memory as the bits of its values, without
+// copying it, for hypercrux/vector-argument-shared. On a little-endian
+// machine, as amd64 and arm64 are, a float32's memory is its bits in the
+// order SQL gives them.
+func sharedVector(v Vector) string {
+	return unsafe.String((*byte)(unsafe.Pointer(unsafe.SliceData(v))), 4*len(v))
 }

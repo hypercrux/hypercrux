@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"strconv"
@@ -166,30 +167,84 @@ var (
 
 // statements is the plain SQL a sequence runs, each with its arguments.
 // Every query orders its rows, so two engines can be compared row by row.
+// The last is the crux query, in 0.x's form: a walk joined to a table,
+// filtered on a field, and ordered by distance.
+//
+// Two of the Beta's differences from 0.x on purpose are kept out (SQL.md,
+// "Where the Beta differs from 0.x"). The values an UPDATE writes are never
+// an infinite real or text that isn't UTF-8, which 0.x stores and the Beta
+// refuses as Put does (sqlValue). And the sum adds whole numbers of a
+// modest size only, since the Beta adds a table's rows in key order and
+// 0.x in the order it put them, which can change a real sum's last bits,
+// or whether it overflows, at the extremes.
 var statements = []struct {
 	sql  string
 	args func(g *gen) []Value
 }{
 	{`SELECT key, title, n FROM docs ORDER BY key`, nil},
-	{`SELECT count(*), sum(n) FROM people`, nil},
-	{`UPDATE docs SET n = ? WHERE key = ?`, func(g *gen) []Value { return []Value{{g.value()}, {g.key()}} }},
+	{`SELECT count(*), sum(n) FROM people WHERE typeof(n) = 'integer' AND n BETWEEN -1000000000 AND 1000000000`, nil},
+	{`UPDATE docs SET n = ? WHERE key = ?`, func(g *gen) []Value { return []Value{{g.sqlValue()}, {g.key()}} }},
 	{`DELETE FROM people WHERE key = ?`, func(g *gen) []Value { return []Value{{g.key()}} }},
 	{`INSERT INTO people (key) VALUES (?)`, func(g *gen) []Value { return []Value{{g.key()}} }},
 	{`SELECT d.key FROM json_each(walk(?, 2)) w JOIN docs d ON d.key = w.value ORDER BY d.key`,
 		func(g *gen) []Value { return []Value{{g.key()}} }},
 	{`SELECT key FROM t_1 WHERE vec IS NOT NULL ORDER BY distance(vec, ?), key LIMIT 3`,
-		func(g *gen) []Value { q, _ := g.vector("t_1"); return []Value{{q}} }},
+		func(g *gen) []Value { return []Value{{g.vector("t_1")}} }},
+	{cruxSQL, func(g *gen) []Value { return g.cruxArgs(g.cruxStart()) }},
+}
+
+// cruxSQL is the crux query, in 0.x's form.
+const cruxSQL = `SELECT d.key, d.title FROM json_each(walk(?, ?)) w JOIN docs d ON d.key = w.value WHERE d.n > ? AND d.vec IS NOT NULL ORDER BY distance(d.vec, ?) LIMIT ?`
+
+// sqlValue is a value for an UPDATE to write: one of value's, with the
+// values Put refuses that 0.x's SQL stores, an infinite real and text that
+// isn't UTF-8, made NULL. A NaN stays, since SQL takes it as NULL in both.
+func (g *gen) sqlValue() any {
+	v := g.value()
+	if f, ok := v.(float64); ok && math.IsInf(f, 0) || v == "\xff" {
+		return nil
+	}
+	return v
+}
+
+// cruxStart is a start for the crux query: a record that links to a record
+// of docs, most of the time, as far as the generator knows.
+func (g *gen) cruxStart() string {
+	start := g.linked()
+	var toDocs []string
+	for _, l := range g.links {
+		if strings.HasPrefix(l.To, "docs:") {
+			toDocs = append(toDocs, l.From)
+		}
+	}
+	if len(toDocs) > 0 && !g.one(4) {
+		start = g.pick(toDocs)
+	}
+	return start
+}
+
+// cruxArgs gives the crux query's arguments: the start, a depth from 1 to 4,
+// a whole number for d.n to pass, a query vector for docs, and a LIMIT, now
+// and then 0 or -1, which means no limit.
+func (g *gen) cruxArgs(start string) []Value {
+	q := g.vector("docs")
+	limit := int64(1 + g.r.IntN(6))
+	if g.one(10) {
+		limit = []int64{0, -1}[g.r.IntN(2)]
+	}
+	return []Value{{start}, {int64(1 + g.r.IntN(4))}, {int64(g.r.IntN(20))}, {q}, {limit}}
 }
 
 // gen makes random sequences. It keeps a rough idea of what the database
 // holds, so most steps are calls that can succeed, but it never looks at
 // the database: the same seed always gives the same sequence.
 type gen struct {
-	r     *rand.Rand
-	keys  []string
-	links []c.Link
-	dims  map[string]int
-	leave map[string]bool
+	r      *rand.Rand
+	keys   []string
+	links  []c.Link
+	dims   map[string]int
+	fields map[string]map[string]bool // the fields good Puts have given each table, in lower case
+	leave  map[string]bool
 }
 
 // Kinds are the kinds of step, plus "where", which stands for Nearest's
@@ -200,15 +255,21 @@ var Kinds = []string{"put", "get", "delete", "scan", "link", "unlink", "neighbou
 // Generate makes a sequence of n steps from seed, without the kinds named
 // in leave.
 func Generate(seed uint64, n int, leave ...string) []Op {
-	g := &gen{r: rand.New(rand.NewPCG(seed, 0x6466)), dims: map[string]int{}, leave: map[string]bool{}}
-	for _, k := range leave {
-		g.leave[k] = true
-	}
+	g := newGen(seed, leave...)
 	ops := make([]Op, n)
 	for i := range ops {
 		ops[i] = g.op(true)
 	}
 	return ops
+}
+
+// newGen makes the generator Generate uses for seed.
+func newGen(seed uint64, leave ...string) *gen {
+	g := &gen{r: rand.New(rand.NewPCG(seed, 0x6466)), dims: map[string]int{}, fields: map[string]map[string]bool{}, leave: map[string]bool{}}
+	for _, k := range leave {
+		g.leave[k] = true
+	}
+	return g
 }
 
 func (g *gen) pick(list []string) string { return list[g.r.IntN(len(list))] }
@@ -303,23 +364,37 @@ func (g *gen) value() any {
 
 // vector makes a vector for a table: mostly of the size the generator
 // thinks the table has, sometimes of another size, all zeros, or with NaN.
-// ok says whether it's one Put would take.
-func (g *gen) vector(tbl string) (v c.Vector, ok bool) {
+// A table whose size the generator doesn't know takes a vector of any
+// size, since its first vector sets it.
+func (g *gen) vector(tbl string) c.Vector {
 	dims := g.dims[tbl]
 	if dims == 0 {
 		dims = 1 + g.r.IntN(4)
 	}
 	switch g.r.IntN(40) {
 	case 0, 1:
-		return g.floats(dims + 1), false
+		return g.floats(dims + 1)
 	case 2:
-		return make(c.Vector, dims), false
+		return make(c.Vector, dims)
 	case 3:
 		v := g.floats(dims)
 		v[0] = float32(math.NaN())
-		return v, false
+		return v
 	}
-	return g.floats(dims), true
+	return g.floats(dims)
+}
+
+// sound reports whether Put takes v as a vector, its size apart: its values
+// are finite and not all zero, with -0 counting as zero.
+func sound(v c.Vector) bool {
+	zero := true
+	for _, x := range v {
+		if math.IsNaN(float64(x)) || math.IsInf(float64(x), 0) {
+			return false
+		}
+		zero = zero && x == 0
+	}
+	return len(v) > 0 && !zero
 }
 
 func (g *gen) floats(dims int) c.Vector {
@@ -394,13 +469,21 @@ func (g *gen) op(top bool) Op {
 		case "update":
 			return g.update()
 		}
-		return g.sql()
+		return g.sql(top)
 	}
 }
 
 // put makes a Put. The generator remembers the key, and the table's vector
 // size, only when it's a Put the rules allow, so that later steps mostly
-// find what they look for.
+// find what they look for, and every table's size it knows is the size the
+// table has.
+//
+// A Put whose vector has another size than the table's, and nothing else
+// wrong with it, names no other field. 0.x checks a vector's size once it
+// has added the fields the table hasn't got, and keeps them when the Put
+// fails inside an Update that goes on to commit, where the Beta keeps
+// nothing, so SQL that names such a field would differ, as SQL.md says
+// under "Where the Beta differs from 0.x".
 func (g *gen) put() Op {
 	key := g.key()
 	op := Op{Kind: "put", Key: key}
@@ -409,7 +492,6 @@ func (g *gen) put() Op {
 	for _, k := range badKeys {
 		good = good && k != key
 	}
-	var vec c.Vector
 	for n := g.r.IntN(5); n > 0; n-- {
 		name := g.pick(names)
 		switch {
@@ -426,38 +508,70 @@ func (g *gen) put() Op {
 		if name == "vec" {
 			switch {
 			case !g.one(8):
-				var ok bool
-				vec, ok = g.vector(tbl)
-				good = good && ok
-				v = vec
-			case g.one(6): // not a vector at all
-				v, good = "[1, 2]", false
+				v = g.vector(tbl)
+			case g.one(6): // a vector written as JSON text, which Put reads as one of 2 values
+				v = "[1, 2]"
 			}
 		} else {
 			v = g.value()
-			if f, isFloat := v.(float64); isFloat && (math.IsNaN(f) || math.IsInf(f, 0)) || v == "\xff" {
-				good = false
-			}
 		}
 		op.Fields = append(op.Fields, Field{Name: name, Value: Value{v}})
 	}
-	// A field named twice in one Put keeps the last, as a map does, but
-	// title and Title together break a rule.
+	// A field named twice in one Put keeps the last value, as a map does, so
+	// the rules see only that one, but title and Title together break a
+	// rule.
 	spellings := map[string]string{}
-	for _, f := range op.Fields {
+	last := map[string]int{} // the last field of each name
+	for i, f := range op.Fields {
 		l := strings.ToLower(f.Name)
 		if s, ok := spellings[l]; ok && s != f.Name {
 			good = false
 		}
 		spellings[l] = f.Name
+		last[f.Name] = i
 	}
-	if good {
-		g.keys = append(g.keys, key)
-		if vec != nil && g.dims[tbl] == 0 {
-			g.dims[tbl] = len(vec)
+	size := 0 // the size of the vector the Put gives, or 0 for none
+	for name, i := range last {
+		switch v := op.Fields[i].Value.V; {
+		case name != "vec":
+			if f, isFloat := v.(float64); isFloat && (math.IsNaN(f) || math.IsInf(f, 0)) || v == "\xff" {
+				good = false
+			}
+		case v == "[1, 2]":
+			size = 2
+		default:
+			if vec, isVec := v.(c.Vector); isVec && sound(vec) {
+				size = len(vec)
+			} else if isVec {
+				good = false
+			}
 		}
 	}
+	if size > 0 && g.dims[tbl] > 0 && size != g.dims[tbl] {
+		op.Fields = []Field{op.Fields[last["vec"]]}
+		good = false
+	}
+	if good {
+		g.learn(key, op.Fields, size)
+	}
 	return op
+}
+
+// learn notes a Put the rules allow: its key, the fields it gives the table,
+// and the table's vector size, when it gives the table its first vector, of
+// size values.
+func (g *gen) learn(key string, fields []Field, size int) {
+	tbl, _, _ := strings.Cut(key, ":")
+	g.keys = append(g.keys, key)
+	if size > 0 && g.dims[tbl] == 0 {
+		g.dims[tbl] = size
+	}
+	if g.fields[tbl] == nil {
+		g.fields[tbl] = map[string]bool{}
+	}
+	for _, f := range fields {
+		g.fields[tbl][strings.ToLower(f.Name)] = true
+	}
 }
 
 func (g *gen) forget(key string) {
@@ -542,7 +656,7 @@ func (g *gen) nearest() Op {
 	if g.one(5) {
 		op.N = 1
 	}
-	q, _ := g.vector(tbl)
+	q := g.vector(tbl)
 	op.Vec = &Value{q}
 	if g.one(20) {
 		op.N = []int{0, -1, 10001}[g.r.IntN(3)]
@@ -564,6 +678,7 @@ func (g *gen) nearest() Op {
 func (g *gen) drop() Op {
 	tbl := g.table()
 	g.dims[tbl] = 0
+	delete(g.fields, tbl)
 	kept := g.keys[:0]
 	for _, k := range g.keys {
 		if !strings.HasPrefix(k, tbl+":") {
@@ -576,22 +691,82 @@ func (g *gen) drop() Op {
 
 func (g *gen) update() Op {
 	op := Op{Kind: "update", Fail: g.one(3)}
-	keys, links := append([]string{}, g.keys...), append([]c.Link{}, g.links...)
-	dims := map[string]int{}
-	for t, d := range g.dims {
-		dims[t] = d
-	}
+	back := g.remember()
 	for n := 1 + g.r.IntN(5); n > 0; n-- {
 		op.Ops = append(op.Ops, g.op(false))
 	}
 	if op.Fail { // what it did is undone, so forget it
-		g.keys, g.links, g.dims = keys, links, dims
+		back()
 	}
 	return op
 }
 
-func (g *gen) sql() Op {
+// remember returns a func that puts back what the generator knows now, for
+// an Update that rolls back.
+func (g *gen) remember() func() {
+	keys, links := append([]string{}, g.keys...), append([]c.Link{}, g.links...)
+	dims := maps.Clone(g.dims)
+	fields := map[string]map[string]bool{}
+	for t, f := range g.fields {
+		fields[t] = maps.Clone(f)
+	}
+	return func() { g.keys, g.links, g.dims, g.fields = keys, links, dims, fields }
+}
+
+// cruxUpdate makes an Update that gives the crux query something to find
+// and runs it there, through the transaction: puts of one to three records
+// of docs, each with a title, an n and a vector of docs's size, links to
+// them from a record the sequence has put, most of the time, and the query
+// from that record. A third of them roll back, as other Updates do.
+func (g *gen) cruxUpdate() Op {
+	op := Op{Kind: "update", Fail: g.one(3)}
+	back := g.remember()
+	from := g.held()
+	size := g.dims["docs"]
+	if size == 0 {
+		size = 1 + g.r.IntN(4)
+	}
+	for n := 1 + g.r.IntN(3); n > 0; n-- {
+		put := Op{Kind: "put", Key: "docs:" + g.pick(ids), Fields: []Field{
+			{Name: "title", Value: Value{g.pick(texts)}},
+			{Name: "n", Value: Value{int64(g.r.IntN(30))}},
+			{Name: "vec", Value: Value{g.floats(size)}},
+		}}
+		g.learn(put.Key, put.Fields, size)
+		link := Op{Kind: "link", Key: from, To: put.Key, Type: g.pick(linkTypes)}
+		g.links = append(g.links, c.Link{From: link.Key, Type: link.Type, To: link.To})
+		op.Ops = append(op.Ops, put, link)
+	}
+	op.Ops = append(op.Ops, Op{Kind: "sql", SQL: cruxSQL, Args: g.cruxArgs(from)})
+	if op.Fail {
+		back()
+	}
+	return op
+}
+
+// cruxReady reports whether docs has what the crux query reads, as far as
+// the generator knows: a vector size, and the fields title and n.
+func (g *gen) cruxReady() bool {
+	f := g.fields["docs"]
+	return g.dims["docs"] > 0 && f["title"] && f["n"]
+}
+
+// sql picks one of statements. The crux query, the last of them, comes half
+// the time as an Update of its own that gives it something to find
+// (cruxUpdate), when it isn't a step inside another Update. Otherwise it
+// comes once docs has a vector size and the fields title and n, as far as
+// the generator knows, and one time in ten when it hasn't, so that it meets
+// the errors of a table or field that isn't there too.
+func (g *gen) sql(top bool) Op {
 	s := statements[g.r.IntN(len(statements))]
+	if s.sql == cruxSQL {
+		switch {
+		case top && !g.leave["update"] && g.one(2):
+			return g.cruxUpdate()
+		case !g.cruxReady() && !g.one(10):
+			s = statements[g.r.IntN(len(statements)-1)]
+		}
+	}
 	op := Op{Kind: "sql", SQL: s.sql}
 	if s.args != nil {
 		op.Args = s.args(g)

@@ -39,24 +39,14 @@ func (Engine) ParseVector(s string) (c.Vector, error) {
 
 // Skip names the tests that are still out of reach, each with the task
 // that makes it pass. beta/SQL.md names every test in the suite as one the
-// Beta must pass, so the list shrinks as the tasks are done, and is empty
-// once G4 is.
+// Beta must pass, so the list shrank as the tasks were done, and has been
+// empty since G4.
 func (Engine) Skip() map[string]string { return maps.Clone(later) }
 
 // later holds the tests that wait for a later task, by name, with the task
 // each waits for. A test that needs more than one task names the last of
-// them on the board, and the others after it.
-var later = map[string]string{
-	"RulesForLongKeysAndLinkTypes": "waits for task G4, which brings Exec, after G2's Link",
-	"TableNamesLikeHyperCruxsOwn":  "waits for task G4, which brings Exec, after G2's Link, Neighbours and Nearest",
-	"NearestIsExact":               "waits for task G4, which brings Nearest with a filter, after G2's Nearest",
-	"WalkInSQL":                    "waits for task G4, which brings SQL, after G2's Link",
-	"OneStatementCrossesAllFour":   "waits for task G4, which brings SQL, after G2's Link",
-	"VectorAsQueryArgument":        "waits for task G4, which brings SQL",
-	"PlainSQLFollowsTheRules":      "waits for task G4, which brings SQL, after G2's Link and Neighbours",
-	"UpdateIsAllOrNothing":         "waits for task G4, which brings walk() in SQL, after G2's Link and Nearest",
-	"KilledWritersNeverLeaveAMess": "waits for task G4, which brings Query, after G2's links and F3's check of the end of the log",
-}
+// them on the board, and the others after it. None waits now.
+var later = map[string]string{}
 
 // hcHandle is what *hc.DB and *hc.Tx have in common.
 type hcHandle interface {

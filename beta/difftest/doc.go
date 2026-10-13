@@ -5,7 +5,8 @@
 // engines and compares every answer, allowing distances to differ by
 // conformance.DistanceBound, and field names in case. A sequence that finds
 // a difference is shrunk and saved as JSON, so it replays as a test from
-// then on. Its tests run 0.x against itself, 0.x against the Beta without
-// SQL until task G4, and 0.x against broken copies of itself, which it has
-// to catch. Like the rest of beta/, it builds only on Linux.
+// then on. Its tests run 0.x against itself, 0.x against the Beta with
+// every kind of step, SQL and the crux query among them since task G4, and
+// 0.x against broken copies of itself, which it has to catch. Like the rest
+// of beta/, it builds only on Linux.
 package difftest

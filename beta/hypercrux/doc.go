@@ -17,7 +17,7 @@
 //
 // What works so far, on DB and Tx alike, through the file: Open, Close,
 // Update, Get, Put, Delete and TableOf (task G1), and Scan, Drop, Link,
-// Unlink, Neighbours, Walk and Nearest without a filter (task G2). Export
+// Unlink, Neighbours, Walk and Nearest (tasks G2 and G4). Export
 // and Import on DB write and read 0.x's export format, the one EXPORT.md
 // describes, byte for byte as 0.x does, so a database moves between the
 // two either way (task G6). Check checks the copy in memory, reads the file
@@ -32,8 +32,10 @@
 //
 // Query, QueryRow, Exec and SQL() go through the package's database/sql
 // driver (task G3), which parses each statement and takes its arguments,
-// and hands it on inside a transaction's Update or through the database.
-// SQL().Begin returns an error. Running a statement waits for task G4. The
-// rest, running SQL and Nearest with a filter among them, returns an error
-// that wraps errors.ErrUnsupported and names the task that makes it work.
+// and hands it on inside a transaction's Update or through the database,
+// where the engine runs it (task G4): the Beta's SQL, which beta/SQL.md
+// sets out, with vectors as arguments, and errors that wrap ErrInvalid for
+// a rule a write breaks. Nearest takes a filter in the same SQL. SQL().Begin
+// returns an error. Compact returns an error that wraps
+// errors.ErrUnsupported and names the task that makes it work.
 package hypercrux

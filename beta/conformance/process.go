@@ -6,7 +6,9 @@
 package conformance
 
 import (
+	"bufio"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"os"
 	"os/exec"
@@ -70,7 +72,9 @@ func deletedBy(j, c int) bool {
 // childWriter writes until it is killed. Each transaction touches every
 // handle at once: it puts a record with fields and a vector, links it to the
 // previous record and to an anchor, sometimes deletes an old record (which
-// takes its links away), and moves the counter.
+// takes its links away), and moves the counter. Once it has opened the
+// database and read the counter, it says "ready" on its standard output, so
+// the kill comes while it writes.
 func childWriter(e Engine, file string) int {
 	db, err := e.Open(file)
 	if err != nil {
@@ -83,6 +87,7 @@ func childWriter(e Engine, file string) int {
 		return 1
 	}
 	c := int(f["n"].(int64))
+	fmt.Println("ready")
 	for i := c + 1; ; i++ {
 		err := db.Update(func(tx Handle) error {
 			key := "item:" + strconv.Itoa(i)
@@ -215,6 +220,15 @@ func verifyWriterFile(t *testing.T, e Engine, path string, since int) (counter, 
 // From TestKilledWritersNeverLeaveAMess: a writing process is killed with
 // SIGKILL at random moments, and after every kill keys, rows, links and
 // vectors must agree exactly with the last committed transaction.
+//
+// The kill comes a random 40 to 200 milliseconds after the writer starts,
+// as in 0.x, but never sooner than a tenth of that after the writer says
+// it's ready, having opened the database, so it lands while the writer
+// writes. For an engine that opens a file at once, as 0.x does, that's 0.x's
+// moment. The Beta reads the whole file as it opens, and the file here grows
+// to thousands of commits, so without the wait most writers would die
+// opening it, and with all of the time counted from then, the file would
+// grow so far that the test took minutes (G4).
 func testKilledWritersNeverLeaveAMess(t *testing.T, e Engine) {
 	rounds := 200
 	if testing.Short() {
@@ -235,14 +249,25 @@ func testKilledWritersNeverLeaveAMess(t *testing.T, e Engine) {
 	last, empty := 0, 0
 	for round := 0; round < rounds; round++ {
 		cmd := startChild("writer", path)
+		out, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		started := time.Now()
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(time.Duration(40+r.IntN(160)) * time.Millisecond)
+		life := time.Duration(40+r.IntN(160)) * time.Millisecond
+		if err := waitReady(out, 30*time.Second); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("round %d: the writer %v", round, err)
+		}
+		time.Sleep(max(life-time.Since(started), life/10))
 		if err := cmd.Process.Signal(syscall.SIGKILL); err != nil {
 			t.Fatal(err)
 		}
-		err := cmd.Wait()
+		err = cmd.Wait()
 		if ws, ok := cmd.ProcessState.Sys().(syscall.WaitStatus); !ok || !ws.Signaled() {
 			t.Fatalf("round %d: the writer stopped on its own before the kill: %v", round, err)
 		}
@@ -258,6 +283,30 @@ func testKilledWritersNeverLeaveAMess(t *testing.T, e Engine) {
 	}
 	t.Logf("%d SIGKILLs at random moments in %s: %d transactions committed; after every kill every record, the link count and every link the round could have changed matched the last committed transaction, and at the end every link did (%d records, %d links)",
 		rounds, time.Since(start).Round(time.Millisecond), c, items, links)
+}
+
+// waitReady waits up to limit for a child to say "ready" on out, its
+// standard output.
+func waitReady(out io.Reader, limit time.Duration) error {
+	said := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(out).ReadString('\n')
+		if err == nil && line != "ready\n" {
+			err = fmt.Errorf("said %q where it should say it's ready", line)
+		}
+		said <- err
+	}()
+	timer := time.NewTimer(limit)
+	defer timer.Stop()
+	select {
+	case err := <-said:
+		if err != nil {
+			return fmt.Errorf("never said it was ready: %w", err)
+		}
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("didn't say it was ready in %s", limit)
+	}
 }
 
 // childSharer does n transactions on its own records, linking each to the

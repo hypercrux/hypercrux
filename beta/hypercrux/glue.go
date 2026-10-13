@@ -128,9 +128,9 @@ func open(files fsys.FS, path string, o logfile.Options) (*DB, error) {
 	t.opening = false
 	db.log = l
 	// The database/sql handle that SQL gives, over connections bound to db,
-	// and what runs the statements that parse until task G4 brings SQL.
+	// and the engine that runs the statements that parse (engine.go).
 	db.sql = sql.OpenDB(connector{db: db})
-	db.engine = notYetEngine{}
+	db.engine = sqlEngine{db}
 	return db, nil
 }
 

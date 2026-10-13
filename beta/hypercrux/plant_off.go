@@ -12,3 +12,7 @@ const plant = ""
 // shared is only ever called by a planted bug, which an ordinary build
 // leaves out. Here it copies, as the driver does.
 func shared(s string) []byte { return []byte(s) }
+
+// sharedVector is only ever called by a planted bug too. Here it copies, as
+// a Vector's Value method does.
+func sharedVector(v Vector) string { return string(v.Bytes()) }

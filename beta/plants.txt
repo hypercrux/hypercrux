@@ -209,3 +209,8 @@ hypercrux/check-reload-copy-read ./beta/hypercrux
 hypercrux/export-unchecked ./beta/hypercrux
 hypercrux/vector-bits-shared ./beta/hypercrux
 procs/killed-under-way-ignored ./beta/internal/procs
+hypercrux/moment-kept ./beta/hypercrux
+hypercrux/vector-argument-shared ./beta/hypercrux
+hypercrux/filter-checks-reordered ./beta/hypercrux
+hypercrux/filter-none-nil ./beta/hypercrux
+hypercrux/unlock-error-kept ./beta/hypercrux
