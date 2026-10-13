@@ -25,10 +25,11 @@
 // and Export and Import refuse a database it finds problems in. Each read
 // through a DB follows what other processes commit, and reloads the file
 // when a compaction or a backup moved into place has put another at the
-// path (tasks F6 and F9); Compact, and the compaction a commit sets off,
-// wait for task G5. The helpers that hold no state work as 0.x's do:
-// ParseDirection, ParseVector, DecodeVector, and the methods of Vector,
-// Direction and Link.
+// path (tasks F6 and F9). Compact rewrites the file with only the live
+// data, and a commit that leaves the file twice the size its last
+// compaction left it at is followed by one (task G5). The helpers that hold
+// no state work as 0.x's do: ParseDirection, ParseVector, DecodeVector, and
+// the methods of Vector, Direction and Link.
 //
 // Query, QueryRow, Exec and SQL() go through the package's database/sql
 // driver (task G3), which parses each statement and takes its arguments,
@@ -36,6 +37,7 @@
 // where the engine runs it (task G4): the Beta's SQL, which beta/SQL.md
 // sets out, with vectors as arguments, and errors that wrap ErrInvalid for
 // a rule a write breaks. Nearest takes a filter in the same SQL. SQL().Begin
-// returns an error. Compact returns an error that wraps
-// errors.ErrUnsupported and names the task that makes it work.
+// returns an error.
+//
+// The hypercrux command in beta/cmd/hypercrux goes through this package.
 package hypercrux

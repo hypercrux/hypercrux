@@ -47,6 +47,10 @@ import (
 // checked before it's opened (openPath), a writer that holds the lock checks
 // that its file still has one name (lockFile), and the renames over the path
 // check that its last element hasn't become a symbolic link (stillReal).
+// G5's fix for I1's first finding is in Append: the first commit into a file
+// whose name this Log didn't make last itself syncs the folder first
+// (named), so a commit never relies on a rename that a power cut could take
+// back.
 
 // DefaultWait is how long Lock waits for the write lock, as 0.x does.
 const DefaultWait = 10 * time.Second
@@ -117,6 +121,13 @@ type Options struct {
 	// crash point replays from its seed: every marker's check value covers
 	// the ID, and where a torn sector splits depends on the bytes it holds.
 	ID [16]byte
+
+	// MinGrowth, when it's above 0, is how far the end of the log has to be
+	// past the live data, at least, before Due says a compaction is due, in
+	// place of a megabyte (compact.go). The tests set a small one, so a few
+	// small commits set a compaction off, or a very large one, so a log of
+	// many commits stays as it is.
+	MinGrowth int64
 }
 
 // Log is a database file opened through fsys: what its header says, how
@@ -132,12 +143,13 @@ type Options struct {
 // A Log can be used by many goroutines at once: the write lock keeps them
 // apart.
 type Log struct {
-	fsys fsys.FS
-	path string
-	dir  string // the folder the database is in, which creation syncs
-	t    Target
-	wait time.Duration
-	id   [16]byte // Options.ID
+	fsys   fsys.FS
+	path   string
+	dir    string // the folder the database is in, which creation, compaction and a first commit sync
+	t      Target
+	wait   time.Duration
+	id     [16]byte // Options.ID
+	growth int64    // Options.MinGrowth
 
 	// fol keeps followers apart, so a follower that finds another reading
 	// on waits for it, and reads at least as far. Only Follow takes it, and
@@ -177,6 +189,7 @@ type Log struct {
 
 	locked bool   // the write lock is held, both halves
 	stuck  error  // set when the lock stays held until Close; every Lock and Append returns it
+	named  bool   // this Log made the name at the path last, with a folder sync that worked, since it took f (Append)
 	tidied bool   // leftover .new- files have been looked for
 	owed   bool   // the Target has been reset since the last Loaded, which it's owed (reload.go)
 	closed bool   // Close has been called
@@ -234,7 +247,7 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, mu: make(chan struct{}, 1)}
+	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, growth: o.MinGrowth, mu: make(chan struct{}, 1)}
 	if l.wait <= 0 {
 		l.wait = DefaultWait
 	}
@@ -569,6 +582,18 @@ func (l *Log) Unlock() error {
 // with an error that wraps errs.ErrInvalid, before anything reaches the
 // file.
 //
+// The first commit into a file syncs the database's folder before it writes
+// anything, unless this Log made the file's name at the path last itself,
+// with a rename whose folder sync worked (named). Another handle's
+// compaction may have stuck after its rename, its folder sync failed, and
+// closed since, or its process may have died between the two. Then a power
+// cut could put the old file back at the path, and take with it a commit
+// Append had reported as made (I1's first finding). An empty file made a
+// database leaves the same gap, and so can a backup moved into place. So
+// each Log pays one folder sync for each file it moves to, at its first
+// commit there. When that sync fails, nothing has been written, and the
+// error says so; the next Append tries again.
+//
 // When the batch's write, the sync or the marker's write fails, Append cuts
 // the file back to just after the last marker before it returns (failed),
 // and the error wraps the call's. Once that has worked, the commit is gone
@@ -597,6 +622,12 @@ func (l *Log) Append(changes []format.Change) error {
 	batch, marker := b[:n], b[n:]
 	at := l.end
 
+	if !l.named && plant != "logfile/folder-unsynced-before-commit" {
+		if err := l.fsys.SyncDir(l.dir); err != nil {
+			return fmt.Errorf("hypercrux: %s: syncing the database's folder before the first commit into this file failed, so batch %d wasn't written: %w", l.path, seq, err)
+		}
+		l.named = true
+	}
 	if _, err := l.f.WriteAt(batch, at); err != nil {
 		return l.failed(err, seq)
 	}

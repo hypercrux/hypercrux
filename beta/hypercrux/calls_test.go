@@ -40,8 +40,8 @@ func within(t *testing.T, fn func()) {
 }
 
 // TestCallsThroughTheDatabaseInsideUpdate makes every call through the
-// database inside its own Update. A write, Import among them, Close and a
-// nested Update fail at once with ErrInsideUpdate, before the first change
+// database inside its own Update. A write, Import and Compact among them,
+// Close and a nested Update fail at once with ErrInsideUpdate, before the first change
 // and after it. A read, Export among them, goes ahead before the first
 // change, seeing what was committed, and fails after it, as BETA.md's
 // "Transactions" says. The same reads through the transaction see its
@@ -56,14 +56,15 @@ func TestCallsThroughTheDatabaseInsideUpdate(t *testing.T) {
 	}))
 	writes := func(when string) {
 		for name, err := range map[string]error{
-			"Put":    db.Put("docs:3", hc.Fields{"n": 3}),
-			"Delete": db.Delete("docs:1"),
-			"Drop":   db.Drop("other"),
-			"Link":   db.Link("docs:2", "cites", "docs:1"),
-			"Unlink": db.Unlink("docs:1", "", "docs:2"),
-			"Update": db.Update(func(*hc.Tx) error { return nil }),
-			"Close":  db.Close(),
-			"Import": db.Import(strings.NewReader(emptyExport)),
+			"Put":     db.Put("docs:3", hc.Fields{"n": 3}),
+			"Delete":  db.Delete("docs:1"),
+			"Drop":    db.Drop("other"),
+			"Link":    db.Link("docs:2", "cites", "docs:1"),
+			"Unlink":  db.Unlink("docs:1", "", "docs:2"),
+			"Update":  db.Update(func(*hc.Tx) error { return nil }),
+			"Close":   db.Close(),
+			"Import":  db.Import(strings.NewReader(emptyExport)),
+			"Compact": db.Compact(),
 		} {
 			if !errors.Is(err, hc.ErrInsideUpdate) {
 				t.Errorf("%s: db.%s gave %v", when, name, err)
@@ -261,6 +262,7 @@ func TestCallsAfterTheEnd(t *testing.T) {
 	for _, d := range []*hc.DB{db, new(hc.DB)} {
 		all := calls(d)
 		all["Update"] = d.Update(func(*hc.Tx) error { return nil })
+		all["Compact"] = d.Compact()
 		all["Check"] = errOf(d.Check())
 		var out bytes.Buffer
 		all["Export"] = d.Export(&out)
@@ -278,6 +280,9 @@ func TestCallsAfterTheEnd(t *testing.T) {
 	}
 	if db.Path() != path {
 		t.Errorf("a closed database's path is %q", db.Path())
+	}
+	if p := new(hc.DB).Path(); p != "" {
+		t.Errorf("a DB that was never opened has the path %q", p)
 	}
 }
 

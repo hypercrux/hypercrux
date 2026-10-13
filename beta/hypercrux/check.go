@@ -38,6 +38,14 @@ type Report struct {
 	// between garbage collections, and GOMEMLIMIT, set a little above this,
 	// keeps it near.
 	MemoryBytes int64
+	// CompactionError is what went wrong in the last compaction made
+	// through this DB, by Compact or after a commit, or "" when it worked or
+	// none has run. A compaction that fails leaves the database whole, so
+	// it isn't one of the problems, and OK doesn't count it. When it failed
+	// before its new file took the path, the database carries on in its old
+	// file, and when the folder's sync failed after that, every write
+	// through this DB fails with ErrStuck until it's closed.
+	CompactionError string
 }
 
 // OK reports whether Check found no problems.
@@ -134,6 +142,7 @@ func (db *DB) Check() (Report, error) {
 		return Report{}, err
 	}
 	rep.FileBytes = size
+	rep.CompactionError = db.compactionError()
 	if partial && plant != "hypercrux/check-reload-copy-read" {
 		return rep, nil
 	}

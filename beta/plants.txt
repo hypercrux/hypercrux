@@ -214,3 +214,13 @@ hypercrux/vector-argument-shared ./beta/hypercrux
 hypercrux/filter-checks-reordered ./beta/hypercrux
 hypercrux/filter-none-nil ./beta/hypercrux
 hypercrux/unlock-error-kept ./beta/hypercrux
+logfile/folder-unsynced-before-commit ./beta/internal/logfile
+logfile/named-kept-on-another-file ./beta/internal/logfile
+hypercrux/compaction-error-returned ./beta/hypercrux
+hypercrux/compaction-error-dropped ./beta/hypercrux
+hypercrux/no-compaction-after-commit ./beta/hypercrux
+hypercrux/compact-stale-snapshot ./beta/hypercrux
+cmd/failure-exits-zero ./beta/cmd/hypercrux ./beta/conformance/cmdtest
+cmd/two-statements-taken ./beta/cmd/hypercrux ./beta/conformance/cmdtest
+cmd/failed-put-leaves-file ./beta/cmd/hypercrux ./beta/conformance/cmdtest
+cmd/compact-skipped ./beta/cmd/hypercrux

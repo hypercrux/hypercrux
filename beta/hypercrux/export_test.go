@@ -6,8 +6,10 @@
 package hypercrux
 
 import (
+	"iter"
 	"time"
 
+	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 	"github.com/hypercrux/hypercrux/beta/internal/logfile"
 	"github.com/hypercrux/hypercrux/beta/internal/query"
@@ -71,4 +73,13 @@ func ReadTheCopy(db *DB, fn func(r store.Reader) error) error {
 		return err
 	}
 	return s.Read(fn)
+}
+
+// UseSnapshot has every compaction write what f gives of a read of the copy,
+// in place of the store's own snapshot, until the func it returns puts that
+// back. The tests that use it run one at a time.
+func UseSnapshot(f func(r store.Reader) iter.Seq[format.Change]) (restore func()) {
+	old := snapshotOf
+	snapshotOf = f
+	return func() { snapshotOf = old }
 }

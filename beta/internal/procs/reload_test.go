@@ -38,7 +38,7 @@ import (
 //   - Writers commit through the real log, as realWrite does, on a slow disk,
 //     with a copy in the store, as the public package keeps one, and after
 //     about one commit in 16 they compact the database under the same lock,
-//     as G5 will once Due says so.
+//     as the public package's Update does once Due says so (G5).
 //   - Readers open the database once and follow it until they're killed.
 //     Half of them, by their numbers, follow through the log itself, calling
 //     Follow, and Reload when Follow asks for it, with the store as their
@@ -107,8 +107,8 @@ func openCopy(files fsys.FS, path string, o logfile.Options) (*copyOf, error) {
 
 // commit is the public package's Update in small: the write lock, the copy's
 // transaction running fn, Commit with the log's Append, and when compact is
-// true, a compaction under the same lock from a read of the copy, as G5's
-// will be after a commit; then the lock goes. It returns the commit's error,
+// true, a compaction under the same lock from a read of the copy, as the
+// public package's is after a commit (G5); then the lock goes. It returns the commit's error,
 // and the compaction's.
 func (d *copyOf) commit(fn func(tx *store.Tx) error, compact bool) (err, cerr error) {
 	if err := d.l.Lock(); err != nil {

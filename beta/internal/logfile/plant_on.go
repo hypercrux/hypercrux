@@ -182,6 +182,18 @@ import (
 //   - logfile/dangling-link-retried: a symbolic link to nothing at the path
 //     is taken for a database another creator has just put there, so Open
 //     makes a new file and fails to rename it into place again and again.
+//
+// G5's, in the folder's sync before the first commit into a file:
+//
+//   - logfile/folder-unsynced-before-commit: Append never syncs the folder
+//     before its first commit into a file it didn't make, so after a
+//     compaction whose folder sync failed, and whose stuck handle has
+//     closed, a commit goes into a file whose name a power cut can still
+//     take back, and the commit with it.
+//   - logfile/named-kept-on-another-file: a Log that made its file's name
+//     last itself takes the file it moves to for one whose name is on the
+//     drive too, so after another handle's compaction it commits into the
+//     new file without syncing the folder first.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -196,7 +208,8 @@ var plant = func() string {
 		"logfile/compact-locked-removed", "logfile/compact-leftover-before-inode-check",
 		"logfile/reload-without-collecting", "logfile/reload-waits-for-the-mutex", "logfile/reload-unchecked",
 		"logfile/path-as-given", "logfile/hard-link-let-through", "logfile/second-name-unseen", "logfile/any-kind-of-file",
-		"logfile/fifo-opened-first", "logfile/links-unchecked", "logfile/dangling-link-retried":
+		"logfile/fifo-opened-first", "logfile/links-unchecked", "logfile/dangling-link-retried",
+		"logfile/folder-unsynced-before-commit", "logfile/named-kept-on-another-file":
 		return p
 	}
 	return ""

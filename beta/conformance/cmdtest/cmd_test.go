@@ -8,6 +8,7 @@ package cmdtest
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,31 +16,63 @@ import (
 	"testing"
 )
 
-// bin is the hypercrux binary under test.
+// binary is a hypercrux binary the tests run.
+type binary struct {
+	name string // "0.x" or "Beta", or "" for the one HYPERCRUX_BIN names
+	path string
+}
+
+// binaries are the binaries under test: the one HYPERCRUX_BIN names, or,
+// when it's unset, 0.x's command and the Beta's, built for the test.
+var binaries []binary
+
+// bin is the binary the tests are running at the moment. The tests run one
+// binary at a time, never in parallel, so a package variable serves.
 var bin string
 
 func TestMain(m *testing.M) {
-	bin = os.Getenv("HYPERCRUX_BIN")
-	cleanup := func() {}
-	if bin == "" {
-		dir, err := os.MkdirTemp("", "hypercrux-cmdtest")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		cleanup = func() { os.RemoveAll(dir) }
-		bin = filepath.Join(dir, "hypercrux")
-		build := exec.Command("go", "build", "-o", bin, "github.com/hypercrux/hypercrux/cmd/hypercrux")
+	if b := os.Getenv("HYPERCRUX_BIN"); b != "" {
+		binaries = []binary{{path: b}}
+		os.Exit(m.Run())
+	}
+	dir, err := os.MkdirTemp("", "hypercrux-cmdtest")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	for _, b := range []struct{ name, file, pkg, tags string }{
+		{"0.x", "hypercrux-0x", "github.com/hypercrux/hypercrux/cmd/hypercrux", ""},
+		{"Beta", "hypercrux-beta", "github.com/hypercrux/hypercrux/beta/cmd/hypercrux", betaTags},
+	} {
+		path := filepath.Join(dir, b.file)
+		build := exec.Command("go", "build", "-tags="+b.tags, "-o", path, b.pkg)
 		build.Stdout, build.Stderr = os.Stderr, os.Stderr
 		if err := build.Run(); err != nil {
-			fmt.Fprintln(os.Stderr, "building 0.x's command:", err)
-			cleanup()
+			fmt.Fprintf(os.Stderr, "building %s's command: %v\n", b.name, err)
+			os.RemoveAll(dir)
 			os.Exit(1)
 		}
+		binaries = append(binaries, binary{name: b.name, path: path})
 	}
 	code := m.Run()
-	cleanup()
+	os.RemoveAll(dir)
 	os.Exit(code)
+}
+
+// eachBinary runs fn on each binary under test: as a subtest named for the
+// binary when there are two, or as t itself for the one HYPERCRUX_BIN names.
+func eachBinary(t *testing.T, fn func(t *testing.T, b binary)) {
+	for _, b := range binaries {
+		if b.name == "" {
+			bin = b.path
+			fn(t, b)
+			continue
+		}
+		t.Run(b.name, func(t *testing.T) {
+			bin = b.path
+			fn(t, b)
+		})
+	}
 }
 
 // hc runs the binary and returns its exit code and output.
@@ -90,14 +123,19 @@ var sections = []struct {
 // TestCommands is 0.x's TestEveryCommand in sections, run in order on one
 // file. Sections leave the file as later ones expect, so any of them can be
 // skipped without breaking the rest.
+//
+// It runs on each binary under test. 0.x's runs every section, and the
+// Beta's leaves out the sections beta/SQL.md's named tests leave out, each
+// for the reason the table gives (namedTests). Either leaves out the
+// sections HYPERCRUX_CMD_SKIP names too, as does the binary HYPERCRUX_BIN
+// names, which runs alone.
 func TestCommands(t *testing.T) {
-	skip := map[string]bool{}
+	skip := map[string]string{}
 	for _, s := range strings.Split(os.Getenv("HYPERCRUX_CMD_SKIP"), ",") {
 		if s = strings.TrimSpace(s); s != "" {
-			skip[s] = true
+			skip[s] = "skipped by HYPERCRUX_CMD_SKIP"
 		}
 	}
-	f := filepath.Join(t.TempDir(), "notes.db")
 	known := map[string]bool{}
 	for _, s := range sections {
 		known[s.name] = true
@@ -107,15 +145,58 @@ func TestCommands(t *testing.T) {
 			t.Errorf("HYPERCRUX_CMD_SKIP names %q, which isn't a section", name)
 		}
 	}
-	t.Logf("binary: %s", bin)
-	for _, s := range sections {
-		t.Run(s.name, func(t *testing.T) {
-			if skip[s.name] {
-				t.Skip("skipped by HYPERCRUX_CMD_SKIP")
-			}
-			s.fn(t, f)
-		})
+	leftOut := map[string]string{}
+	for name, verdict := range namedTests(t)["command"] {
+		if why, out := strings.CutPrefix(verdict, "left out: "); out {
+			leftOut[name] = "beta/SQL.md leaves it out for the Beta: " + why
+		}
 	}
+	eachBinary(t, func(t *testing.T, b binary) {
+		left := maps.Clone(skip)
+		if b.name == "Beta" {
+			for name, why := range leftOut {
+				left[name] = why
+			}
+		}
+		f := filepath.Join(t.TempDir(), "notes.db")
+		t.Logf("binary: %s", bin)
+		for _, s := range sections {
+			t.Run(s.name, func(t *testing.T) {
+				if why, ok := left[s.name]; ok {
+					t.Skip(why)
+				}
+				s.fn(t, f)
+			})
+		}
+	})
+}
+
+// TestDrop is the drop verb's own test, on each binary. AdoptAndDrop is the
+// one section that runs drop, and the Beta leaves it out, since it makes its
+// table with plain SQL and adopts it (P5.md). Here a table made with put,
+// with links to and from another table, goes with its records and their
+// links, both ways. Dropping it again fails, and a table of the same name
+// starts afresh, with a vector size of its own.
+func TestDrop(t *testing.T) {
+	eachBinary(t, func(t *testing.T, b binary) {
+		f := filepath.Join(t.TempDir(), "notes.db")
+		expect(t, 0, "docs:1", "put", f, "docs:1", `{"title": "Q3 plan"}`)
+		expect(t, 0, "notes:1", "put", f, "notes:1", `{"body": "hello"}`)
+		expect(t, 0, "notes:2", "put", f, "notes:2", `{"body": "again", "vec": [1, 0]}`)
+		expect(t, 0, "notes:1 -about-> docs:1", "link", f, "notes:1", "about", "docs:1")
+		expect(t, 0, "docs:1 -cites-> notes:2", "link", f, "docs:1", "cites", "notes:2")
+		expect(t, 0, "dropped notes, with its records and their links", "drop", f, "notes")
+		if out := expect(t, 0, "", "neighbours", f, "docs:1", "--both"); out != "" {
+			t.Errorf("after the drop, docs:1 has the links\n%s", out)
+		}
+		expect(t, 1, "not found: notes:1", "get", f, "notes:1")
+		expect(t, 1, "no record table notes", "drop", f, "notes")
+		expect(t, 0, "ok: 1 table, 1 record, 0 links, 0 vectors", "check", f)
+		expect(t, 0, "notes:3", "put", f, "notes:3", `{"vec": [1, 2, 3]}`)
+		expect(t, 0, "ok: 2 tables, 2 records, 0 links, 1 vector", "check", f)
+		expect(t, 2, "expected FILE TABLE", "drop", f)
+		expect(t, 1, "no such file", "drop", filepath.Join(t.TempDir(), "typo.db"), "notes")
+	})
 }
 
 func versionAndHelp(t *testing.T, f string) {

@@ -8,6 +8,7 @@ package hypercrux_test
 import (
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	hc "github.com/hypercrux/hypercrux/beta/hypercrux"
 	"github.com/hypercrux/hypercrux/beta/internal/crash"
 	"github.com/hypercrux/hypercrux/beta/internal/fault"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 	"github.com/hypercrux/hypercrux/beta/internal/logfile"
 )
@@ -30,8 +32,9 @@ import (
 // first (hc.ReadState), and runs Check. A state holds every table with its
 // vector size and its fields in order, every record with every value's bits,
 // and every link, so two copies with the same state agree on all four
-// handles. A compaction goes through a DB's own log and copy, as Compact will
-// once task G5 makes it work (hc.CompactThroughTheDB).
+// handles. A compaction goes through Compact, or comes after a commit, in
+// Update, when the workload opens the database with a small MinGrowth, so
+// that a few small commits make one due.
 //
 // The tests here run one after another, and after the package's other tests,
 // so a planted bug that an earlier test catches stops a run with -failfast
@@ -118,16 +121,22 @@ func workloadCommit(db *hc.DB, m *crash.Model, i int) error {
 	return err
 }
 
-// workloadOpen opens the database through sys, and opens it a second time
-// when carry is set and the first open fails, since a failure in Open's
-// check of the end of the log leaves the end for the next check.
-func workloadOpen(sys fsys.FS, carry bool) (*hc.DB, error) {
-	db, err := hc.OpenWith(sys, workloadPath, workloadOptions)
+// workloadOpen opens the database through sys, with the log's options o,
+// and opens it a second time when carry is set and the first open fails,
+// since a failure in Open's check of the end of the log leaves the end for
+// the next check.
+func workloadOpen(sys fsys.FS, o logfile.Options, carry bool) (*hc.DB, error) {
+	db, err := hc.OpenWith(sys, workloadPath, o)
 	if err != nil && carry {
-		db, err = hc.OpenWith(sys, workloadPath, workloadOptions)
+		db, err = hc.OpenWith(sys, workloadPath, o)
 	}
 	return db, err
 }
+
+// workloadGrowth is the MinGrowth of the workload whose commits set off
+// compactions by themselves: with it, commits 3 and 6 are each followed by
+// a compaction, with -short too.
+const workloadGrowth = 1000
 
 // workloadReopen opens the database through sys as a process started after
 // a crash would, and returns the state the DB reads, once Check has found
@@ -152,26 +161,26 @@ func workloadReopen(sys fsys.FS) (string, error) {
 	return state, nil
 }
 
-// crashWorkload makes commits commits through one DB on a new database. With
-// compact above 0, a compaction follows commit compact: through the same DB
-// when other is false, and when it's true, through another DB on the same
-// file, opened for it, so the first DB's next Update finds another file at
-// the path and reads it. With carry, it carries on after a commit or a
-// compaction that fails, as a program carries on after an Update that
-// returned an error; without it, it stops at the first error, as a crash
-// would stop it.
+// crashWorkload makes commits commits through one DB on a new database,
+// opened with the log's options o. With compact above 0, Compact follows
+// commit compact: through the same DB when other is false, and when it's
+// true, through another DB on the same file, opened for it, so the first
+// DB's next Update finds another file at the path and reads it. With
+// o.MinGrowth set small, Update compacts by itself whenever a commit leaves
+// a compaction due. With carry, it carries on after a commit or a compaction
+// that fails, as a program carries on after an Update that returned an
+// error; without it, it stops at the first error, as a crash would stop it.
 //
-// The other DB is closed once it has compacted, unless the folder's sync
-// after the rename failed and left it stuck. Then it stays open until the end
-// of the run, keeping the write lock, as BETA.md has a stuck handle do, and
-// the first DB's Updates time out waiting for it. Closed, it would let the
-// first DB commit into a file whose name may not have reached the drive, and
-// a power cut could lose those commits (TestACommitAfterAStuckCompactionLasts).
-func crashWorkload(commits, compact int, other, carry bool) crash.Workload {
+// The other DB is closed once it has compacted, even when the folder's sync
+// after the rename failed and left it stuck. Then the first DB commits into
+// a file whose name may not have reached the drive, and it syncs the folder
+// before its first commit there, so a power cut can't lose the commit
+// (TestACommitAfterAStuckCompactionLasts).
+func crashWorkload(commits, compact int, other bool, o logfile.Options, carry bool) crash.Workload {
 	return crash.Workload{
 		Path: workloadPath,
 		Run: func(sys fsys.FS, m *crash.Model) error {
-			db, err := workloadOpen(sys, carry)
+			db, err := workloadOpen(sys, o, carry)
 			if err != nil {
 				return err
 			}
@@ -185,19 +194,15 @@ func crashWorkload(commits, compact int, other, carry bool) crash.Workload {
 				}
 				by := db
 				if other {
-					if by, err = workloadOpen(sys, carry); err != nil {
+					if by, err = workloadOpen(sys, o, carry); err != nil {
 						if !carry {
 							return err
 						}
 						continue
 					}
 				}
-				err := hc.CompactThroughTheDB(by)
-				switch {
-				case !other:
-				case errors.Is(err, hc.ErrStuck):
-					defer by.Close()
-				default:
+				err := by.Compact()
+				if other {
 					by.Close()
 				}
 				if err != nil && !carry {
@@ -210,9 +215,10 @@ func crashWorkload(commits, compact int, other, carry bool) crash.Workload {
 	}
 }
 
-// crashWorkloads are the workloads the driver runs: commits through one DB on a
-// new database, a compaction by that DB midway, and a compaction by another
-// DB midway, after which the first carries on in the new file.
+// crashWorkloads are the workloads the driver runs: commits through one DB
+// on a new database, Compact by that DB midway, Compact by another DB
+// midway, after which the first carries on in the new file, and commits that
+// set off compactions by themselves.
 func crashWorkloads(carry bool) []struct {
 	name string
 	w    crash.Workload
@@ -221,13 +227,16 @@ func crashWorkloads(carry bool) []struct {
 	if testing.Short() {
 		commits = 6
 	}
+	growing := workloadOptions
+	growing.MinGrowth = workloadGrowth
 	return []struct {
 		name string
 		w    crash.Workload
 	}{
-		{"a new database", crashWorkload(commits, 0, false, carry)},
-		{"a compaction by the same DB", crashWorkload(commits, commits/2, false, carry)},
-		{"a compaction by another DB", crashWorkload(commits, commits/2, true, carry)},
+		{"a new database", crashWorkload(commits, 0, false, workloadOptions, carry)},
+		{"a compaction by the same DB", crashWorkload(commits, commits/2, false, workloadOptions, carry)},
+		{"a compaction by another DB", crashWorkload(commits, commits/2, true, workloadOptions, carry)},
+		{"compactions after commits", crashWorkload(commits, 0, false, growing, carry)},
 	}
 }
 
@@ -326,14 +335,12 @@ func TestCopiesThroughThePackage(t *testing.T) {
 // TestACommitAfterAStuckCompactionLasts: a DB compacts the database, and the
 // folder's sync after the rename fails, which leaves it stuck. Once it's
 // closed, another DB commits into the compacted file, and Update returns nil,
-// so the commit has to survive a power cut. It doesn't always: the rename
-// that put the compacted file at the path never reached the drive, and a cut
-// can put the old file back, without the commit. In a trial with the skip
-// taken out, 19 seeds of 40 lost it. The log needs a folder sync before the
-// first commit into a file whose name a stuck compaction left unsynced
-// (I1.md, "Notes for later tasks").
+// so the commit has to survive a power cut. The rename that put the
+// compacted file at the path may never have reached the drive, and a cut
+// could put the old file back, without the commit: I1 found 19 seeds of 40
+// losing it. Since G5 the log syncs the folder before its first commit into
+// a file whose name it didn't make last itself, so none does.
 func TestACommitAfterAStuckCompactionLasts(t *testing.T) {
-	t.Skip("waits for the log to sync the folder before the first commit into a file that a stuck compaction renamed into place (I1.md)")
 	lost := 0
 	for seed := range uint64(40) {
 		d := fault.New(seed)
@@ -355,7 +362,7 @@ func TestACommitAfterAStuckCompactionLasts(t *testing.T) {
 			t.Fatal(err)
 		}
 		d.Add(fault.Rule{Op: fault.SyncDir, N: 1})
-		if err := hc.CompactThroughTheDB(other); !errors.Is(err, hc.ErrStuck) {
+		if err := other.Compact(); !errors.Is(err, hc.ErrStuck) {
 			t.Fatalf("seed %d: the compaction gave %v, where the failed folder sync leaves the DB stuck", seed, err)
 		}
 		d.Clear()
@@ -381,5 +388,31 @@ func TestACommitAfterAStuckCompactionLasts(t *testing.T) {
 	}
 	if lost > 0 {
 		t.Errorf("in %d seeds of 40, a power cut lost a commit that Update said had succeeded", lost)
+	}
+}
+
+// TestTheWorkloadsCompact: run once with nothing done to it, each workload
+// leaves a file of the generation its name promises: 1 for a new database,
+// 2 after Compact by either DB, and 3 after the commits that set off
+// compactions by themselves. So the points of the suites above fall in
+// compactions of both kinds.
+func TestTheWorkloadsCompact(t *testing.T) {
+	want := map[string]uint64{"a new database": 1, "a compaction by the same DB": 2, "a compaction by another DB": 2, "compactions after commits": 3}
+	for _, c := range crashWorkloads(false) {
+		d := fault.New(0)
+		ok(t, d.Mkdir(path.Dir(workloadPath)))
+		sys := d.FS()
+		ok(t, c.w.Run(sys, nil))
+		f, err := sys.Open(workloadPath)
+		ok(t, err)
+		head := make([]byte, format.HeaderSize)
+		_, err = f.ReadAt(head, 0)
+		ok(t, err)
+		f.Close()
+		h, err := format.DecodeHeader(head, 1<<30)
+		ok(t, err)
+		if h.Gen != want[c.name] {
+			t.Errorf("%s: the workload leaves a file of generation %d, where %d is wanted", c.name, h.Gen, want[c.name])
+		}
 	}
 }

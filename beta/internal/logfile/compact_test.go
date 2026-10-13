@@ -30,7 +30,7 @@ import (
 
 // Compaction's cases one by one (F8), with the real store as the Target,
 // joined to the log as the public package joins them (G1), and compacting
-// as G5 will: after a commit, holding the lock, from a read of the copy.
+// as it does (G5): after a commit, holding the lock, from a read of the copy.
 
 // copyTarget is the public package's target in small, as glue is in
 // order_test.go: while Open reads the file, each batch goes straight into
@@ -107,7 +107,7 @@ func (d *db) commit(fn func(tx *store.Tx) error) (err error) {
 }
 
 // compactLocked compacts holding the write lock, from a read of the copy,
-// as the public package will once a commit's Due says so (G5).
+// as the public package does once a commit's Due says so (G5).
 func (d *db) compactLocked() error {
 	return d.c.s.Read(func(r store.Reader) error { return d.l.Compact(r.Snapshot()) })
 }

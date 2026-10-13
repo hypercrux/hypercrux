@@ -80,14 +80,6 @@ var (
 // wraps ErrDamaged may carry one, and errors.As finds it.
 type Damage = errs.Damage
 
-// notYet is a stub's error, returned until the task it names makes the call
-// work. It wraps errors.ErrUnsupported, so errors.Is tells a stub from a
-// failure, and it wraps neither of 0.x's two errors, so the differential
-// harness counts it as a plain error.
-func notYet(what, task string) error {
-	return fmt.Errorf("hypercrux: %s is an %w in the Beta until task %s", what, errors.ErrUnsupported, task)
-}
-
 // DB is an open HyperCrux database. It's safe for use by many goroutines,
 // and many processes on one machine can open the same file at once. Each
 // process holds the whole database in memory and keeps up with what the
@@ -129,6 +121,10 @@ type DB struct {
 	// first is the first moment read, kept for every later statement only
 	// by a planted bug.
 	first atomic.Pointer[time.Time]
+	// failed is the error of the last compaction through db, by Compact or
+	// after a commit, or nil when it worked or none has run, which Check
+	// reports (compact.go).
+	failed atomic.Pointer[error]
 }
 
 // Open opens the database at path, creating it if it doesn't exist, and
@@ -228,10 +224,10 @@ func (t *Tx) open() (*store.Tx, error) {
 // every key, field, link and vector it changed changes together.
 //
 // Update takes the write lock first. It waits up to 10 seconds for it, as
-// 0.x does, or longer while a compaction runs, and then fails with an error
-// that wraps ErrLockTimeout. Until fn's first change, other goroutines in
-// this process read as usual. From then until the commit they wait, while
-// other processes read throughout.
+// 0.x does, or, while a compaction runs, until 10 seconds after it ends, and
+// then fails with an error that wraps ErrLockTimeout. Until fn's first
+// change, other goroutines in this process read as usual. From then until
+// the commit they wait, while other processes read throughout.
 //
 // Inside fn, make every call through tx. A call through db would have to
 // wait for fn if it's a write, or a read after fn's first change, so such a
@@ -252,6 +248,16 @@ func (t *Tx) open() (*store.Tx, error) {
 // even when letting go of the write lock fails after it, so a caller never
 // makes a commit twice. A lock that stays held that way goes at this DB's
 // next Update, or at Close.
+//
+// A commit that leaves the file twice the size its last compaction left it
+// at, and a megabyte past that at least, is followed by a compaction, as
+// Compact makes one, before Update lets go of the write lock, so writers
+// wait for it too. The commit has succeeded whatever the compaction does, so
+// Update returns nil all the same. A compaction that fails before its new
+// file takes the path leaves the database whole in its old file, and the
+// next comes once the file has grown as much again. One whose folder sync
+// fails after the rename makes every later write through db fail with
+// ErrStuck. Check reports what went wrong, in Report.CompactionError.
 func (db *DB) Update(fn func(tx *Tx) error) (err error) {
 	s, err := db.current()
 	if err != nil {
@@ -299,7 +305,24 @@ func (db *DB) Update(fn func(tx *Tx) error) (err error) {
 	// so readers here see the changes only once they're in the file. When
 	// Append fails, Commit takes them back with the undo list. A transaction
 	// with no changes writes nothing.
-	return stx.Commit(db.write)
+	wrote := false
+	if err := stx.Commit(func(changes []format.Change) error {
+		err := db.write(changes)
+		wrote = err == nil
+		return err
+	}); err != nil {
+		return err
+	}
+	// The commit is in the file and in the copy, and the copy's transaction
+	// has ended. Still holding the write lock, so the old file never
+	// changes again, the compaction after a commit, when one is due. Its
+	// error isn't the Update's (compact.go).
+	if wrote && plant != "hypercrux/no-compaction-after-commit" {
+		if err := db.compactAfter(); err != nil && plant == "hypercrux/compaction-error-returned" {
+			return err
+		}
+	}
+	return nil
 }
 
 // write writes a commit's changes to the file, as Commit's write: the
@@ -311,10 +334,3 @@ func (db *DB) write(changes []format.Change) error {
 	}
 	return err
 }
-
-// Compact rewrites the file with only the live data, which also takes
-// deleted data off the disk, as VACUUM does in 0.x. The database compacts
-// itself at the end of a commit once the file holds about twice as much as
-// its live data, and Compact does it at once. Writers wait while it runs,
-// in this process and in others, and other processes then reload the file.
-func (db *DB) Compact() error { return notYet("DB.Compact", "G5") }

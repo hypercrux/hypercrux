@@ -7,7 +7,11 @@ package hypercrux
 
 import (
 	"os"
+	"slices"
 	"unsafe"
+
+	"github.com/hypercrux/hypercrux/beta/internal/format"
+	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
 // A build with the hypercrux_planted tag can switch on one of this
@@ -128,6 +132,20 @@ import (
 //   - hypercrux/unlock-error-kept: when only letting go of flock fails after
 //     a commit, Update returns an error, though the commit is in the file,
 //     so a caller makes it again.
+//
+// G5's, in Compact and the compaction after a commit:
+//
+//   - hypercrux/compaction-error-returned: when the compaction after a
+//     commit fails, Update returns its error, though the commit is in the
+//     file, so a caller makes it again.
+//   - hypercrux/compaction-error-dropped: a compaction's error isn't kept,
+//     so Check never shows that one failed.
+//   - hypercrux/no-compaction-after-commit: Update never compacts, so a file
+//     written over again and again grows without end.
+//   - hypercrux/compact-stale-snapshot: Compact takes its snapshot from the
+//     copy as it is, before the write lock reads on to the end of the log,
+//     so the compacted file leaves out what other processes committed since
+//     this one last read the file.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -141,11 +159,37 @@ var plant = func() string {
 		"hypercrux/check-file-skipped", "hypercrux/check-marker-at-the-batch", "hypercrux/check-follow-damage-dropped",
 		"hypercrux/check-reload-copy-read", "hypercrux/export-unchecked", "hypercrux/vector-bits-shared",
 		"hypercrux/moment-kept", "hypercrux/vector-argument-shared", "hypercrux/filter-checks-reordered",
-		"hypercrux/filter-none-nil", "hypercrux/unlock-error-kept":
+		"hypercrux/filter-none-nil", "hypercrux/unlock-error-kept",
+		"hypercrux/compaction-error-returned", "hypercrux/compaction-error-dropped", "hypercrux/no-compaction-after-commit",
+		"hypercrux/compact-stale-snapshot":
 		return p
 	}
 	return ""
 }()
+
+// compactStale is hypercrux/compact-stale-snapshot's Compact: the snapshot
+// comes from the copy s as it is, before Lock reads on to the end of the
+// log, and goes into the compacted file once the lock is held.
+func (db *DB) compactStale(s *store.Store) error {
+	var changes []format.Change
+	err := s.Read(func(r store.Reader) error {
+		for c := range r.Snapshot() {
+			c.Names, c.Fields = slices.Clone(c.Names), slices.Clone(c.Fields)
+			changes = append(changes, c)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := db.log.Lock(); err != nil {
+		return err
+	}
+	defer db.log.Unlock()
+	err = db.log.Compact(slices.Values(changes))
+	db.keep(err)
+	return err
+}
 
 // shared returns the bytes of s without copying them, for
 // hypercrux/blob-shared, and an empty slice for empty s, as []byte(s) does.

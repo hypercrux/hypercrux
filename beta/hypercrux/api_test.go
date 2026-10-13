@@ -47,8 +47,9 @@ var added = []string{
 // addedFields are the fields the Beta's structs have beyond 0.x's, written
 // as Type.Field, in the order they come. They come after 0.x's fields, each
 // with a comment, and TestTheAPIMatches0x compares the rest of the struct
-// with 0.x's. Report's two give the sizes Check reports (G7).
-var addedFields = []string{"Report.FileBytes", "Report.MemoryBytes"}
+// with 0.x's. Report's first two give the sizes Check reports (G7), and the
+// third the last compaction's error (G5).
+var addedFields = []string{"Report.FileBytes", "Report.MemoryBytes", "Report.CompactionError"}
 
 // decl is one exported name as TestTheAPIMatches0x compares it.
 type decl struct {

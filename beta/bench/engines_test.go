@@ -63,7 +63,7 @@ type tx interface {
 }
 
 // compacter is a db that can rewrite its file with only the live data: the
-// Beta's, once Compact works (task G5).
+// Beta's, with Compact (task G5).
 type compacter interface {
 	compact() error
 }

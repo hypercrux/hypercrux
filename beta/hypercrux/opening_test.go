@@ -8,6 +8,7 @@ package hypercrux_test
 import (
 	"errors"
 	"io/fs"
+	"math"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -16,23 +17,23 @@ import (
 	"testing"
 
 	hc "github.com/hypercrux/hypercrux/beta/hypercrux"
-	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
 	"github.com/hypercrux/hypercrux/beta/internal/logfile"
-	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
 // Opening 100,000 records with 384-value vectors (I1), against BETA.md's
-// target of 250 ms for a compacted file. beta/bench's Open_100k_384dims
-// times the same open from the log of the 20 commits that built the file,
-// until Compact works (G5), and its tests hold it to 0.1's benchmarks one for
-// one, so the compacted file is timed here, beside the log.
+// target of 250 ms for a compacted file, from the log of the 20 commits that
+// built the file and from that log compacted. beta/bench's
+// Open_100k_384dims times the compacted file too, since G5, and its tests
+// hold it to 0.1's benchmarks one for one, so the log is timed here beside
+// it, as I1 timed it.
 //
-// The file is the one beta/bench builds: docs:0 to docs:99999, each with grp,
+// The file holds what beta/bench builds: docs:0 to docs:99999, each with grp,
 // from 0 to 9, and a vector of 384 values drawn from the same seed, 5,000
-// records a commit. The compacted file is that log compacted as Compact will
-// compact it (G5): a copy read from the file, and its snapshot written into
-// NAME.compact, which takes the path.
+// records a commit. The public package compacts a file each time it doubles
+// past a megabyte (G5), so the log is built with a MinGrowth no file reaches,
+// to keep its 20 commits. The compacted file is a copy of the log, compacted
+// by Compact.
 //
 // With HYPERCRUX_OPEN_DIR set, the files are built there once and kept, so a
 // run with -cpuprofile times the opens alone.
@@ -106,10 +107,11 @@ func exists(tb testing.TB, path string) bool {
 }
 
 // buildOpeningLog makes the database at path as beta/bench's vectorTable
-// makes it: n records with grp and a vector of 384 values, 5,000 a commit.
+// makes it: n records with grp and a vector of 384 values, 5,000 a commit,
+// with no compaction after a commit, so the file is the log of its commits.
 func buildOpeningLog(tb testing.TB, path string, n int) {
 	tb.Helper()
-	db, err := hc.Open(path)
+	db, err := hc.OpenWith(fsys.OS{}, path, logfile.Options{MinGrowth: math.MaxInt64})
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -134,18 +136,8 @@ func buildOpeningLog(tb testing.TB, path string, n int) {
 	}
 }
 
-// openingCopy is a logfile.Target that puts every batch straight into a copy
-// of its own, which nothing else reads.
-type openingCopy struct{ s *store.Store }
-
-func (c *openingCopy) Apply(seq uint64, changes []format.Change) error {
-	return c.s.LoadBatch(seq, changes)
-}
-
-func (c *openingCopy) Reset() { c.s = store.New() }
-
 // compactCopy copies the database at from to to, beside it under another
-// name first, compacts the copy (compactAt), and moves it into place.
+// name first, compacts the copy with Compact, and moves it into place.
 func compactCopy(tb testing.TB, from, to string) {
 	tb.Helper()
 	b, err := os.ReadFile(from)
@@ -156,28 +148,17 @@ func compactCopy(tb testing.TB, from, to string) {
 	if err := os.WriteFile(part, b, 0o644); err != nil {
 		tb.Fatal(err)
 	}
-	compactAt(tb, part)
-	if err := os.Rename(part, to); err != nil {
-		tb.Fatal(err)
-	}
-}
-
-// compactAt compacts the database at path as Compact will (G5): it opens the
-// file with a copy of its own, takes the write lock, and writes the copy's
-// snapshot into NAME.compact, which takes the path.
-func compactAt(tb testing.TB, path string) {
-	tb.Helper()
-	c := &openingCopy{s: store.New()}
-	l, err := logfile.Open(fsys.OS{}, path, c, logfile.Options{})
+	db, err := hc.Open(part)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	defer l.Close()
-	if err := l.Lock(); err != nil {
+	if err := db.Compact(); err != nil {
 		tb.Fatal(err)
 	}
-	defer l.Unlock()
-	if err := c.s.Read(func(r store.Reader) error { return l.Compact(r.Snapshot()) }); err != nil {
+	if err := db.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	if err := os.Rename(part, to); err != nil {
 		tb.Fatal(err)
 	}
 }

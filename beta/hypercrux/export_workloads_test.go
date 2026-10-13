@@ -54,18 +54,3 @@ func ReadState(db *DB) (string, error) {
 	err := db.read(func(r store.Reader) error { state = StateOf(r); return nil })
 	return state, err
 }
-
-// CompactThroughTheDB compacts the database through db, as Compact will once
-// task G5 makes it work: the write lock, the compaction from a read of the
-// copy, and the lock let go. The copy holds the state already, so db reads
-// nothing afresh, and its log moves to the new file.
-func CompactThroughTheDB(db *DB) error {
-	if err := db.log.Lock(); err != nil {
-		return err
-	}
-	err := db.mem.Load().Read(func(r store.Reader) error { return db.log.Compact(r.Snapshot()) })
-	if e := db.log.Unlock(); err == nil {
-		err = e
-	}
-	return err
-}

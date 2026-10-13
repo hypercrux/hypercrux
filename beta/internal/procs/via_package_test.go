@@ -15,22 +15,20 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	hc "github.com/hypercrux/hypercrux/beta/hypercrux"
-	"github.com/hypercrux/hypercrux/beta/internal/errs"
-	"github.com/hypercrux/hypercrux/beta/internal/fsys"
-	"github.com/hypercrux/hypercrux/beta/internal/logfile"
-	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
 // The public package under the harness (I1). Writers and readers open the
 // database with hypercrux.Open and go through nothing else: a writer commits
-// with Update, a reader reads with Scan, Get, Neighbours and Check, and the
-// run's Final, Backup and Restore hold the write lock through an Update of
-// their own. Only a compaction goes through the log, as Compact will in task
-// G5, since Compact is a stub until then.
+// with Update and compacts with Compact, a reader reads with Scan, Get,
+// Neighbours and Check, and the run's Final, Backup and Restore hold the
+// write lock through an Update of their own. Update compacts by itself too,
+// once a commit leaves the file twice the size its last compaction left it
+// at and a megabyte past that (G5), which the long kill test's file reaches.
 //
 // Each commit touches every handle at once, as 0.x's KilledWritersNeverLeaveAMess
 // has its writer do. Commit n, its place in the log, which the writer works
@@ -280,8 +278,9 @@ func checkCounts(db *hc.DB) error {
 // harness of itself once the writer holds the write lock and has read the
 // counter, before it makes any change, and taking a moment over its changes,
 // as an Update that computes something would, so that kills land in the
-// middle of Updates. With compact, about one commit in 16 is followed by a
-// compaction, through the log.
+// middle of Updates. With compact, about one commit in 16 is followed by
+// Compact. A Compact that leaves the DB stuck ends the writer, as a stuck
+// commit does, and the process's end lets go of the lock.
 func packageWrite(w *Writer, compact bool) error {
 	db, err := hc.Open(w.Path())
 	if err != nil {
@@ -296,6 +295,7 @@ func packageWrite(w *Writer, compact bool) error {
 		text := fmt.Sprintf("writer %d's commit %d: %s", w.ID(), i, letters)
 		pause := time.Duration(w.Rand().IntN(1000)) * time.Microsecond
 		begun := false
+		before := inodeAt(w.Path())
 		err := db.Update(func(tx *hc.Tx) error {
 			n, err := counter(tx)
 			if err != nil {
@@ -314,9 +314,14 @@ func packageWrite(w *Writer, compact bool) error {
 		case !errors.Is(err, hc.ErrLockTimeout):
 			return err
 		}
+		// With one writer and no backups, as in the kill test, another file
+		// at the path after a commit is the compaction the commit set off.
+		if !compact && err == nil && before != 0 && inodeAt(w.Path()) != before {
+			w.Count(commitCompacted)
+		}
 		if compact && err == nil && w.Rand().IntN(compactEvery) == 0 {
-			switch err := compactThroughTheLog(w.Path()); {
-			case errors.Is(err, errs.ErrStuck):
+			switch err := db.Compact(); {
+			case errors.Is(err, hc.ErrStuck):
 				return err
 			case err != nil:
 				w.Count(compactionFailed)
@@ -328,25 +333,22 @@ func packageWrite(w *Writer, compact bool) error {
 	}
 }
 
-// compactThroughTheLog compacts the database at path as Compact will once
-// task G5 makes it work: a handle of its own takes the write lock, reads on to
-// the end of the log, and writes its copy's snapshot into NAME.compact, which
-// takes the path. Every DB on the file, in this process and others, reads the
-// new file at its next call.
-func compactThroughTheLog(path string) error {
-	d, err := openCopy(fsys.OS{}, path, logfile.Options{})
+// commitCompacted is what a writer of the workload that doesn't call
+// Compact counts when a commit of its own was followed by a compaction.
+const commitCompacted = "commit followed by a compaction"
+
+// inodeAt is the inode number of the file at path, or 0 when it can't be
+// read.
+func inodeAt(path string) uint64 {
+	info, err := os.Stat(path)
 	if err != nil {
-		return err
+		return 0
 	}
-	defer d.l.Close()
-	if err := d.l.Lock(); err != nil {
-		return err
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0
 	}
-	err = d.g.s.Read(func(r store.Reader) error { return d.l.Compact(r.Snapshot()) })
-	if e := d.l.Unlock(); err == nil {
-		err = e
-	}
-	return err
+	return st.Ino
 }
 
 // packageRead is a reader's work: the database opened once with
@@ -538,9 +540,9 @@ func TestKilledWritersThroughThePackage(t *testing.T) {
 // two readers that open the database once with hypercrux.Open and read it
 // until they're killed, each killed with SIGKILL at a random moment and a new
 // one started in its place, for 2 seconds, or half a second with -short.
-// Writers compact the database after about one commit in 16, and a writer's
-// slot stays empty for up to 50 milliseconds after its writer is killed, so a
-// reader can be the first to find what it left. Meanwhile the run takes a
+// Writers compact the database with Compact after about one commit in 16,
+// and a writer's slot stays empty for up to 50 milliseconds after its writer
+// is killed, so a reader can be the first to find what it left. Meanwhile the run takes a
 // backup at random moments, 50 to 250 milliseconds apart, and moves it into
 // place as long again after. Every reader sees every commit once and in
 // order, in each era of the log, through the compactions and the backups,

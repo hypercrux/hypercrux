@@ -42,18 +42,16 @@ func (l *loadInto) Apply(seq uint64, changes []format.Change) error {
 
 func (l *loadInto) Reset() { l.s = store.New() }
 
-// compactFile compacts the database at path, as Compact in another process
-// would (G5): it opens the file with a copy of its own, takes the write lock,
-// and writes the copy's snapshot into NAME.compact, which takes the path.
+// compactFile compacts the database at path through a DB of its own, as
+// Compact in another process does: the DB reads the file, takes the write
+// lock, and writes its copy's snapshot into NAME.compact, which takes the
+// path.
 func compactFile(t *testing.T, path string) {
 	t.Helper()
-	c := &loadInto{s: store.New()}
-	l, err := logfile.Open(fsys.OS{}, path, c, logfile.Options{})
+	db, err := hc.Open(path)
 	ok(t, err)
-	defer l.Close()
-	ok(t, l.Lock())
-	defer l.Unlock()
-	ok(t, c.s.Read(func(r store.Reader) error { return l.Compact(r.Snapshot()) }))
+	defer db.Close()
+	ok(t, db.Compact())
 }
 
 // backUp copies the database at path beside it and moves the copy into

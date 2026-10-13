@@ -20,8 +20,14 @@ import (
 // marked batch to the Target. It returns the file's size as fstat gave it
 // before the read, where the read stops. An empty file holds no database
 // yet, and load notes that and reads nothing more.
+//
+// The file is one this Log didn't make, so its first commit syncs the folder
+// first (named, in Append).
 func (l *Log) load() (int64, error) {
 	l.empty, l.hdr, l.seq, l.end, l.retry = false, format.Header{}, 0, 0, 0
+	if plant != "logfile/named-kept-on-another-file" {
+		l.named = false
+	}
 	st, err := l.f.Stat()
 	if err != nil {
 		return 0, err

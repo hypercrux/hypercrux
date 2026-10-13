@@ -59,7 +59,12 @@ import (
 // failed folder sync after the rename can leave either file at the path after
 // a power cut, so the Log moves over to the new file and keeps its lock until
 // Close, as it does when a failed commit can't be cut back (stuck). Either
-// way the commit before the compaction has succeeded.
+// way the commit before the compaction has succeeded. Once the stuck Log has
+// closed, or when a compaction's process died between its rename and the
+// folder's sync, another writer can lock the new file while its name may
+// still not be on the drive. So every Log syncs the folder before its first
+// commit into a file whose name it didn't make last itself (named, in
+// Append), and a commit never relies on a rename a power cut could take back.
 //
 // A crash before the rename leaves a NAME.compact behind. The next holder of
 // the write lock removes it, once it has checked that the file it locked is
@@ -95,8 +100,8 @@ func (l *Log) compactName() string { return l.path + ".compact" }
 // compaction wrote, which is the file up to the end of its compacted part, or
 // the header alone in generation 1. A compaction is due once the end of the
 // log is at least twice as far into the file as that, and at least a
-// megabyte past it. Every process reads the same from the file, so every
-// process agrees.
+// megabyte past it, or Options.MinGrowth when that's set. Every process
+// reads the same from the file, so every process agrees.
 //
 // Of what commits add, the log can't tell what's live, so a database that
 // only grows is compacted each time it doubles too, which rewrites its data
@@ -111,8 +116,11 @@ func (l *Log) Due() bool {
 	if !l.locked || l.stuck != nil || l.empty {
 		return false
 	}
-	base := l.liveBase()
-	return l.end >= 2*base && l.end-base >= minDead && l.end >= l.retry
+	base, growth := l.liveBase(), int64(minDead)
+	if l.growth > 0 {
+		growth = l.growth
+	}
+	return l.end >= 2*base && l.end-base >= growth && l.end >= l.retry
 }
 
 // liveBase is the live data as the log last knew it: the end of the file's
@@ -214,6 +222,7 @@ func (l *Log) Compact(snapshot iter.Seq[format.Change]) error {
 		l.stuck = fmt.Errorf("%w: %s: the folder's sync failed once the compacted file had taken the database's path: %w", errs.ErrStuck, l.path, synced)
 		return l.stuck
 	}
+	l.named = true // so the next commit needs no folder sync of its own (Append)
 	return nil
 }
 
@@ -447,7 +456,7 @@ func (l *Log) dropCompact(c *compaction, err error, what string) error {
 // Log, Close. The Target holds the compacted state already.
 func (l *Log) switchTo(c *compaction) {
 	old := l.f
-	l.f, l.file, l.empty = c.f, c.info, false
+	l.f, l.file, l.empty, l.named = c.f, c.info, false, false
 	l.hdr, l.head = c.hdr, c.head
 	l.seq, l.end, l.last = c.seq, c.end, c.last
 	l.retry = 0

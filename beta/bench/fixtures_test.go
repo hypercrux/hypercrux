@@ -6,8 +6,6 @@
 package bench
 
 import (
-	"errors"
-	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -40,17 +38,14 @@ var (
 // built is a fixture's file.
 type built struct {
 	path string
-	// note is what the results should say about the file, or "": that the
-	// Beta's file is a log of the commits that built it, until Compact
-	// works.
-	note string
 }
 
 // fixture returns the file build makes on engine e, building it the first
-// time it's asked for. On the Beta the file is then compacted once Compact
-// works (tasks F8 and G5), since BETA.md's target for opening is for a
-// compacted file. Until then it's a log of the commits that built it, and
-// the fixture's note says so.
+// time it's asked for. On the Beta the file is then compacted with Compact,
+// since BETA.md's target for opening is for a compacted file. The commits
+// that build it set off compactions of their own too, each time the file
+// doubles past a megabyte (task G5), so Compact rewrites the data once more,
+// and the file holds the live data alone, in batches of about a megabyte.
 func fixture(b *testing.B, e engine, name string, build func(d db) error) built {
 	b.Helper()
 	fixtureOnce.Do(func() {
@@ -70,16 +65,12 @@ func fixture(b *testing.B, e engine, name string, build func(d db) error) built 
 	if err != nil {
 		b.Fatal(err)
 	}
-	c := &counting{db: d}
-	if err := build(c); err != nil {
+	if err := build(d); err != nil {
 		d.close()
 		b.Fatalf("building %s on %s: %v", name, e.name, err)
 	}
 	if cd, ok := d.(compacter); ok {
-		switch err := cd.compact(); {
-		case errors.Is(err, errors.ErrUnsupported):
-			f.note = fmt.Sprintf("the file is a log of the %s that built it, until compaction (tasks F8 and G5)", count(c.commits, "commit"))
-		case err != nil:
+		if err := cd.compact(); err != nil {
 			d.close()
 			b.Fatalf("compacting %s on %s: %v", name, e.name, err)
 		}
@@ -89,27 +80,6 @@ func fixture(b *testing.B, e engine, name string, build func(d db) error) built 
 	}
 	fixtures[e.name+"/"+name] = f
 	return f
-}
-
-// counting counts the commits made through it.
-type counting struct {
-	db
-	commits int
-}
-
-func (c *counting) update(fn func(t tx) error) error {
-	c.commits++
-	return c.db.update(fn)
-}
-
-func (c *counting) put(key string, f map[string]any) error {
-	c.commits++
-	return c.db.put(key, f)
-}
-
-func (c *counting) link(from, typ, to string) error {
-	c.commits++
-	return c.db.link(from, typ, to)
 }
 
 // size is how many records a fixture of n records holds: n, or a hundredth

@@ -213,16 +213,12 @@ func BenchmarkLink(b *testing.B) {
 //
 // Closing the database comes between iterations, outside the time, and on
 // the Beta so does handing its copy back to the system, so each open starts
-// with fresh memory, as a new process does. Until compaction (tasks F8 and
-// G5), the Beta's file is a log of the 20 commits that built it, and the
-// benchmark logs a line saying so, which the results give beside its time.
+// with fresh memory, as a new process does. The Beta's file is compacted, as
+// BETA.md's target has it (fixture).
 func BenchmarkOpen_100k_384dims(b *testing.B) {
 	both(b, func(b *testing.B, e engine) {
 		n := size(100000)
 		f := fixture(b, e, fmt.Sprintf("vec-%d-384", n), vectorTable(e, n, 384))
-		if f.note != "" {
-			b.Log(f.note)
-		}
 		if e.inMemory {
 			debug.FreeOSMemory()
 		}

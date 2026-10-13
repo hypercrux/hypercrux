@@ -72,6 +72,7 @@ func (l *Log) create() error {
 		return err
 	}
 	l.use(n)
+	l.named = true // the folder's sync above made the name last
 	return nil
 }
 
@@ -136,6 +137,7 @@ func (l *Log) adopt(info fsys.Info) error {
 		l.stuck = fmt.Errorf("%w: %s: the folder's sync failed once an empty file had become a database: %w", errs.ErrStuck, l.path, err)
 		return l.stuck
 	}
+	l.named = true
 	return nil
 }
 
@@ -215,11 +217,13 @@ func (l *Log) newFile(perm fs.FileMode, uid, gid int) (*fresh, error) {
 }
 
 // use makes n the database file in l: a header, and a log with nothing in
-// it yet.
+// it yet. Its name counts as made last once the caller's folder sync has
+// worked (named).
 func (l *Log) use(n *fresh) {
 	l.f = n.f
 	l.file = n.info
 	l.empty = false
+	l.named = false
 	l.hdr = n.hdr
 	copy(l.head[:], n.head)
 	l.seq = 0
