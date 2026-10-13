@@ -505,8 +505,8 @@ func packageRestore(from, path string) ([]string, error) {
 // every commit a writer saw succeed, and each commit under way at a kill is
 // there whole, with its records, its vector, its links and its delete, or not
 // at all, and so is every commit the reader saw, at every read. 0.x's
-// KilledWritersNeverLeaveAMess, which the conformance suite holds, needs
-// Query, so it waits for task G4.
+// KilledWritersNeverLeaveAMess, which the conformance suite holds, runs on
+// the Beta too since task G4 brought Query.
 func TestKilledWritersThroughThePackage(t *testing.T) {
 	kills, took := 200, 10*time.Second
 	if testing.Short() {

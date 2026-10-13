@@ -33,25 +33,23 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   on two engines and compares every answer and then the whole database. A
   sequence they disagree on is shrunk and saved in `difftest/testdata`,
   where it replays as a test. It runs 0.x against itself, 0.x against the
-  Beta without SQL until G4, and copies of 0.x with one thing each done
-  wrong, which it has to catch.
+  Beta with every kind of step, the crux query among them, and copies of
+  0.x with one thing each done wrong, which it has to catch.
 - `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
   reading, checking and writing the log.
 - `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
   0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
-  `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` without a filter
-  and `TableOf` work through the file, and so do `Export` and `Import`, in
-  0.x's export format, byte for byte as 0.x writes it. `Check` checks the
-  copy in memory and reads the file again for damage, and gives the file's
-  size and the copy's, and Export and Import refuse a database it finds
-  problems in. `Query`, `QueryRow`, `Exec` and `SQL()` go through the Beta's
-  database/sql driver, which parses each statement and takes its arguments,
-  and `SQL().Begin` returns an error; running SQL waits for G4. Each read
-  through a `DB` follows what other processes commit, and reloads the file
-  after a compaction or a backup moved into place. The helpers that hold no
-  state work already, and the rest are stubs that name the task that makes
-  them work. Its tests drive the crash-point driver through it, on the fault
-  layer, and time opening a compacted file.
+  `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` and `TableOf`
+  work through the file, and so do `Export` and `Import`, in 0.x's export
+  format, byte for byte as 0.x writes it. `Check` checks the copy in memory
+  and reads the file again for damage, and gives the file's size and the
+  copy's, and Export and Import refuse a database it finds problems in.
+  `Query`, `QueryRow`, `Exec`, `SQL()` and `Nearest` with a filter run the
+  Beta's SQL through its database/sql driver, and `SQL().Begin` returns an
+  error. Each read through a `DB` follows what other processes commit, and
+  reloads the file after a compaction or a backup moved into place. `Compact`
+  is the one stub left, for G5. Its tests drive the crash-point driver
+  through it, on the fault layer, and time opening a compacted file.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/crash/`: the crash-point driver. It runs a workload of commits
@@ -146,7 +144,7 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   expressions and 600 date cases. They run on a small fixed database that
   any engine can build. The answers are recorded through 0.x with
   `HYPERCRUX_CORPUS_RECORD=1 go test -run TestRecord ./beta/sqlcorpus`,
-  and replayed by the package's tests.
+  and replayed by the package's tests, on 0.x and on the Beta.
 
 [tasks/P3.md](tasks/P3.md) maps the packages still to come, and which
 task works in each.

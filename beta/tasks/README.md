@@ -77,9 +77,9 @@ work in, and all 133 hours are done after R4.
 | 37 | Q5 Planner | 5 | done, [Q5.md](Q5.md) |
 | 38 | Q6 SQL writes | 2 | done, [Q6.md](Q6.md), with G7 and I1 |
 | 39 | G3 The database/sql driver | 2 | done, [G3.md](G3.md) |
-| 40 | G4 Slice 3: SQL | 2 | next, [G4.md](G4.md) |
+| 40 | G4 Slice 3: SQL | 2 | done, [G4.md](G4.md), alone |
 | 41 | G6 Import and export in the Beta | 2 | done, [G6.md](G6.md) |
-| 42 | G5 The command and `Compact` | 3 | |
+| 42 | G5 The command and `Compact` | 3 | next, [G5.md](G5.md) |
 | 43 | G7 `check` | 2 | done, [G7.md](G7.md) |
 | 44 | I1 Integration | 3 | done, [I1.md](I1.md) |
 | 45 | R1 Long runs | 3 | |

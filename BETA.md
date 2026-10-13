@@ -238,7 +238,10 @@ no process can write until it closes the database. Either way the undo list
 puts the copy back. A power cut can still land between a failed sync and the
 cut, but then no caller is left to see the error. So an error from a commit
 means the commit isn't in the file, unless the handle is stuck, when its
-outcome is unknown.
+outcome is unknown. Once its commit is in the file, `Update` returns nil,
+even when letting go of the lock fails after it, so a caller never makes a
+commit twice. The lock then goes at the handle's next commit, or when it
+closes.
 
 Each sync of a growing file also commits its new size, which can cost more
 than overwriting space that's already there. Task F7 measured it on a cloud

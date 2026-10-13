@@ -450,6 +450,18 @@ vector. 0.x runs the filter inside a SELECT, so its errors are of kind
 incomplete input, as in 0.x, which puts it in parentheses at the end of a
 query.
 
+`Nearest` makes 0.x's checks first, in 0.x's order: the table's name, the
+query vector and k, then the table, which must exist, then its vector size,
+where a table with none gives no hits before anything else is looked at,
+`args` and `where` included, and then the query's size against the table's.
+Then each of `args` becomes a value as a statement's argument does, and one
+that database/sql can't take is refused in database/sql's words, as in 0.x,
+with a filter or without one. Without one, `args` aren't used. With one,
+they fill its `?` marks, exactly one for each, and an argument with a name
+is an error. When the filter's terms that use no field rule every record
+out, the search gives an empty list, as 0.x's query gives no rows. 'now' is
+read once for each call.
+
 ## Walks
 
 `walk(start, depth [, type [, direction]])` follows links from the record
@@ -1070,8 +1082,8 @@ On purpose, and outside the corpus:
   in small things as well as whole features: backquoted and bracketed
   names, text in single quotes as a name or an alias, hex numbers, digit
   separators, numbered and named parameters, and `TRUE` and `FALSE`.
-- More arguments than `?` marks is an error, where 0.x ignores the extra
-  ones.
+- More arguments than `?` marks is an error, in a statement and in
+  `Nearest`'s filter alike, where 0.x ignores the extra ones.
 - A semicolon followed by a comment is fine. 0.x then gives no rows and no
   columns, since go-sqlite3 runs the comment as a second statement.
 - Text after the semicolon is an error, where 0.x runs each statement and
@@ -1091,8 +1103,15 @@ On purpose, and outside the corpus:
   0.x gives "error" there, since that one message lacks the "hypercrux: "
   prefix its error wrapping looks for.
 - An error's kind follows the statement. 0.x wraps errors in `Exec` only, so
-  a write it runs through `Query` reports a broken rule as "error", where the
-  Beta reports "invalid".
+  a write it runs through `Query` reports a broken rule as "error", where
+  the Beta reports "invalid". And a SELECT it runs through `Exec` reports a
+  refusal of `distance()`, `vector()` or `walk()` as "invalid", where the
+  Beta reports "error".
+- `Exec` of a SELECT works out all its rows, so it gives the error any row
+  raises, and gives `RowsAffected` 0. 0.x's works them out only as far as
+  SQLite's first step, which is the first row unless the query sorts, since
+  go-sqlite3 steps a statement once in `Exec`, and its `RowsAffected` is the
+  count of the last write on its connection.
 - 'now' is read once for each statement. 0.x reads it again for each row it
   returns, which only shows when a query's rows fall either side of a
   second.
@@ -1108,8 +1127,8 @@ On purpose, and outside the corpus:
   arguments, of kind error, found before anything runs. 0.x finds it as
   `walk()` runs, so in a write it's invalid there, and a statement that
   never reaches the call gives no error.
-- An argument with a name, from `sql.Named`, is an error. 0.x leaves the
-  mark it falls on NULL.
+- An argument with a name, from `sql.Named`, is an error, in a statement and
+  in `Nearest`'s filter. 0.x leaves the mark it falls on NULL.
 - A one-record subquery in an UPDATE's SET that no record reaches until the
   UPDATE has changed a record reads that record as it was before the
   statement. 0.x reads the change, so `UPDATE docs SET n = coalesce(n * 2,
