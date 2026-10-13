@@ -1194,9 +1194,13 @@ The SQL in these tests is inside the subset. The tests that need care:
   text that starts with docs:", and puts a record with `{"phone": null}`
   before setting `phone` through SQL, so that `Put` must add a field even
   when its value is nil.
-- The Beta's run of the command's tests sets
-  `HYPERCRUX_CMD_SKIP=SQLTriggers,AdoptAndDrop`. AdoptAndDrop also runs the
-  `drop` command, which no other section covers.
+- `TestCommands` runs the suite on 0.x's command and on the Beta's, both
+  built for the test, unless `HYPERCRUX_BIN` names a binary. The Beta's run
+  leaves out the sections this table leaves out, read from the table. With
+  `HYPERCRUX_BIN` naming the Beta's binary, set
+  `HYPERCRUX_CMD_SKIP=SQLTriggers,AdoptAndDrop`. AdoptAndDrop is the one
+  section that runs the `drop` command, so `TestDrop`, beside the suite,
+  runs it on both binaries, with a table made by `put`.
 
 The tests A1.md lists as left in 0.x, such as TestAdopt and TestStrictTables,
 aren't in either suite, and the Beta doesn't run them. The SQL corpus comes

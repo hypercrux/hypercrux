@@ -433,7 +433,9 @@ One process writes at a time. A writer:
    come from HyperCrux, since nothing before a marker ever changes: the file
    was copied over or damaged, and the writer reports damage;
 2. checks the end of the log, as above;
-3. appends its batch, syncs the file, and appends the marker.
+3. appends its batch, having synced the folder first when this is its first
+   commit into a file whose name it didn't make last itself, syncs the file,
+   and appends the marker.
 
 If appending, syncing or writing the marker fails, the writer cuts the file
 back to just after the last marker before it lets go of the lock. It writes

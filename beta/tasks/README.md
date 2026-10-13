@@ -79,12 +79,12 @@ work in, and all 133 hours are done after R4.
 | 39 | G3 The database/sql driver | 2 | done, [G3.md](G3.md) |
 | 40 | G4 Slice 3: SQL | 2 | done, [G4.md](G4.md), alone |
 | 41 | G6 Import and export in the Beta | 2 | done, [G6.md](G6.md) |
-| 42 | G5 The command and `Compact` | 3 | next, [G5.md](G5.md) |
+| 42 | G5 The command and `Compact` | 3 | done, [G5.md](G5.md), alone |
 | 43 | G7 `check` | 2 | done, [G7.md](G7.md) |
 | 44 | I1 Integration | 3 | done, [I1.md](I1.md) |
-| 45 | R1 Long runs | 3 | |
-| 46 | R2 Independent review | 5 | |
-| 47 | R3 Docs and site | 3 | |
+| 45 | R1 Long runs | 3 | next, [R1.md](R1.md) |
+| 46 | R2 Independent review | 5 | next, [R2.md](R2.md) |
+| 47 | R3 Docs and site | 3 | next, [R3.md](R3.md) |
 | 48 | R4 Release run | 2 | |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | later, [V2.md](V2.md), at the owner's call |
 

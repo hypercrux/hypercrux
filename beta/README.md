@@ -16,6 +16,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   both. What the Beta can't run yet is skipped, naming its task.
   `sh scripts/record-beta-bench.sh` writes `test/results/beta-bench.txt`,
   with the middle run on each engine beside the Beta's targets.
+- `cmd/hypercrux/`: the Beta's `hypercrux` command, with 0.x's verbs apart
+  from `adopt`, and 0.x's output, messages and exit codes, plus `compact`.
+  Each run opens the database afresh, reading the whole file. Its own tests
+  cover what 0.x's command hasn't got.
 - `conformance/`: 0.x's tests that don't depend on SQLite, written against a
   small `Engine` interface so the same tests run on 0.x and on the Beta.
 - `conformance/zerox/`: the adapter for 0.x. Its test runs the whole suite on
@@ -26,9 +30,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   that wait for later tasks. They also move databases from 0.x to the Beta
   and back through an export, byte for byte.
 - `conformance/cmdtest/`: 0.x's tests of the `hypercrux` command, run from
-  outside against the binary `HYPERCRUX_BIN` names, or against 0.x's command,
-  built for the test, when it's unset. `HYPERCRUX_CMD_SKIP` lists sections to
-  leave out, separated by commas.
+  outside against the binary `HYPERCRUX_BIN` names, or, when it's unset,
+  against 0.x's command and the Beta's, both built for the test, the Beta's
+  without the sections SQL.md leaves out. `HYPERCRUX_CMD_SKIP` lists sections
+  to leave out, separated by commas. `TestDrop` runs the `drop` verb on both.
 - `difftest/`: the differential harness. It runs random sequences of steps
   on two engines and compares every answer and then the whole database. A
   sequence they disagree on is shrunk and saved in `difftest/testdata`,
@@ -48,7 +53,9 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   Beta's SQL through its database/sql driver, and `SQL().Begin` returns an
   error. Each read through a `DB` follows what other processes commit, and
   reloads the file after a compaction or a backup moved into place. `Compact`
-  is the one stub left, for G5. Its tests drive the crash-point driver
+  rewrites the file with only the live data, a commit that leaves the file
+  twice the size its last compaction left it at is followed by a compaction,
+  and `Check` reports one that failed. Its tests drive the crash-point driver
   through it, on the fault layer, and time opening a compacted file.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
@@ -91,7 +98,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   path reads it from its start with `Reload`, once its old copy has gone and
   a garbage collection has run. It opens a database by its real path, and
   refuses a file with more than one hard link, and anything at the path
-  that isn't a regular file, before anything opens it.
+  that isn't a regular file, before anything opens it. Its first commit
+  into a file whose name it didn't make last itself syncs the folder first.
 - `internal/procs/`: the many-process harness. It runs writer and reader
   processes on one database, copies of the test binary, kills them with
   SIGKILL at random moments and starts new ones in their place. Then it
@@ -164,6 +172,7 @@ sh scripts/planted.sh        # switches on each planted bug, which the tests mus
 HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds
 HYPERCRUX_PROCS_TIME=10m go test ./beta/internal/procs   # many processes for 10 minutes a run
 sh scripts/record-beta-bench.sh   # both engines' benchmarks; needs the machine to itself
+go build -o hypercrux ./beta/cmd/hypercrux   # the Beta's command
 ```
 
 ## CI
@@ -192,10 +201,16 @@ task that plants a bug.
   and a few things 0.x lets through are refused.
 - **The Go API:** `Adopt`, `ApplicationID` and `DriverName` are gone, since
   they mean nothing without SQLite, and `Compact` is new. The Beta's own
-  errors are exported beside 0.x's two.
+  errors are exported beside 0.x's two. `Report` gains `FileBytes`,
+  `MemoryBytes` and `CompactionError` after 0.x's fields.
 - **Rules:** a link type that starts with a zero byte, and a put that would
   take a table past 1,999 fields, give `ErrInvalid`. 0.x refuses both too,
   with a plain error.
+- **The command:** `adopt` has gone and `compact` is new. `version` names no
+  SQLite, `check` gives the sizes on a line of their own and prints damage
+  that stops the database opening as a problem, `init` makes a database of an
+  empty file and refuses any other file that isn't one, and `sql` takes the
+  Beta's SQL. G5.md lists each, with its reason.
 - **The file:** a database file with more than one hard link is refused
   with `ErrInvalid`, and so is a symbolic link that leads to nothing. 0.x
   opens the first, and makes a database where the second leads. A hard link

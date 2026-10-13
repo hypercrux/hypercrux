@@ -27,7 +27,7 @@ type binary struct {
 var binaries []binary
 
 // bin is the binary the tests are running at the moment. The tests run one
-// binary at a time, never in parallel, so a package variable serves.
+// binary at a time, one after the other, so a package variable serves.
 var bin string
 
 func TestMain(m *testing.M) {

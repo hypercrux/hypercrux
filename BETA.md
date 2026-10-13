@@ -378,7 +378,10 @@ on with the old file, which is still whole. The commit that set off the
 compaction has already succeeded either way. If the directory sync after the
 rename fails, nobody can tell which file a power cut would leave at the
 path, so the writer keeps the write lock in the same way and no process can
-write until it closes the database.
+write until it closes the database. Each writer syncs the folder once before
+its first commit into a file whose name it didn't make last itself, so a
+commit never relies on a rename that a power cut could take back, whoever
+made the rename and however its folder sync went.
 
 A crash before the rename leaves the old file whole, plus a leftover
 `NAME.compact`. The next holder of the write lock removes it once it has
