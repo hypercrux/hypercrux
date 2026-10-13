@@ -175,7 +175,8 @@ HYPERCRUX_DIFF_SEQUENCES=50000 go test -run TestZeroxAgainstItself ./beta/diffte
 sh scripts/check-beta.sh     # the rules for this folder, and the board against BETA.md
 sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
 sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
-HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds
+HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds, or a test's own if it asks for more
+sh scripts/long.sh crash 1280   # a long run's job, as the long workflow runs it (tasks/R1.md)
 HYPERCRUX_PROCS_TIME=10m go test ./beta/internal/procs   # many processes for 10 minutes a run
 sh scripts/record-beta-bench.sh   # both engines' benchmarks; needs the machine to itself
 go build -o hypercrux ./beta/cmd/hypercrux   # the Beta's command
@@ -183,7 +184,8 @@ go build -o hypercrux ./beta/cmd/hypercrux   # the Beta's command
 
 ## CI
 
-Two workflows run on every push to main and every pull request.
+Two workflows run on every push to main and every pull request, and a third
+runs by hand.
 
 - `test` runs 0.x's tests and the Beta's on ubuntu and macOS, with the race
   detector on Linux. On macOS the Beta's packages are empty. Releases of
@@ -194,11 +196,18 @@ Two workflows run on every push to main and every pull request.
   - `arm64`: the Beta's tests on ARM Linux, with the race detector.
   - `fuzz`: every fuzz target for 30 seconds. An input that fails is kept
     as an artifact, to add to the package's `testdata/fuzz`.
-  - `planted`: `scripts/planted.sh`, with every bug in `plants.txt`.
+  - `planted`: `scripts/planted.sh` in five shards side by side, each with
+    every fifth bug in `plants.txt`.
+- `long` runs only when started by hand: six jobs on amd64 and six on
+  arm64, side by side, with hours of fuzzing, the crash suites with many
+  seeds, the many-process harness, the differential harness and every
+  planted bug. [tasks/R1.md](tasks/R1.md) says how to start a run and read
+  it.
 
-Each job takes a few minutes; the fuzz job grows by 30 seconds with each
-new target. [tasks/P1.md](tasks/P1.md) has the reasons, and the steps for a
-task that plants a bug.
+Each push job takes a few minutes; the fuzz job grows by 30 seconds with
+each new target. A long run takes about three and a half hours.
+[tasks/P1.md](tasks/P1.md) has the reasons for the push jobs, and the steps
+for a task that plants a bug.
 
 ## Where the Beta differs from 0.x
 
