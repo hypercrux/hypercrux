@@ -653,11 +653,11 @@ How the work is run:
 ### The owner's part
 
 - The go-ahead, given on 7 October 2026.
-- After each round of tasks, the word to carry on. A round is two or three
-  tasks at once, each with an agent of its own, and the work stops after
-  each round, so the owner sees every step and controls what it costs. The
-  note at each stop also says so if the file tasks are running past one and
-  a half times their hours, or if the first working version misses a speed
+- After each round of tasks, the word to carry on. A round is one task or a
+  few at once, each with an agent of its own, and the work stops after each
+  round, so the owner sees every step and controls what it costs. The note
+  at each stop also says so if the file tasks are running past one and a
+  half times their hours, or if the first working version misses a speed
   target by more than double.
 
 Everything else is automatic, releases included. When the tests pass on main
@@ -694,7 +694,9 @@ working version's tasks first, which doesn't delay the finish, and runs the
 five early tasks alongside the spec. The owner chose at first to approve
 each task before the next one started, and later the same day approved more
 agents, so the work runs in rounds of two or three tasks at once, in the
-order on the task board, with the calendar set by the approvals.
+order on the task board, with the calendar set by the approvals. On 13
+October 2026 the owner chose one task a round for the rest, with the review,
+R2, in two parts, so each round stays short.
 
 HyperCrux is developed in working sessions by Claude, an AI coding agent
 made by Anthropic. The project's owner gives the go-ahead, and releases
@@ -809,7 +811,8 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   first, stopping after each until the owner said to carry on. After P2 the
   owner approved more agents, and since then it runs in rounds of two or
   three tasks at once, each in a git worktree of its own, and stops after
-  each round.
+  each round. On 13 October 2026 the owner chose one task a round for the
+  rest, R2 in two parts, so each round stays short.
 - The Beta lives in a `beta/` folder in this repository, beside 0.x, which
   stays as it is. A branch wouldn't do, because the tests run 0.x and the
   Beta side by side in one binary.

@@ -1,13 +1,14 @@
 # Task board
 
-The Beta is built in rounds, in the order below. A round is two or three
-tasks at once, each done by an agent of its own in its own git worktree,
-and a coordinating session reviews and merges them. After each round the
+The Beta is built in rounds, in the order below. A round is one task or a
+few at once, each done by an agent of its own in its own git worktree, and
+a coordinating session reviews and merges them. After each round the
 work stops. The code, each task's closing test and record, and briefs for
 the next round go into the repository, and the owner says whether to carry
 on. That gives the owner a say over each step and over what the work costs.
 The first seven tasks ran one at a time, before the owner approved more
-agents.
+agents. On 13 October 2026 the owner chose one task a round for the rest,
+with R2 in two parts, so each round stays short.
 
 The tasks and their closing tests are the table in [BETA.md](../../BETA.md),
 under "The work, task by task". Each task gets a file here: a brief before it
@@ -15,8 +16,8 @@ starts, and a record of what was done when it's finished.
 
 ## How to pick up the work
 
-1. The next round is the tasks marked "next" below: two or three whose
-   needs are done, taken in the table's order.
+1. The next round is the task marked "next" below, or the part of it that
+   its status names: one task a round from R1 on.
 2. Each task's agent reads the task's file here, its row in BETA.md's task
    table, and the files of the tasks it needs, for the decisions they made.
    It works in a worktree of its own, on a branch, until the closing test
@@ -82,13 +83,13 @@ work in, and all 133 hours are done after R4.
 | 42 | G5 The command and `Compact` | 3 | done, [G5.md](G5.md), alone |
 | 43 | G7 `check` | 2 | done, [G7.md](G7.md) |
 | 44 | I1 Integration | 3 | done, [I1.md](I1.md) |
-| 45 | R1 Long runs | 3 | next, [R1.md](R1.md) |
-| 46 | R2 Independent review | 5 | next, [R2.md](R2.md) |
-| 47 | R3 Docs and site | 3 | next, [R3.md](R3.md) |
-| 48 | R4 Release run | 2 | |
+| 45 | R1 Long runs | 3 | next, [R1.md](R1.md), alone |
+| 46 | R2 Independent review | 5 | after R1, [R2.md](R2.md), in two parts, each alone |
+| 47 | R3 Docs and site | 3 | after R2, [R3.md](R3.md), alone |
+| 48 | R4 Release run | 2 | after R3, alone |
 | | V2 Vector blocks, only if I1 finds the open target missed | (2) | done, [V2.md](V2.md), alone, vector blocks alone |
 
-Hours done so far: 120 of 133, and V2's 2 besides, which the 133 leave out. Every task is done apart from R1 to R4: the five early tasks, P1 to P5, S1 to S5, V1 and V2, F1 to F9, G1 to G7, I1, Q1 to Q6 and T1 to T5. G2 is the first working version. V2 ran alone, with its scope cut by the owner to vector blocks alone: compaction writes each table's vectors in blocks of about a megabyte, which opening copies straight into the arrays. In V2's own runs, the two builds taking turns, opening 100,000 records with 384-value vectors from a compacted file took about 555 ms, against 678 ms before it, and compacting them about 0.35 seconds, against 0.6. In the recorded run after V2, `test/results/beta-bench.txt`, the same open takes 592 ms against the target of 250 ms, where the run after G5 gave 826 ms, so the target stays missed, as the owner expected. 0.x's own figures came out faster in this run than in the one before it, by up to two fifths, so part of that drop is the machine, and the Beta's figures are best read beside 0.x's. A committed put is 348 µs on the Beta against 387 µs on 0.x, so F7's check holds. Both searches without a filter meet their targets, and the filtered search is 20.2 ms against 12 ms, where 0.x takes 127 ms. `Get` is 3.53 µs and a walk one link out 4.56 µs, against 3 µs each, and a walk three links out 71.7 µs against 40 µs. Two targets are missed by more than double in this run: opening, and a put among 1,000 in a transaction, 23 µs against 5 µs. The batched put doubled with G5's compaction after a commit, since a database that only grows is compacted each time it doubles, as BETA.md's rule has it. G5.md suggests counting dead bytes instead, which changes that rule, so it's the owner's call, and R2 looks at it. The next round is R1, R2 and R3, then R4.
+Hours done so far: 120 of 133, and V2's 2 besides, which the 133 leave out. Every task is done apart from R1 to R4: the five early tasks, P1 to P5, S1 to S5, V1 and V2, F1 to F9, G1 to G7, I1, Q1 to Q6 and T1 to T5. G2 is the first working version. V2 ran alone, with its scope cut by the owner to vector blocks alone: compaction writes each table's vectors in blocks of about a megabyte, which opening copies straight into the arrays. In V2's own runs, the two builds taking turns, opening 100,000 records with 384-value vectors from a compacted file took about 555 ms, against 678 ms before it, and compacting them about 0.35 seconds, against 0.6. In the recorded run after V2, `test/results/beta-bench.txt`, the same open takes 592 ms against the target of 250 ms, where the run after G5 gave 826 ms, so the target stays missed, as the owner expected. 0.x's own figures came out faster in this run than in the one before it, by up to two fifths, so part of that drop is the machine, and the Beta's figures are best read beside 0.x's. A committed put is 348 µs on the Beta against 387 µs on 0.x, so F7's check holds. Both searches without a filter meet their targets, and the filtered search is 20.2 ms against 12 ms, where 0.x takes 127 ms. `Get` is 3.53 µs and a walk one link out 4.56 µs, against 3 µs each, and a walk three links out 71.7 µs against 40 µs. Two targets are missed by more than double in this run: opening, and a put among 1,000 in a transaction, 23 µs against 5 µs. The batched put doubled with G5's compaction after a commit, since a database that only grows is compacted each time it doubles, as BETA.md's rule has it. G5.md suggests counting dead bytes instead, which changes that rule, so it's the owner's call, and R2 looks at it. On 13 October 2026 the owner chose to run the rest one task a round: R1, then R2 in two parts, the file's safety first and then the rest, then R3, then R4. The next round is R1.
 
 Releases publish themselves: raising `Version` in `hypercrux.go` on main
 releases it once the tests pass. A2.md explains how.
