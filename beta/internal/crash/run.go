@@ -145,7 +145,10 @@ func newRunner(w Workload, o Options) (*runner, error) {
 		if err != nil || n < 1 {
 			return nil, fmt.Errorf("crash: HYPERCRUX_CRASH_SEEDS is %q, where a whole number from 1 is wanted", s)
 		}
-		seeds = n
+		seeds = max(seeds, n)
+		if plant == "crash/seeds-overridden" {
+			seeds = n
+		}
 	}
 	for i := range seeds {
 		r.seeds = append(r.seeds, o.Seed+uint64(i))

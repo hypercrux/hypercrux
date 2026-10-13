@@ -497,6 +497,46 @@ func TestAnEraCanBeReadBeforeItsRestoreReturns(t *testing.T) {
 	t.Log(rep)
 }
 
+// restoresFor gives a run's gaps between backups and restores: span, or for
+// a run longer than 30 seconds, span stretched in step with the run's time,
+// which comes from HYPERCRUX_PROCS_TIME here, so a long run (R1) moves about
+// as many backups into place as a run of 15 seconds does. Each restore
+// begins an era, and the history keeps every era's commits, and the readers'
+// first sight of each, until the run ends, so its memory grows with the eras
+// times the file's length. At span's gaps, a run of 4 minutes held about a
+// gigabyte, 327 eras of up to 9,905 commits, and one of 42 minutes would
+// need more memory than a machine has.
+func restoresFor(span Span) Span {
+	t, err := time.ParseDuration(os.Getenv(envTime))
+	if err != nil || t <= 30*time.Second {
+		return span
+	}
+	k := t / (15 * time.Second)
+	return Span{Min: span.Min * k, Max: span.Max * k}
+}
+
+// TestLongRunsSpaceTheirRestores: a run of 30 seconds or less keeps its gaps
+// between backups and restores, and a longer one stretches them in step with
+// its time (restoresFor).
+func TestLongRunsSpaceTheirRestores(t *testing.T) {
+	span := Span{Min: 50 * time.Millisecond, Max: 250 * time.Millisecond}
+	for _, c := range []struct {
+		env  string
+		want Span
+	}{
+		{"", span},
+		{"2s", span},
+		{"30s", span},
+		{"1m", Span{Min: 200 * time.Millisecond, Max: time.Second}},
+		{"42m", Span{Min: 8400 * time.Millisecond, Max: 42 * time.Second}},
+	} {
+		t.Setenv(envTime, c.env)
+		if got := restoresFor(span); got != c.want {
+			t.Errorf("with %s=%q, the gaps are %v, where %v is wanted", envTime, c.env, got, c.want)
+		}
+	}
+}
+
 // TestFollowersSeeEveryCommitThroughReloads is F9's closing test: two writers
 // committing through the real log on a slow disk, compacting the database
 // after about one commit in 16, and two followers that open it once and
@@ -505,19 +545,19 @@ func TestAnEraCanBeReadBeforeItsRestoreReturns(t *testing.T) {
 // for 2 seconds, or half a second with -short. Followers live 100
 // milliseconds to a second. Meanwhile the run takes a backup at random
 // moments, 50 to 250 milliseconds apart, and moves it into place as long
-// again after. Every follower sees every commit once and in order, in each
-// era of the log, through compactions and the backups, the followers agree
-// with each other and with the files, every commit a writer saw succeed is
-// in the file at the end or was lost with the file a backup replaced, and
-// every commit under way when its writer was killed is there whole or not at
-// all. The run goes on until both kinds of follower have reloaded a backup,
-// followers through the log have reloaded compacted files, and writers have
-// compacted.
+// again after, or further apart in a long run (restoresFor). Every follower
+// sees every commit once and in order, in each era of the log, through
+// compactions and the backups, the followers agree with each other and with
+// the files, every commit a writer saw succeed is in the file at the end or
+// was lost with the file a backup replaced, and every commit under way when
+// its writer was killed is there whole or not at all. The run goes on until
+// both kinds of follower have reloaded a backup, followers through the log
+// have reloaded compacted files, and writers have compacted.
 func TestFollowersSeeEveryCommitThroughReloads(t *testing.T) {
 	rep, err := Run(realReloaded, Options{
 		Path:       filepath.Join(t.TempDir(), "db.hcx"),
 		ReaderLife: Span{Min: 100 * time.Millisecond, Max: time.Second},
-		Restores:   Span{Min: 50 * time.Millisecond, Max: 250 * time.Millisecond},
+		Restores:   restoresFor(Span{Min: 50 * time.Millisecond, Max: 250 * time.Millisecond}),
 		Least:      map[string]int{writerCompacted: 5, logReloadedSame: 3, logReloadedNewEra: 1, dbReadNewEra: 1},
 	})
 	if err != nil {

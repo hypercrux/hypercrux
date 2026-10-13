@@ -12,15 +12,19 @@ import "os"
 // the tests with each bug listed in beta/plants.txt, and every one must
 // make them fail. A name this package doesn't know switches nothing on.
 //
-// The bug is in the toy log the package's tests drive, and the driver has
-// to catch it:
+// The first bug is in the toy log the package's tests drive, and the
+// driver has to catch it. The second is in the driver:
 //
 //   - crash/marker-before-sync: the toy log writes each batch's marker
 //     before the batch's sync, where it belongs after it, so a cut before
 //     the sync can keep the marker and lose the batch.
+//   - crash/seeds-overridden: HYPERCRUX_CRASH_SEEDS takes the place of a
+//     test's own seeds even when it's fewer, as it did before R1, so a long
+//     run set low would weaken the tests, or fail one that needs its seeds
+//     to catch a bug.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
-	case "crash/marker-before-sync":
+	case "crash/marker-before-sync", "crash/seeds-overridden":
 		return p
 	}
 	return ""

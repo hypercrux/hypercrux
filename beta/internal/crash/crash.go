@@ -114,8 +114,10 @@ type Options struct {
 	Kinds Kind
 
 	// Seeds is how many seeds each point runs with: Seed and the ones
-	// after it. 0 means 1. When HYPERCRUX_CRASH_SEEDS is set, it overrides
-	// Seeds, so a long run (R1) can try more of what a cut can do.
+	// after it. 0 means 1. When HYPERCRUX_CRASH_SEEDS is set to more, it
+	// takes Seeds' place, so a long run (R1) can try more of what a cut
+	// can do. It never lowers Seeds, so a test that needs its seeds, such
+	// as one that has to catch a bug, keeps them whatever a run sets.
 	Seeds int
 	Seed  uint64
 

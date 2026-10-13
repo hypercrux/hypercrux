@@ -276,9 +276,9 @@ func TestPointsReadBack(t *testing.T) {
 	}
 }
 
-// TestTheEnvironmentSetsSeedsAndReplays: HYPERCRUX_CRASH_SEEDS sets how
-// many seeds each point runs with, for long runs, and HYPERCRUX_CRASH_POINT
-// runs one point alone.
+// TestTheEnvironmentSetsSeedsAndReplays: HYPERCRUX_CRASH_SEEDS raises how
+// many seeds each point runs with, for long runs, and never lowers them, and
+// HYPERCRUX_CRASH_POINT runs one point alone.
 func TestTheEnvironmentSetsSeedsAndReplays(t *testing.T) {
 	w := toyWorkload(2, "")
 	t.Setenv("HYPERCRUX_CRASH_SEEDS", "3")
@@ -290,6 +290,13 @@ func TestTheEnvironmentSetsSeedsAndReplays(t *testing.T) {
 	// of the 4 writes, from 3 seeds.
 	if rep.Seeds != 3 || rep.Cuts != 21 {
 		t.Errorf("with HYPERCRUX_CRASH_SEEDS=3: %v", rep)
+	}
+	// A test that asks for more keeps them: TestTheDriverCatchesMarkerBeforeSync
+	// asks for 256, since a cut catches its bug in a few per cent of seeds,
+	// and failed with HYPERCRUX_CRASH_SEEDS=8 before R1.
+	rep, err = Run(w, Options{Kinds: Cuts, Seeds: 5})
+	if err != nil || rep.Seeds != 5 || rep.Cuts != 35 {
+		t.Errorf("with HYPERCRUX_CRASH_SEEDS=3 and 5 seeds asked for: %v, %v", rep, err)
 	}
 	t.Setenv("HYPERCRUX_CRASH_POINT", "cut WriteAt 2 seed 1")
 	rep, err = Run(w, Options{})

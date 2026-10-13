@@ -42,8 +42,9 @@ jobs:
       - run: go test -count=1 ./beta/...
       - run: go test -race -count=1 -short ./beta/...
 
-  # Every fuzz target for 30 seconds. Hours-long runs are task R1's. An
-  # input that fails is kept as an artifact, to add to testdata/fuzz.
+  # Every fuzz target for 30 seconds. Hours-long runs are the long
+  # workflow's (task R1). An input that fails is kept as an artifact, to
+  # add to testdata/fuzz, and shown in an annotation when it's small.
   fuzz:
     runs-on: ubuntu-latest
     steps:
@@ -60,12 +61,18 @@ jobs:
           if-no-files-found: ignore
 
   # Each bug planted in the Beta's code, listed in beta/plants.txt, has to
-  # make the tests fail.
+  # make the tests fail. The bugs are split into shards that run side by
+  # side, each taking every fifth bug, so between them they try each bug
+  # once. The long workflow tries every bug on arm64 as well (task R1).
   planted:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1/5, 2/5, 3/5, 4/5, 5/5]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: "1.27.x"
-      - run: sh scripts/planted.sh
+      - run: sh scripts/planted.sh ${{ matrix.shard }}

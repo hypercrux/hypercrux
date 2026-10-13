@@ -1,0 +1,99 @@
+name: long
+
+# The long runs (task R1 in BETA.md): hours of fuzzing, the crash suites
+# with many seeds, the many-process harness, the differential harness and
+# every planted bug, each on amd64 and on arm64, side by side. They run
+# only when started by hand, from the Actions tab or with
+# `gh workflow run long.yml`, at the lengths below. beta/tasks/R1.md says
+# how long a run takes, how to read it, and how to replay what a failing
+# job keeps. Nothing waits for them: releases wait for the test workflow.
+#
+# There's no schedule: a scheduled run that fails mails whoever last
+# changed the schedule, and the owner takes no part in CI.
+
+on:
+  workflow_dispatch:
+    inputs:
+      fuzz_time:
+        description: "How long each fuzz target runs, as a Go duration; each fuzz job runs half the targets"
+        default: "70m"
+      crash_seeds:
+        description: "HYPERCRUX_CRASH_SEEDS: the seeds each crash point runs with, where a test asks for fewer"
+        default: "1280"
+      procs_time:
+        description: "HYPERCRUX_PROCS_TIME: how long each many-process run goes on; the job makes five"
+        default: "42m"
+      diff_sequences:
+        description: "HYPERCRUX_DIFF_SEQUENCES: the random sequences run on 0.x and on the Beta"
+        default: "320000"
+      minutes:
+        description: "Each job's limit in minutes, 360 at most; its tests are stopped 20 minutes before it"
+        default: "270"
+      only:
+        description: "The jobs to run, such as crash,procs, from fuzz-1, fuzz-2, crash, procs, diff and planted; all when empty"
+        default: ""
+
+permissions:
+  contents: read
+
+# One long run at a time: a second waits for the first to end.
+concurrency:
+  group: long
+  cancel-in-progress: false
+
+jobs:
+  long:
+    name: ${{ matrix.job }} on ${{ matrix.arch }}
+    strategy:
+      # Every job runs its full length, whatever another finds.
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        # fuzz-1 and fuzz-2 run the two halves of the fuzz targets.
+        job: [fuzz-1, fuzz-2, crash, procs, diff, planted]
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: ${{ fromJSON(inputs.minutes) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      # The run's own limit, 10 minutes inside the job's, so that a run
+      # that overruns fails, and its files are kept.
+      - id: limit
+        env:
+          MINUTES: ${{ inputs.minutes }}
+        run: echo "minutes=$((MINUTES - 10))" >> "$GITHUB_OUTPUT"
+      - name: Run ${{ matrix.job }}
+        if: inputs.only == '' || contains(inputs.only, matrix.job)
+        timeout-minutes: ${{ fromJSON(steps.limit.outputs.minutes) }}
+        env:
+          JOB: ${{ matrix.job }}
+          MINUTES: ${{ inputs.minutes }}
+          FUZZ_TIME: ${{ inputs.fuzz_time }}
+          CRASH_SEEDS: ${{ inputs.crash_seeds }}
+          PROCS_TIME: ${{ inputs.procs_time }}
+          DIFF_SEQUENCES: ${{ inputs.diff_sequences }}
+          LONG_OUT: ${{ runner.temp }}/long
+        run: |
+          export LONG_TIMEOUT="$((MINUTES - 20))m"
+          case "$JOB" in
+          fuzz-*) sh scripts/long.sh fuzz "$FUZZ_TIME" "${JOB#fuzz-}/2" ;;
+          crash) sh scripts/long.sh crash "$CRASH_SEEDS" ;;
+          procs) sh scripts/long.sh procs "$PROCS_TIME" ;;
+          diff) sh scripts/long.sh diff "$DIFF_SEQUENCES" ;;
+          planted) sh scripts/long.sh planted ;;
+          esac
+      # What replays a failure: the output, failing fuzz inputs, saved
+      # sequences, and whatever the tests left in their temporary folder.
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: long-${{ matrix.job }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/long
+          if-no-files-found: ignore

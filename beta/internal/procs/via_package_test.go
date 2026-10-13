@@ -544,18 +544,19 @@ func TestKilledWritersThroughThePackage(t *testing.T) {
 // and a writer's slot stays empty for up to 50 milliseconds after its writer
 // is killed, so a reader can be the first to find what it left. Meanwhile the run takes a
 // backup at random moments, 50 to 250 milliseconds apart, and moves it into
-// place as long again after. Every reader sees every commit once and in
-// order, in each era of the log, through the compactions and the backups,
-// the readers agree with each other and with the files, every commit a
-// writer saw succeed is in the file at the end or was lost with the file a
-// backup replaced, and every commit is whole wherever it's read. The run goes
-// on until writers have compacted 5 times and readers have read a backup.
+// place as long again after, or further apart in a long run (restoresFor, in
+// reload_test.go). Every reader sees every commit once and in order, in each
+// era of the log, through the compactions and the backups, the readers agree
+// with each other and with the files, every commit a writer saw succeed is in
+// the file at the end or was lost with the file a backup replaced, and every
+// commit is whole wherever it's read. The run goes on until writers have
+// compacted 5 times and readers have read a backup.
 func TestManyProcessesThroughThePackage(t *testing.T) {
 	rep, err := Run(packagedCompacting, Options{
 		Path:       filepath.Join(t.TempDir(), "db.hcx"),
 		ReaderLife: Span{Min: 100 * time.Millisecond, Max: time.Second},
 		WriterGap:  Span{Min: 0, Max: 50 * time.Millisecond},
-		Restores:   Span{Min: 50 * time.Millisecond, Max: 250 * time.Millisecond},
+		Restores:   restoresFor(Span{Min: 50 * time.Millisecond, Max: 250 * time.Millisecond}),
 		Least:      map[string]int{writerCompacted: 5, dbReadNewEra: 1},
 	})
 	if err != nil {
