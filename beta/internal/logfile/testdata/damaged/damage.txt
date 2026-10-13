@@ -31,3 +31,8 @@ batch-missing-middle.hcx 2 159 batch 2 and its marker are missing, and batch 3 f
 marker-damaged-middle.hcx 2 159 batch 2 counts and its marker has a bit changed, with batches 3 and 4 marked after it
 compacted-part-end.hcx 2 181 a compacted file whose compacted part's last marker has a bit changed, with nothing after it
 compacted-part-middle.hcx 1 68 a compacted file whose compacted part's first batch fails its checksum, with a commit after the compacted part
+block-no-table.hcx 2 160 a compacted file whose vector block, in its compacted part's batch 2, is for a table that doesn't exist
+block-nan.hcx 2 160 a compacted file whose vector block, in its compacted part's batch 2, gives pics:1 a vector holding NaN
+block-malformed.hcx 2 221 a compacted file whose vector block, in its compacted part's batch 2, counts three vectors and holds two
+block-past-compacted-part.hcx 3 287 a compacted file whose commit after the compacted part, batch 3, is a vector block, which only compaction writes
+block-generation-1-middle.hcx 2 187 batch 2 counts and is marked, and is a vector block, in generation 1, which has no compacted part

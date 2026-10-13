@@ -117,6 +117,10 @@ func open(files fsys.FS, path string, o logfile.Options) (*DB, error) {
 	db := &DB{path: path, files: files}
 	db.mem.Store(store.New())
 	t := &target{db: db, opening: true}
+	// The copy keeps nothing of a vector block's strings once it has
+	// applied the block: it copies the vectors into its arrays. So the log
+	// hands it a batch of blocks straight from the bytes it read (V2).
+	o.BlocksInPlace = true
 	// F7's rules for the file, its real path and a file with more than one
 	// name refused, go in the log's Open.
 	l, err := logfile.Open(files, path, t, o)

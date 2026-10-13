@@ -6,11 +6,14 @@
 package store
 
 import (
+	"encoding/binary"
 	"fmt"
 	"math"
 	"slices"
+	"unsafe"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
+	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/rules"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 	"github.com/hypercrux/hypercrux/beta/internal/vecmath"
@@ -242,19 +245,158 @@ func (s *Store) checkVector(v value.Value) ([]float32, float64, error) {
 }
 
 // decode writes the values whose bits are in raw, 4 bytes a value,
-// little-endian, into dst, which has room for every one, and returns dst.
-// It's value.AppendVector's loop without the appends: for 384 values in the
-// processor's cache, AppendVector took 470 ns and this loop 155. Copying the
-// bits as they are, through package unsafe, took 30, since amd64 and arm64
-// hold a float32 as those same 4 bytes, but this loop needs no rule about
-// the processor and costs about 12 ms more an open of 100,000 vectors.
+// little-endian, into dst, which has room for every one, and returns dst
+// (copyBits).
 func decode(dst []float32, raw string) []float32 {
-	raw = raw[:4*len(dst)]
+	copyBits(dst, raw)
+	return dst
+}
+
+// littleEndian reports whether the processor keeps a number's lowest byte
+// first, as amd64 and arm64 do. Then a float32's 4 bytes in memory are its
+// bits in FORMAT.md's order.
+var littleEndian = binary.NativeEndian.Uint16([]byte{1, 0}) == 1
+
+// copyBits writes the values whose bits are in bits, 4 bytes a value,
+// little-endian, into dst, which has room for len(dst) of them, as every
+// vector reaches its slot: a put's from its value, and a vector block's from
+// the file (V2).
+//
+// On a little-endian processor the bytes are the values' memory already, so
+// they're copied as they are, through package unsafe, which sees dst's
+// float32s as the bytes they're made of. For 384 values in the processor's
+// cache that took 30 ns, where the loop below took 155 (V1). Anywhere else
+// the loop works out each value from its bits, so the result is the same on
+// every processor.
+func copyBits(dst []float32, bits string) {
+	if len(dst) == 0 {
+		return
+	}
+	bits = bits[:4*len(dst)]
+	if littleEndian {
+		copy(unsafe.Slice((*byte)(unsafe.Pointer(&dst[0])), 4*len(dst)), bits)
+		return
+	}
 	for i := range dst {
 		j := 4 * i
-		dst[i] = math.Float32frombits(uint32(raw[j]) | uint32(raw[j+1])<<8 | uint32(raw[j+2])<<16 | uint32(raw[j+3])<<24)
+		dst[i] = math.Float32frombits(uint32(bits[j]) | uint32(bits[j+1])<<8 | uint32(bits[j+2])<<16 | uint32(bits[j+3])<<24)
 	}
-	return dst
+}
+
+// bitsOf returns v's values as their bits, 4 bytes a value, little-endian,
+// as FORMAT.md stores them, for a vector block that compaction writes (V2).
+// On a little-endian processor that's v's own memory, handed out as a string
+// through package unsafe without a copy, so the string changes when v does.
+// The compacted snapshot ranges over the store inside a Read, while nothing
+// changes it. Anywhere else the bits are worked out into a string of their
+// own.
+func bitsOf(v []float32) string {
+	if len(v) == 0 {
+		return ""
+	}
+	if littleEndian {
+		return unsafe.String((*byte)(unsafe.Pointer(&v[0])), 4*len(v))
+	}
+	return value.Vector(v).Raw()
+}
+
+// applyVectors makes a vector block, a change only a compacted part holds,
+// after checking it against the state, as FORMAT.md's "Vector blocks" says:
+// the table exists and has the block's vector size, and each record the
+// block names is one of the table's, in byte order of key, and holds no
+// vector yet. Each vector's values go straight from the block into a slot of
+// the table's array (copyBits), and there they're checked as a put's are,
+// with the dot product that gives the norm: finite, and not all zero.
+//
+// Everything but the values is checked before anything changes. A vector
+// whose values break the rules is found once its slot is filled: inside a
+// transaction the caller takes the block back, as for any write that fails,
+// and outside one the slots this block took are given back here, so the
+// store is as it was either way (untake).
+func (s *Store) applyVectors(c format.Change) error {
+	if err := rules.Table(c.Table); err != nil {
+		return err
+	}
+	t := s.tables[c.Table]
+	switch {
+	case t == nil:
+		return fmt.Errorf("%w: a vector block for table %s, which doesn't exist", errs.ErrNotFound, c.Table)
+	case t.size == 0:
+		return fmt.Errorf("%w: a vector block for table %s, which has no vector size", errs.ErrInvalid, c.Table)
+	case c.Size != t.size:
+		return fmt.Errorf("%w: table %s holds vectors of %d values, and its vector block's have %d", errs.ErrInvalid, c.Table, t.size, c.Size)
+	case len(c.Vecs) == 0:
+		return fmt.Errorf("%w: a vector block for table %s with no vectors", errs.ErrInvalid, c.Table)
+	}
+	recs := s.recs[:0]
+	defer func() {
+		clear(recs) // so the buffer keeps no record alive
+		s.recs = recs[:0]
+	}()
+	for i, v := range c.Vecs {
+		if i > 0 && v.Key <= c.Vecs[i-1].Key {
+			return fmt.Errorf("%w: the vector block for table %s gives %s after %s, out of byte order", errs.ErrInvalid, c.Table, v.Key, c.Vecs[i-1].Key)
+		}
+		r := s.records[v.Key]
+		switch {
+		case r == nil || r.table != t:
+			if _, err := rules.TableOf(v.Key); err != nil {
+				return err
+			}
+			return fmt.Errorf("%w: the vector block for table %s gives a vector to %s, which isn't one of its records", errs.ErrNotFound, c.Table, v.Key)
+		case r.slot >= 0:
+			return fmt.Errorf("%w: the vector block for table %s gives a vector to %s, which holds one already", errs.ErrInvalid, c.Table, v.Key)
+		case len(v.Bits) != 4*t.size:
+			return fmt.Errorf("%w: the vector block for table %s gives %s %d bytes of values, where vectors of %d values take %d", errs.ErrInvalid, c.Table, v.Key, len(v.Bits), t.size, 4*t.size)
+		}
+		recs = append(recs, r)
+	}
+	n0 := len(t.vecs.owners) // a slot past this one is new; one before it was free
+	for i, r := range recs {
+		s.changing(undo{op: undoRecord, record: r, fields: r.fields, n: -1})
+		slot := s.takeSlot(t, r)
+		vals := t.vector(slot)
+		copyBits(vals, c.Vecs[i].Bits)
+		dot := vecmath.Dot(vals, vals)
+		if !(dot > 0 && dot <= math.MaxFloat64) && plant != "store/block-unchecked" {
+			err := rules.Vector(vals)
+			if err == nil {
+				panic(fmt.Sprintf("store: a vector whose dot product with itself is %v keeps rules.Vector's rules", dot))
+			}
+			if s.tx == nil {
+				s.untake(t, recs[:i], slot, n0)
+			}
+			return fmt.Errorf("the vector of %s in the vector block for table %s: %w", r.key, c.Table, err)
+		}
+		if plant != "store/block-norm-left-out" {
+			t.vecs.norms[slot] = math.Sqrt(dot)
+		}
+		r.slot = slot
+	}
+	return nil
+}
+
+// untake gives back the slots a vector block took outside a transaction,
+// when one of its vectors breaks the rules: last, the slot it had just
+// taken for the vector that broke them, and before it the slots of done,
+// the records before that one, newest first. A slot past the n0 the array
+// had goes, and one that was free goes back on the free list, in the order
+// takeSlot took them, so the array is as it was.
+func (s *Store) untake(t *table, done []*record, last, n0 int) {
+	a := &t.vecs
+	give := func(i int) {
+		a.owners[i] = nil
+		if i >= n0 {
+			a.owners, a.norms = a.owners[:i], a.norms[:i]
+		} else {
+			a.free = append(a.free, i)
+		}
+	}
+	give(last)
+	for i := len(done) - 1; i >= 0; i-- {
+		give(done[i].slot)
+		done[i].slot = -1
+	}
 }
 
 // MaxK is the most hits Nearest gives, as in 0.x.

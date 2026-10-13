@@ -224,3 +224,13 @@ cmd/failure-exits-zero ./beta/cmd/hypercrux ./beta/conformance/cmdtest
 cmd/two-statements-taken ./beta/cmd/hypercrux ./beta/conformance/cmdtest
 cmd/failed-put-leaves-file ./beta/cmd/hypercrux ./beta/conformance/cmdtest
 cmd/compact-skipped ./beta/cmd/hypercrux
+store/compacted-last-vector-dropped ./beta/internal/store
+store/compacted-in-slot-order ./beta/internal/store
+store/block-unchecked ./beta/internal/store
+store/block-norm-left-out ./beta/internal/store
+logfile/block-cut-short ./beta/internal/logfile
+logfile/block-one-batch ./beta/internal/logfile
+logfile/block-anywhere ./beta/internal/logfile
+logfile/block-appended ./beta/internal/logfile
+logfile/blocks-always-in-place ./beta/internal/logfile
+hypercrux/compaction-without-blocks ./beta/hypercrux

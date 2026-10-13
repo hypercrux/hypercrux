@@ -1126,7 +1126,7 @@ func checkPutChanges(t *testing.T, s *Store, got []format.Change, key string, ex
 
 func equalChange(a, b format.Change) bool {
 	return a.Op == b.Op && a.Table == b.Table && a.Size == b.Size && slices.Equal(a.Names, b.Names) && a.Key == b.Key &&
-		slices.Equal(a.Fields, b.Fields) && a.Type == b.Type && a.To == b.To
+		slices.Equal(a.Fields, b.Fields) && a.Type == b.Type && a.To == b.To && slices.Equal(a.Vecs, b.Vecs)
 }
 
 // compareRecord checks one record read through s, the store or a

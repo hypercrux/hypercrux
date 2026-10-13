@@ -15,17 +15,19 @@ line is a comment. They follow [FORMAT.md](../../../FORMAT.md), and
 | `batch-link.hex` | A batch adding a link |
 | `batch-unlink.hex` | A batch removing a link |
 | `batch-drop.hex` | A batch dropping a table |
+| `batch-vectors.hex` | A batch holding a vector block, with awkward values |
 | `batch-several.hex` | A batch of several changes, as an ordinary first commit writes them |
 | `marker.hex` | The marker for `batch-several.hex` |
 | `file-new.hex` | A small database: a header and three batches, each with its marker |
-| `file-compacted.hex` | The same database compacted, then one more commit |
+| `file-compacted.hex` | The same database compacted, its vectors in a vector block, then one more commit |
 
 - The batches with one change each stand alone, to show the encoding, so
   their changes needn't fit any state. They all have sequence number 258,
   which shows a u64's byte order.
 - The two small databases are whole: every change in them is valid where it
   stands, and the compacted one holds the same state as the new one, in the
-  order FORMAT.md gives for a compacted part.
+  order FORMAT.md gives for a compacted part, each table's vectors in a
+  vector block of their own after its puts.
 - Every fixture uses the database ID `0123456789abcdef fedcba9876543210`.
 
 The codec has to match these bytes exactly, so they change only along with

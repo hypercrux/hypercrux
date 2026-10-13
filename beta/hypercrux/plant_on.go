@@ -146,6 +146,12 @@ import (
 //     copy as it is, before the write lock reads on to the end of the log,
 //     so the compacted file leaves out what other processes committed since
 //     this one last read the file.
+//
+// V2's, in vector blocks:
+//
+//   - hypercrux/compaction-without-blocks: a compaction writes the copy's
+//     snapshot as S3 gave it, each vector in its record's put, so opening
+//     the compacted file decodes and checks every vector as a value again.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -161,7 +167,8 @@ var plant = func() string {
 		"hypercrux/moment-kept", "hypercrux/vector-argument-shared", "hypercrux/filter-checks-reordered",
 		"hypercrux/filter-none-nil", "hypercrux/unlock-error-kept",
 		"hypercrux/compaction-error-returned", "hypercrux/compaction-error-dropped", "hypercrux/no-compaction-after-commit",
-		"hypercrux/compact-stale-snapshot":
+		"hypercrux/compact-stale-snapshot",
+		"hypercrux/compaction-without-blocks":
 		return p
 	}
 	return ""

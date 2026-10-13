@@ -194,6 +194,24 @@ import (
 //     last itself takes the file it moves to for one whose name is on the
 //     drive too, so after another handle's compaction it commits into the
 //     new file without syncing the folder first.
+//
+// V2's, in vector blocks:
+//
+//   - logfile/block-cut-short: when a vector block has filled its batch, the
+//     compaction drops the vector that doesn't fit, where it starts the
+//     next block with it, so a table loses a vector at each batch's edge.
+//   - logfile/block-one-batch: a table's vectors go in one vector block,
+//     however many there are, so a table of 100,000 vectors takes a batch
+//     of 150 MB in memory, on writing and on reading.
+//   - logfile/block-anywhere: the read takes a vector block in a batch past
+//     the compacted part, which only compaction writes, so damage that
+//     makes a commit read as a block goes unreported.
+//   - logfile/block-appended: Append writes a vector block into a commit,
+//     which every reader then reports as damage.
+//   - logfile/blocks-always-in-place: the log hands every Target a batch of
+//     vector blocks straight from its read buffer, without
+//     Options.BlocksInPlace, so a Target that keeps the changes finds the
+//     vectors of an earlier batch overwritten by a later one.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -209,7 +227,9 @@ var plant = func() string {
 		"logfile/reload-without-collecting", "logfile/reload-waits-for-the-mutex", "logfile/reload-unchecked",
 		"logfile/path-as-given", "logfile/hard-link-let-through", "logfile/second-name-unseen", "logfile/any-kind-of-file",
 		"logfile/fifo-opened-first", "logfile/links-unchecked", "logfile/dangling-link-retried",
-		"logfile/folder-unsynced-before-commit", "logfile/named-kept-on-another-file":
+		"logfile/folder-unsynced-before-commit", "logfile/named-kept-on-another-file",
+		"logfile/block-cut-short", "logfile/block-one-batch", "logfile/block-anywhere", "logfile/block-appended",
+		"logfile/blocks-always-in-place":
 		return p
 	}
 	return ""

@@ -87,7 +87,10 @@ type Target interface {
 	// Apply applies one marked batch: its sequence number, and its
 	// changes, in order. The changes are the Target's to keep: nothing
 	// changes them, and every string in them is a slice of one string
-	// that holds the whole batch (format.DecodeBatch).
+	// that holds the whole batch (format.DecodeBatch). With
+	// Options.BlocksInPlace, a batch that holds vector blocks alone is the
+	// exception: its strings share the bytes the log read it into, which
+	// the log reads the next batch into once Apply returns.
 	//
 	// An error means the changes break the rules for the state they apply
 	// to, which a crash can't account for, so the log reports the file as
@@ -128,6 +131,17 @@ type Options struct {
 	// small commits set a compaction off, or a very large one, so a log of
 	// many commits stays as it is.
 	MinGrowth int64
+
+	// BlocksInPlace lets the log hand the Target a batch that holds vector
+	// blocks alone straight from the bytes it read the batch into, without
+	// a copy (format.DecodeBatchInPlace). Such a batch is most of a
+	// compacted file that holds vectors, so that saves a copy of about a
+	// megabyte a batch on opening and on a reload. It's for a Target that
+	// keeps nothing of a vector block once Apply returns, as the store
+	// copies a block's vectors into its arrays and keeps none of its
+	// strings: the public package sets it (V2). Any other batch comes as a
+	// copy either way.
+	BlocksInPlace bool
 }
 
 // Log is a database file opened through fsys: what its header says, how
@@ -143,13 +157,14 @@ type Options struct {
 // A Log can be used by many goroutines at once: the write lock keeps them
 // apart.
 type Log struct {
-	fsys   fsys.FS
-	path   string
-	dir    string // the folder the database is in, which creation, compaction and a first commit sync
-	t      Target
-	wait   time.Duration
-	id     [16]byte // Options.ID
-	growth int64    // Options.MinGrowth
+	fsys    fsys.FS
+	path    string
+	dir     string // the folder the database is in, which creation, compaction and a first commit sync
+	t       Target
+	wait    time.Duration
+	id      [16]byte // Options.ID
+	growth  int64    // Options.MinGrowth
+	inPlace bool     // Options.BlocksInPlace
 
 	// fol keeps followers apart, so a follower that finds another reading
 	// on waits for it, and reads at least as far. Only Follow takes it, and
@@ -247,7 +262,7 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, growth: o.MinGrowth, mu: make(chan struct{}, 1)}
+	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, growth: o.MinGrowth, inPlace: o.BlocksInPlace, mu: make(chan struct{}, 1)}
 	if l.wait <= 0 {
 		l.wait = DefaultWait
 	}
@@ -580,7 +595,8 @@ func (l *Log) Unlock() error {
 //
 // Changes that break FORMAT.md's rules for a change on its own are refused
 // with an error that wraps errs.ErrInvalid, before anything reaches the
-// file.
+// file. So is a vector block, which only a compacted part holds: a reader
+// takes one in a commit for damage (decode, in read.go).
 //
 // The first commit into a file syncs the database's folder before it writes
 // anything, unless this Log made the file's name at the path last itself,
@@ -610,6 +626,9 @@ func (l *Log) Append(changes []format.Change) error {
 		return l.stuck
 	}
 	seq := l.seq + 1
+	if i := blockAt(changes); i >= 0 && plant != "logfile/block-appended" {
+		return fmt.Errorf("%w: change %d of batch %d is a vector block, which only a compacted part holds", errs.ErrInvalid, i+1, seq)
+	}
 	b, sum, err := format.AppendBatch(l.batch[:0], l.hdr.Gen, seq, changes)
 	if err != nil {
 		return err

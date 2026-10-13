@@ -7,16 +7,18 @@ package hypercrux
 
 import (
 	"fmt"
+	"iter"
 
+	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/store"
 )
 
 // Compaction through the public package (G5): Compact on demand, and the
 // compaction after a commit, which Update runs once the log's Due says one
 // is due. Both go the way F8 set out. Holding the log's write lock, a read
-// of the copy hands its snapshot to the log's Compact, which writes it into
-// NAME.compact, syncs it, renames it over the database and syncs the
-// folder. The copy holds that state already, so this process reads nothing
+// of the copy hands its compacted snapshot to the log's Compact, which
+// writes it into NAME.compact, each table's vectors in vector blocks (V2),
+// syncs it, renames it over the database and syncs the folder. The copy holds that state already, so this process reads nothing
 // afresh, and other processes read the new file at their next read or Lock
 // (F9).
 //
@@ -92,9 +94,16 @@ func (db *DB) compactLocked() error {
 	return err
 }
 
-// snapshotOf is what a compaction writes of a read of the copy: the store's
-// own snapshot. A test can put another in its place, to make one panic.
-var snapshotOf = store.Reader.Snapshot
+// snapshotOf is what a compaction writes of a read of the copy: the copy's
+// compacted snapshot, which gives each table's vectors for vector blocks,
+// straight from its arrays (V2). The Reader is the copy itself, as its Read
+// hands it over. A test can put another in its place, to make one panic.
+var snapshotOf = func(r store.Reader) iter.Seq[format.Change] {
+	if plant == "hypercrux/compaction-without-blocks" {
+		return r.Snapshot()
+	}
+	return r.(*store.Store).Compacted()
+}
 
 // compactAfter is the compaction after a commit. Update runs it holding the
 // write lock, once the commit is in the file, when the log's Due says one is

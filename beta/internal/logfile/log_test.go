@@ -421,7 +421,7 @@ func TestAFailedCommitIsCutBack(t *testing.T) {
 }
 
 // TestAppendRefusesBadChanges: a change the codec refuses never reaches
-// the file.
+// the file, and nor does a vector block, which only a compacted part holds.
 func TestAppendRefusesBadChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "db")
 	l, _ := openLog(t, path, Options{})
@@ -431,7 +431,8 @@ func TestAppendRefusesBadChanges(t *testing.T) {
 	if err := l.Lock(); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range [][]format.Change{nil, table("Bad")} {
+	block := []format.Change{{Op: format.Vectors, Table: "one", Size: 1, Vecs: []format.Vector{{Key: "one:1", Bits: "\x00\x00\x80\x3f"}}}}
+	for _, c := range [][]format.Change{nil, table("Bad"), block, append(table("one"), block...)} {
 		if err := l.Append(c); !errors.Is(err, errs.ErrInvalid) {
 			t.Errorf("Append(%v): %v, where ErrInvalid is wanted", c, err)
 		}

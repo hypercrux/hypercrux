@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
+	"strconv"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -96,13 +98,14 @@ func (l *Log) readOn(size int64) error {
 		if err != nil {
 			return err
 		}
-		bt, err := format.DecodeBatch(b[:n], l.hdr.Gen, l.seq+1)
+		bt, err := l.decode(b[:n], off, l.seq+1)
 		if errors.Is(err, format.ErrDoesNotCount) {
 			break
 		}
 		if err != nil {
 			// A batch that counts, whose changes are malformed or break
-			// the rules for a change on its own: damage, marked or not.
+			// the rules for a change on its own, or hold a vector block past
+			// the compacted part: damage, marked or not.
 			return l.placed(off, err)
 		}
 		if int64(len(b)) < n+format.MarkerSize {
@@ -122,6 +125,47 @@ func (l *Log) readOn(size int64) error {
 	// A follower reads on in an order of its own, and looks at the batch it
 	// stops at (followOn, in follow.go).
 	return nil
+}
+
+// decode decodes b, the bytes of the batch seq that starts at off, as every
+// read of the log does (readOn, followOn and endBatch), and gives the same
+// errors as format.DecodeBatch. The changes come straight from b when they're
+// vector blocks alone and the Target allows it (Options.BlocksInPlace), and
+// otherwise as a copy.
+//
+// A vector block goes only in the compacted part, since only compaction
+// writes one (V2), so a batch past the compacted part that holds one is
+// damage: a *errs.Damage naming the batch and the block, at its offset from
+// the batch's start, which placed turns into the file's. In generation 1
+// there's no compacted part, and every batch is past it.
+func (l *Log) decode(b []byte, off int64, seq uint64) (format.Batch, error) {
+	dec := format.DecodeBatch
+	if l.inPlace || plant == "logfile/blocks-always-in-place" {
+		dec = format.DecodeBatchInPlace
+	}
+	bt, err := dec(b, l.hdr.Gen, seq)
+	if err != nil || uint64(off) < l.hdr.CompactedEnd || plant == "logfile/block-anywhere" {
+		return bt, err
+	}
+	if i := blockAt(bt.Changes); i >= 0 {
+		at := int64(format.BatchHeadSize)
+		for j := range i {
+			at += int64(changeSize(&bt.Changes[j]))
+		}
+		where := "past the compacted part, which ends at offset " + strconv.FormatUint(l.hdr.CompactedEnd, 10)
+		if l.hdr.Gen == 1 {
+			where = "in generation 1, which has no compacted part"
+		}
+		return format.Batch{}, &errs.Damage{Offset: at, Batch: seq, Reason: fmt.Sprintf(
+			"change %d: a vector block, %s, where only compaction writes one", i+1, where)}
+	}
+	return bt, nil
+}
+
+// blockAt returns the place of the first vector block in changes, or -1
+// when they hold none.
+func blockAt(changes []format.Change) int {
+	return slices.IndexFunc(changes, func(c format.Change) bool { return c.Op == format.Vectors })
 }
 
 // placed fills in where the damage in err is, when err holds a *errs.Damage

@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	val "github.com/hypercrux/hypercrux/beta/internal/value"
@@ -33,7 +34,7 @@ var fixtureID = [16]byte{0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0
 func sameChanges(a, b []Change) bool {
 	return slices.EqualFunc(a, b, func(x, y Change) bool {
 		return x.Op == y.Op && x.Table == y.Table && x.Size == y.Size && slices.Equal(x.Names, y.Names) &&
-			x.Key == y.Key && slices.Equal(x.Fields, y.Fields) && x.Type == y.Type && x.To == y.To
+			x.Key == y.Key && slices.Equal(x.Fields, y.Fields) && x.Type == y.Type && x.To == y.To && slices.Equal(x.Vecs, y.Vecs)
 	})
 }
 
@@ -131,7 +132,7 @@ func TestFixturesComeBackByteForByte(t *testing.T) {
 		t.Errorf("header-new.hex reads as %+v, %v, where it holds %+v", h, err, want)
 	}
 	h, err = DecodeHeader(compacted, int64(len(compacted)))
-	if want := (Header{ID: fixtureID, Gen: 2, FromGen: 1, FromSeq: 3, FromSum: 0x113f6441, CompactedEnd: 461}); err != nil || h != want {
+	if want := (Header{ID: fixtureID, Gen: 2, FromGen: 1, FromSeq: 3, FromSum: 0x113f6441, CompactedEnd: 578}); err != nil || h != want {
 		t.Errorf("header-compacted.hex reads as %+v, %v, where it holds %+v", h, err, want)
 	}
 	if m, ok := DecodeMarker(readFixture(t, "marker.hex"), fixtureID, 1); !ok || m != (Marker{Seq: 1, Sum: 0x1ed0ba7e}) {
@@ -198,7 +199,7 @@ func rawHeader(magic string, version uint32, h Header) []byte {
 // time, and some of them together, where the first in FORMAT.md's order
 // decides the error.
 func TestHeaderChecks(t *testing.T) {
-	comp := Header{ID: fixtureID, Gen: 2, FromGen: 1, FromSeq: 3, FromSum: 0x113f6441, CompactedEnd: 461}
+	comp := Header{ID: fixtureID, Gen: 2, FromGen: 1, FromSeq: 3, FromSum: 0x113f6441, CompactedEnd: 578}
 	with := func(f func(*Header)) []byte {
 		h := comp
 		f(&h)
@@ -233,9 +234,9 @@ func TestHeaderChecks(t *testing.T) {
 		{"generation 2 continuing from generation 2", with(func(h *Header) { h.FromGen = 2 }), 4096, errs.ErrDamaged},
 		{"a compacted part ending inside the header", with(func(h *Header) { h.CompactedEnd = 67 }), 4096, errs.ErrDamaged},
 		{"a compacted part ending at 0", with(func(h *Header) { h.CompactedEnd = 0 }), 4096, errs.ErrDamaged},
-		{"a compacted part ending past the end of the file", good, 460, errs.ErrDamaged},
+		{"a compacted part ending past the end of the file", good, 577, errs.ErrDamaged},
 		{"a compacted part in a file of unknown size", good, -1, errs.ErrDamaged},
-		{"a compacted part ending at the end of the file", good, 461, nil},
+		{"a compacted part ending at the end of the file", good, 578, nil},
 		{"a compacted part ending at the end of the header", with(func(h *Header) { h.CompactedEnd = 68 }), 68, nil},
 		{"a compacted file continuing from one that held no batches", with(func(h *Header) { h.FromSeq, h.FromSum = 0, 0 }), 4096, nil},
 		{"a new database", rawHeader(magicFile, Version, Header{ID: fixtureID, Gen: 1}), HeaderSize, nil},
@@ -544,6 +545,10 @@ var plain = Change{Op: Delete, Key: "docs:1"}
 
 func vector(f ...float32) val.Value { return val.Vector(f) }
 
+// bitsOf is the values' bits, 4 bytes a value, little-endian, as a vector
+// block holds them.
+func bitsOf(f ...float32) string { return val.Vector(f).Raw() }
+
 var (
 	negZero32 = float32(math.Copysign(0, -1))
 	nan32     = float32(math.NaN())
@@ -651,7 +656,26 @@ func badChanges() []struct {
 		{"a vector holding NaN", put(field("vec", vector(1, nan32)))},
 		{"a vector holding infinity", put(field("vec", vector(inf32)))},
 		{"a vector holding minus infinity", put(field("vec", vector(1, 2, -inf32)))},
+
+		{"a vector block for a table name that breaks the rules", block("Docs", 1, Vector{"Docs:1", one})},
+		{"a vector block of the vector size 0", block("docs", 0, Vector{"docs:1", ""})},
+		{"a vector block of the vector size 65,537", block("docs", 65537, Vector{"docs:1", strings.Repeat(one, 65537)})},
+		{"a vector block of the largest vector size the syntax holds", block("docs", math.MaxUint32, Vector{"docs:1", ""})},
+		{"a vector block of no vectors", block("docs", 1)},
+		{"a key that breaks the rules in a vector block", block("docs", 1, Vector{"docs", one})},
+		{"a key of another table in a vector block", block("docs", 1, Vector{"pics:1", one})},
+		{"a key whose table's name starts with the block's", block("docs", 1, Vector{"docs2:1", one})},
+		{"keys out of byte order in a vector block", block("docs", 1, Vector{"docs:2", one}, Vector{"docs:1", one})},
+		{"the same key twice in a vector block", block("docs", 1, Vector{"docs:1", one}, Vector{"docs:1", one})},
+		{"a key of a table with HyperCrux's prefix in a vector block", block("hc_docs", 1, Vector{"hc_docs:1", one})},
 	}
+}
+
+// one is the bits of the vector value 1, and block makes a vector block.
+const one = "\x00\x00\x80\x3f"
+
+func block(table string, size int, vecs ...Vector) Change {
+	return Change{Op: Vectors, Table: table, Size: size, Vecs: vecs}
 }
 
 // TestDamageInABatchThatCounts writes changes that break the rules in
@@ -722,6 +746,13 @@ func TestBrokenSyntaxIsDamage(t *testing.T) {
 		{"a link cut before the key it's to", appendString(appendString([]byte{'U'}, "docs:1"), "cites")},
 		{"a string longer than the batch", append([]byte{'X', 0xff, 0xff}, "docs"...)},
 		{"batch-several.hex's changes cut short", several[:len(several)-1]},
+		{"a vector block with more vectors than it holds", rawBlock("docs", 1, 2, []string{"docs:1"}, one)},
+		{"a vector block cut inside its keys", rawBlock("docs", 1, 2, []string{"docs:1", "docs:2"}, one+one)[:24]},
+		{"a vector block cut inside its values", rawBlock("docs", 2, 1, []string{"docs:1"}, one+one)[:25]},
+		{"a vector block of the largest count", rawBlock("docs", 1, math.MaxUint32, []string{"docs:1"}, one)},
+		{"a vector block whose values run past the checksum", rawBlock("docs", 2, 1, []string{"docs:1"}, one)},
+		{"a vector block with values to spare", rawBlock("docs", 1, 1, []string{"docs:1"}, one+one)},
+		{"a vector block cut before its count", appendString([]byte{'V'}, "docs")},
 	} {
 		b := seal(1, 1, c.changes)
 		_, err := DecodeBatch(b, 1, 1)
@@ -733,6 +764,18 @@ func TestBrokenSyntaxIsDamage(t *testing.T) {
 			t.Errorf("%s: fixtures_test.go's reader reads it", c.what)
 		}
 	}
+}
+
+// rawBlock writes a vector block whatever it holds: the table's name, the
+// vector size, the count given, the keys, then the values.
+func rawBlock(table string, size, count uint32, keys []string, values string) []byte {
+	b := appendString([]byte{'V'}, table)
+	b = binary.LittleEndian.AppendUint32(b, size)
+	b = binary.LittleEndian.AppendUint32(b, count)
+	for _, k := range keys {
+		b = appendString(b, k)
+	}
+	return append(b, values...)
 }
 
 // TestTheEncoderRefuses checks what AppendBatch refuses beyond the rules
@@ -754,7 +797,7 @@ func TestTheEncoderRefuses(t *testing.T) {
 		{"no changes", 1, 1, nil},
 		{"an empty change list", 1, 1, []Change{}},
 		{"a change of kind 0", 1, 1, []Change{{}}},
-		{"a change of kind 7", 1, 1, []Change{{Op: Drop + 1, Table: "docs"}}},
+		{"a change of kind 8", 1, 1, []Change{{Op: Vectors + 1, Table: "docs"}}},
 		{"a delete with a table", 1, 1, []Change{{Op: Delete, Key: "docs:1", Table: "docs"}}},
 		{"a put with a vector size", 1, 1, []Change{{Op: Put, Key: "docs:1", Size: 3}}},
 		{"a put with field names", 1, 1, []Change{{Op: Put, Key: "docs:1", Names: []string{"a"}}}},
@@ -763,6 +806,12 @@ func TestTheEncoderRefuses(t *testing.T) {
 		{"a link with fields", 1, 1, []Change{{Op: Link, Key: "docs:1", Type: "t", To: "docs:2", Fields: []Field{{Name: "a"}}}}},
 		{"a delete with a link type", 1, 1, []Change{{Op: Delete, Key: "docs:1", Type: "t"}}},
 		{"a negative vector size", 1, 1, []Change{{Op: CreateTable, Table: "docs", Size: -1, Names: []string{"vec"}}}},
+		{"a put with a vector block's vectors", 1, 1, []Change{{Op: Put, Key: "docs:1", Vecs: []Vector{{"docs:1", "\x00\x00\x80\x3f"}}}}},
+		{"a vector block with a key of its own", 1, 1, []Change{{Op: Vectors, Table: "docs", Size: 1, Key: "docs:1", Vecs: []Vector{{"docs:1", "\x00\x00\x80\x3f"}}}}},
+		{"a vector block with field names", 1, 1, []Change{{Op: Vectors, Table: "docs", Size: 1, Names: []string{"vec"}, Vecs: []Vector{{"docs:1", "\x00\x00\x80\x3f"}}}}},
+		{"a vector block whose vector is a value short", 1, 1, []Change{{Op: Vectors, Table: "docs", Size: 2, Vecs: []Vector{{"docs:1", "\x00\x00\x80\x3f"}}}}},
+		{"a vector block whose vector is a byte long", 1, 1, []Change{{Op: Vectors, Table: "docs", Size: 1, Vecs: []Vector{{"docs:1", "\x00\x00\x80\x3f\x00"}}}}},
+		{"a vector block with a negative vector size", 1, 1, []Change{{Op: Vectors, Table: "docs", Size: -1, Vecs: []Vector{{"docs:1", ""}}}}},
 		{"a create change with 65,536 fields", 1, 1, []Change{{Op: CreateTable, Table: "docs", Names: many}}},
 		{"a put with 65,536 fields", 1, 1, []Change{{Op: Put, Key: "docs:1", Fields: fields}}},
 	} {
@@ -838,6 +887,14 @@ func TestLimitsThatAreAllowed(t *testing.T) {
 		},
 		{{Op: CreateTable, Table: "wide", Names: wide}},
 		{{Op: Put, Key: "wide:1", Fields: wideFields}},
+		{
+			{Op: Vectors, Table: "a", Size: 1, Vecs: []Vector{{"a:1", one}, {"a:" + strings.Repeat("k", maxKey-2), bitsOf(negZero32)}}},
+			{Op: Vectors, Table: strings.Repeat("t", maxTableName), Size: 3, Vecs: []Vector{
+				{strings.Repeat("t", maxTableName) + ":é", bitsOf(negZero32, sub, math.MaxFloat32)},
+				{strings.Repeat("t", maxTableName) + ":𝄞", bitsOf(-math.MaxFloat32, math.Float32frombits(0x00800000), math.Float32frombits(0x807fffff))},
+			}},
+		},
+		{{Op: Vectors, Table: "docs", Size: maxVecDims, Vecs: []Vector{{"docs:1", bitsOf(dims...)}, {"docs:2", bitsOf(dims...)}}}},
 	}
 	for i, cs := range batches {
 		b, s, err := AppendBatch(nil, 1, uint64(i+1), cs)
@@ -851,6 +908,115 @@ func TestLimitsThatAreAllowed(t *testing.T) {
 		ref, err := readBatch(b, 1)
 		if err != nil || !sameChanges(toChanges(ref.changes), cs) {
 			t.Fatalf("batch %d: fixtures_test.go's reader gives %v", i+1, err)
+		}
+	}
+}
+
+// TestInPlaceBlocksShareTheBytes: DecodeBatchInPlace hands a batch of vector
+// blocks alone straight from the bytes it was given, so the strings in its
+// changes are over those bytes, and a change to the bytes shows in them. A
+// batch that holds anything else it copies, as DecodeBatch copies every
+// batch, and both read the same changes.
+func TestInPlaceBlocksShareTheBytes(t *testing.T) {
+	// over reports whether s's bytes lie inside b's, which takes package
+	// unsafe: Go gives no other way to ask where a string's bytes are.
+	over := func(s string, b []byte) bool {
+		p, lo := uintptr(unsafe.Pointer(unsafe.StringData(s))), uintptr(unsafe.Pointer(unsafe.SliceData(b)))
+		return len(s) > 0 && p >= lo && p+uintptr(len(s)) <= lo+uintptr(len(b))
+	}
+	blocks := []Change{
+		block("docs", 2, Vector{"docs:1", one + one}, Vector{"docs:2", bitsOf(2, negZero32)}),
+		block("pics", 1, Vector{"pics:a", one}),
+	}
+	mixed := []Change{plain, blocks[0]}
+	for _, c := range []struct {
+		what    string
+		changes []Change
+		shared  bool
+	}{
+		{"two vector blocks", blocks, true},
+		{"one vector block", blocks[1:], true},
+		{"a delete and a vector block", mixed, false},
+		{"a vector block and a delete", []Change{blocks[1], plain}, false},
+		{"a delete", []Change{plain}, false},
+	} {
+		b, _, err := AppendBatch(nil, 1, 1, c.changes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		in, err := DecodeBatchInPlace(b, 1, 1)
+		if err != nil || !sameChanges(in.Changes, c.changes) {
+			t.Fatalf("%s: DecodeBatchInPlace gives %v, %v", c.what, in.Changes, err)
+		}
+		copied, err := DecodeBatch(b, 1, 1)
+		if err != nil || !sameChanges(copied.Changes, c.changes) {
+			t.Fatalf("%s: DecodeBatch gives %v, %v", c.what, copied.Changes, err)
+		}
+		for i, ch := range in.Changes {
+			for _, v := range ch.Vecs {
+				if over(v.Key, b) != c.shared || over(v.Bits, b) != c.shared || over(ch.Table, b) != c.shared {
+					t.Errorf("%s: change %d's strings are over the bytes given: %v, %v and %v, where %v is wanted", c.what, i+1, over(ch.Table, b), over(v.Key, b), over(v.Bits, b), c.shared)
+				}
+			}
+			if over(ch.Key, b) || ch.Op != Vectors && over(ch.Table, b) {
+				t.Errorf("%s: change %d, %v, shares the bytes given", c.what, i+1, ch)
+			}
+		}
+		for _, ch := range copied.Changes {
+			for _, v := range ch.Vecs {
+				if over(v.Key, b) || over(v.Bits, b) || over(ch.Table, b) {
+					t.Errorf("%s: DecodeBatch's change %v shares the bytes given", c.what, ch)
+				}
+			}
+		}
+		if c.shared {
+			last := in.Changes[len(in.Changes)-1].Vecs
+			was := strings.Clone(last[len(last)-1].Bits)
+			b[in.Length-5] ^= 0xff // the last value's last byte, just before the checksum
+			if now := last[len(last)-1].Bits; now == was || !sameChanges(copied.Changes, c.changes) {
+				t.Errorf("%s: with the bytes changed, the vector reads %q in place, where it was %q, and DecodeBatch's changes hold %v", c.what, now, was, copied.Changes)
+			}
+		}
+	}
+}
+
+// TestABlocksValuesAreTheReadersToCheck: a vector block whose vectors break
+// the rules for a vector's values, NaN, infinity or all zeros, is one the
+// codec writes and reads, since the reader checks the values as it applies
+// the block, where it works out each vector's norm from the same sum. So
+// does fixtures_test.go's reader at the batch, and its replay refuses them,
+// as a store does.
+func TestABlocksValuesAreTheReadersToCheck(t *testing.T) {
+	for _, c := range []struct {
+		what string
+		bits string
+	}{
+		{"NaN", bitsOf(1, nan32)},
+		{"infinity", bitsOf(inf32, 1)},
+		{"minus infinity", bitsOf(-inf32, 1)},
+		{"zeros", bitsOf(0, 0)},
+		{"-0 and 0", bitsOf(negZero32, 0)},
+	} {
+		changes := []Change{block("docs", 2, Vector{"docs:1", c.bits})}
+		b, _, err := AppendBatch(nil, 1, 1, changes)
+		if err != nil {
+			t.Fatalf("%s: AppendBatch gives %v", c.what, err)
+		}
+		bt, err := DecodeBatch(b, 1, 1)
+		if err != nil || !sameChanges(bt.Changes, changes) {
+			t.Fatalf("%s: DecodeBatch gives %v, %v", c.what, bt.Changes, err)
+		}
+		ref, err := readBatch(b, 1)
+		if err != nil {
+			t.Fatalf("%s: fixtures_test.go's reader gives %v", c.what, err)
+		}
+		s := &state{
+			tables:  map[string]*table{"docs": {fields: []string{"vec"}, size: 2}},
+			records: map[string]map[string]value{"docs:1": {}},
+			links:   map[link]bool{},
+		}
+		if err := s.apply(ref.changes[0]); err == nil {
+			t.Errorf("%s: fixtures_test.go's replay takes the block", c.what)
 		}
 	}
 }

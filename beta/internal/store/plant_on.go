@@ -98,6 +98,20 @@ import "os"
 //     instead of the closest k.
 //   - store/nearest-table-first: Nearest looks for the table before it
 //     checks k, so a bad k on a table that isn't there gives not found.
+//
+// V2's, in vector blocks:
+//
+//   - store/compacted-last-vector-dropped: the compacted snapshot leaves out
+//     each table's last vector, so a compaction loses it.
+//   - store/compacted-in-slot-order: the compacted snapshot gives each
+//     table's keys in byte order and their vectors in the order of their
+//     slots, so after a delete and a put that takes the freed slot, a
+//     compaction gives records each other's vectors.
+//   - store/block-unchecked: a vector block's values go into the arrays
+//     without their check, so NaN, infinity or a vector of zeros in a block
+//     is taken.
+//   - store/block-norm-left-out: a vector block's vectors get no norm, so a
+//     search after opening a compacted file finds every distance 1.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "store/nulls-kept", "store/drop-keeps-records", "store/spelt-as-given", "store/size-unchecked",
@@ -111,7 +125,8 @@ var plant = func() string {
 		"store/both-not-merged", "store/walk-unsorted", "store/walk-start-included", "store/snapshot-links-by-table",
 		"store/freed-slot-taken-at-once", "store/overwrite-not-kept", "store/norm-not-undone",
 		"store/deleted-vector-found", "store/ties-by-slot", "store/filter-after-distance", "store/top-k-first-seen",
-		"store/nearest-table-first":
+		"store/nearest-table-first",
+		"store/compacted-last-vector-dropped", "store/compacted-in-slot-order", "store/block-unchecked", "store/block-norm-left-out":
 		return p
 	}
 	return ""

@@ -455,9 +455,14 @@ func (tx *Tx) Unlink(from, typ, to string) error {
 // the transaction's change list too. The list keeps copies of the change's
 // Names and Fields, so the caller can use its slices again, as a snapshot
 // does with a Put's Fields. A batch from the log goes in whole through
-// Store.ApplyBatch instead.
+// Store.ApplyBatch instead. A vector block is refused with an error that
+// wraps errs.ErrInvalid, since only a compacted part holds one, and a
+// transaction's change list is a commit's batch (V2).
 func (tx *Tx) Apply(c format.Change) error {
 	return tx.write(func(dst []format.Change) ([]format.Change, error) {
+		if c.Op == format.Vectors {
+			return dst, fmt.Errorf("%w: a vector block for table %s, which only a compacted part holds, so no commit writes one", errs.ErrInvalid, c.Table)
+		}
 		if err := tx.s.apply(c); err != nil {
 			return dst, err
 		}

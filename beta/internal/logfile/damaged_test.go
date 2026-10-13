@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"maps"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -22,6 +23,7 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
 	"github.com/hypercrux/hypercrux/beta/internal/fsys"
+	"github.com/hypercrux/hypercrux/beta/internal/rules"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
@@ -226,6 +228,45 @@ func damagedFixtures(t *testing.T) []fixture {
 		fixture{name: "compacted-part-middle", what: "a compacted file whose compacted part's first batch fails its checksum, with a commit after the compacted part",
 			b: changed(whole.b, whole.markers[0]-5, 0x10), batch: 1, at: format.HeaderSize, confirm: true},
 	)
+
+	// V2's vector blocks. A compacted file that holds vectors, continuing
+	// from the new file's batch 4: a compacted part of two batches, the
+	// table pics, with the vector size 2, and its two records, then their
+	// vectors in a vector block of its own, and a commit after the compacted
+	// part. Its block, or its commit, is the damaged one.
+	block := func(table string, keyBits ...string) format.Change {
+		c := format.Change{Op: format.Vectors, Table: table, Size: 2}
+		for i := 0; i+1 < len(keyBits); i += 2 {
+			c.Vecs = append(c.Vecs, format.Vector{Key: keyBits[i], Bits: keyBits[i+1]})
+		}
+		return c
+	}
+	bits := func(v ...float32) string { return value.Vector(v).Raw() }
+	pics := []format.Change{{Op: format.CreateTable, Table: "pics", Size: 2, Names: []string{"vec"}}, put("pics:1"), put("pics:2")}
+	good := block("pics", "pics:1", bits(1, 2), "pics:2", bits(3, 4))
+	after := []format.Change{put("pics:3", n(3))}
+	noTable := compacted(pics, []format.Change{block("nosuch", "nosuch:1", bits(1, 2))}, after)
+	nan := compacted(pics, []format.Change{block("pics", "pics:1", bits(1, float32(math.NaN())), "pics:2", bits(3, 4))}, after)
+	blocks := compacted(pics, []format.Change{good}, after)
+	commitBlock := compacted(pics, []format.Change{good}, []format.Change{block("pics", "pics:3", bits(5, 6))})
+	// The count's first byte in the good block, after the batch's head, the
+	// block's kind, the table's name and the vector size, and the offset
+	// where a count of 3 runs out of values: past the two keys, and the 2
+	// bytes of values that the decoder takes for the length of a third key.
+	count := blocks.batches[1] + format.BatchHeadSize + 1 + 2 + len("pics") + 4
+	runsOut := int64(blocks.batches[1] + format.BatchHeadSize + format.BlockHeadSize("pics") + 2*(2+len("pics:1")) + 2)
+	fixtures = append(fixtures,
+		fixture{name: "block-no-table", what: "a compacted file whose vector block, in its compacted part's batch 2, is for a table that doesn't exist",
+			b: noTable.b, batch: 2, at: int64(noTable.batches[1])},
+		fixture{name: "block-nan", what: "a compacted file whose vector block, in its compacted part's batch 2, gives pics:1 a vector holding NaN",
+			b: nan.b, batch: 2, at: int64(nan.batches[1])},
+		fixture{name: "block-malformed", what: "a compacted file whose vector block, in its compacted part's batch 2, counts three vectors and holds two",
+			b: blocks.resealed(2, count, 2^3), batch: 2, at: runsOut},
+		fixture{name: "block-past-compacted-part", what: "a compacted file whose commit after the compacted part, batch 3, is a vector block, which only compaction writes",
+			b: commitBlock.b, batch: 3, at: int64(commitBlock.batches[2] + format.BatchHeadSize)},
+		fixture{name: "block-generation-1-middle", what: "batch 2 counts and is marked, and is a vector block, in generation 1, which has no compacted part",
+			b: instead(mid, []format.Change{block("docs", "docs:2", bits(1, 2))}).b, batch: 2, at: off(mid) + format.BatchHeadSize},
+	)
 	return fixtures
 }
 
@@ -243,9 +284,10 @@ func manifest(fixtures []fixture) string {
 	return b.String()
 }
 
-// tables is a Target that keeps the one rule for the state that the damaged
+// tables is a Target that keeps the rules for the state that the damaged
 // fixtures break: a change names a table that exists, which a create change
-// makes and a drop takes away. It refuses a batch that breaks it as the
+// makes and a drop takes away, and a vector block's vectors hold finite
+// values that aren't all zero. It refuses a batch that breaks them as the
 // store does, with a *errs.Damage naming the batch and the change, and
 // takes the whole batch or none of it.
 type tables struct {
@@ -260,7 +302,7 @@ func (r *tables) Apply(seq uint64, changes []format.Change) error {
 	}
 	for i, c := range changes {
 		name := c.Table
-		if c.Op != format.CreateTable && c.Op != format.Drop {
+		if c.Op != format.CreateTable && c.Op != format.Drop && c.Op != format.Vectors {
 			name, _, _ = strings.Cut(c.Key, ":")
 		}
 		switch {
@@ -272,6 +314,11 @@ func (r *tables) Apply(seq uint64, changes []format.Change) error {
 			return &errs.Damage{Batch: seq, Reason: fmt.Sprintf("change %d: no table %s", i+1, name)}
 		case c.Op == format.Drop:
 			delete(have, name)
+		}
+		for _, v := range c.Vecs {
+			if err := rules.Vector(value.VectorBits(v.Bits).Vector()); err != nil {
+				return &errs.Damage{Batch: seq, Reason: fmt.Sprintf("change %d: the vector of %s: %v", i+1, v.Key, err)}
+			}
 		}
 	}
 	r.have = have

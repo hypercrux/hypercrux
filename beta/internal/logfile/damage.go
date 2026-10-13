@@ -124,7 +124,8 @@ func (l *Log) past(why string) *errs.Damage {
 // goes, which are good until the window is read again or released. When
 // what's there isn't a batch that counts, the bytes are nil. Changes in a
 // batch that counts that are malformed, or break the rules for a change on
-// its own, are the codec's damage, placed in the file.
+// its own, are the codec's damage, placed in the file, and so is a vector
+// block, since the end of the log is past the compacted part (decode).
 func (l *Log) endBatch(size int64) (format.Batch, []byte, error) {
 	off, room, seq := l.end, size-l.end, l.seq+1
 	if room < format.BatchHeadSize {
@@ -142,7 +143,7 @@ func (l *Log) endBatch(size int64) (format.Batch, []byte, error) {
 	if err != nil {
 		return format.Batch{}, nil, unread(err)
 	}
-	bt, err := format.DecodeBatch(b[:n], l.hdr.Gen, seq)
+	bt, err := l.decode(b[:n], off, seq)
 	if errors.Is(err, format.ErrDoesNotCount) {
 		return format.Batch{}, nil, nil
 	}

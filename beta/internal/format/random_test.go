@@ -9,6 +9,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
+	"maps"
 	"math"
 	"math/rand/v2"
 	"slices"
@@ -281,7 +283,7 @@ func (m *maker) count() int {
 }
 
 func (m *maker) change() Change {
-	switch m.r.IntN(8) {
+	switch m.r.IntN(9) {
 	case 0:
 		vec := m.one(2)
 		c := Change{Op: CreateTable, Table: m.tableName(), Names: m.names(m.count(), vec)}
@@ -310,8 +312,60 @@ func (m *maker) change() Change {
 		return Change{Op: Link, Key: m.key(), Type: m.linkType(), To: m.key()}
 	case 6:
 		return Change{Op: Unlink, Key: m.key(), Type: m.linkType(), To: m.key()}
+	case 7:
+		return Change{Op: Drop, Table: m.tableName()}
 	}
-	return Change{Op: Drop, Table: m.tableName()}
+	return m.block()
+}
+
+// block returns a vector block for a table, with keys of that table in byte
+// order and vectors of awkward values. Now and then a value is NaN or
+// infinite, or a vector is all zeros, which only a reader that applies the
+// block refuses: the codec leaves a block's values alone.
+func (m *maker) block() Change {
+	t := m.tableName()
+	c := Change{Op: Vectors, Table: t, Size: pick(m, []int{1, 2, 3, 384, 1 + m.r.IntN(64)})}
+	if m.one(500) {
+		c.Size = maxVecDims
+	}
+	if m.breaks() {
+		c.Size = pick(m, []int{0, maxVecDims + 1})
+	}
+	n := 1 + m.r.IntN(4)
+	if m.one(20) {
+		n = 20 + m.r.IntN(40)
+	}
+	if m.breaks() {
+		n = 0
+	}
+	keys := map[string]bool{}
+	for len(keys) < n {
+		keys[t+":"+m.text(m.size(1, 40), false)] = true
+	}
+	sorted := slices.Sorted(maps.Keys(keys))
+	if m.breaks() && len(sorted) > 1 {
+		i := m.r.IntN(len(sorted) - 1)
+		sorted[i], sorted[i+1] = sorted[i+1], sorted[i]
+	}
+	if m.breaks() && len(sorted) > 0 {
+		sorted[m.r.IntN(len(sorted))] = m.key() // most likely another table's
+	}
+	for _, key := range sorted {
+		bits := make([]byte, 0, 4*c.Size)
+		zeros := m.one(30)
+		for range c.Size {
+			x := pick(m, vecBits)
+			switch {
+			case zeros:
+				x = 0
+			case m.one(3):
+				x = m.r.Uint32() // NaN or infinite now and then
+			}
+			bits = binary.LittleEndian.AppendUint32(bits, x)
+		}
+		c.Vecs = append(c.Vecs, Vector{Key: key, Bits: string(bits)})
+	}
+	return c
 }
 
 func (m *maker) changes() []Change {
@@ -364,6 +418,9 @@ func TestRandomRoundTrips(t *testing.T) {
 		if err != nil || !sameChanges(bt.Changes, cs) || bt.Length != len(b) || bt.Sum != s || bt.Seq != seq {
 			t.Fatalf("round %d: %v\ncomes back as %+v, %v", round, cs, bt, err)
 		}
+		if in, err := DecodeBatchInPlace(slices.Clone(b), gen, seq); err != nil || !sameChanges(in.Changes, cs) || in.Length != bt.Length || in.Sum != s {
+			t.Fatalf("round %d: %v\ncomes back in place as %+v, %v", round, cs, in, err)
+		}
 		if again, s2, err := AppendBatch(nil, gen, seq, bt.Changes); err != nil || s2 != s || !bytes.Equal(again, b) {
 			t.Fatalf("round %d: the batch decoded and encoded again differs, %v", round, err)
 		}
@@ -410,6 +467,7 @@ func TestTheRulesMatchTheFixturesReader(t *testing.T) {
 		}
 		bt, err := DecodeBatch(b, 1, 1)
 		_, refErr := readBatch(b, 1)
+		checkInPlace(t, b, 1, 1)
 		switch {
 		case (err == nil) != (refErr == nil):
 			t.Fatalf("round %d: DecodeBatch gives %v, and fixtures_test.go's reader %v, for %v", round, err, refErr, cs)
@@ -456,6 +514,7 @@ func TestChangedBytes(t *testing.T) {
 		binary.LittleEndian.PutUint32(c[len(c)-4:], sum(c[:len(c)-4]))
 		bt, err := DecodeBatch(c, 1, 1)
 		_, refErr := readBatch(c, 1)
+		checkInPlace(t, c, 1, 1)
 		switch {
 		case (err == nil) != (refErr == nil):
 			t.Fatalf("round %d: DecodeBatch gives %v, and fixtures_test.go's reader %v", round, err, refErr)
@@ -466,5 +525,16 @@ func TestChangedBytes(t *testing.T) {
 				t.Fatalf("round %d: the batch decoded and encoded again differs, %v", round, err)
 			}
 		}
+	}
+}
+
+// checkInPlace checks that DecodeBatchInPlace reads b as DecodeBatch does:
+// the same batch, or the same error.
+func checkInPlace(t testing.TB, b []byte, gen, seq uint64) {
+	t.Helper()
+	want, wantErr := DecodeBatch(b, gen, seq)
+	got, err := DecodeBatchInPlace(slices.Clone(b), gen, seq)
+	if fmt.Sprint(err) != fmt.Sprint(wantErr) || got.Seq != want.Seq || got.Length != want.Length || got.Sum != want.Sum || !sameChanges(got.Changes, want.Changes) {
+		t.Fatalf("DecodeBatchInPlace gives %+v, %v, where DecodeBatch gives %+v, %v", got, err, want, wantErr)
 	}
 }

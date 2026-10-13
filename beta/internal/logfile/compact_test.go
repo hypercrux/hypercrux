@@ -61,9 +61,12 @@ type db struct {
 	c *copyTarget
 }
 
-// openDB opens the database at path through files.
+// openDB opens the database at path through files. The store keeps none of
+// a vector block's strings, so the log hands it batches of blocks in place,
+// as the public package's log does.
 func openDB(files fsys.FS, path string, o Options) (*db, error) {
 	c := &copyTarget{s: store.New(), opening: true}
+	o.BlocksInPlace = true
 	l, err := Open(files, path, c, o)
 	if err != nil {
 		return nil, err
@@ -107,9 +110,11 @@ func (d *db) commit(fn func(tx *store.Tx) error) (err error) {
 }
 
 // compactLocked compacts holding the write lock, from a read of the copy,
-// as the public package does once a commit's Due says so (G5).
+// as the public package does once a commit's Due says so (G5): the copy's
+// compacted snapshot, with its vectors in vector blocks (V2).
 func (d *db) compactLocked() error {
-	return d.c.s.Read(func(r store.Reader) error { return d.l.Compact(r.Snapshot()) })
+	s := d.c.s
+	return s.Read(func(store.Reader) error { return d.l.Compact(s.Compacted()) })
 }
 
 // compact is the public package's Compact: Lock, the compaction, Unlock.
@@ -309,8 +314,9 @@ func TestCompactingTheFixture(t *testing.T) {
 // file and renames it over the database. The new file has the next
 // generation, names the batch it continues from, and ends where its
 // compacted part does, which is shorter than the old file by the dead data.
-// The compacted part's batches hold about as much as they're asked to, and
-// the links start a batch of their own. The old file stays as it was, and
+// The compacted part's batches hold about as much as they're asked to, the
+// vectors are in a vector block alone in its batch, and the links start a
+// batch of their own. The old file stays as it was, and
 // nothing is left beside the database. The Log holds the new file, the copy
 // is as it was without a reset, and the commits after the compaction go into
 // the new file, numbered on from the compacted part. A second compaction
@@ -348,7 +354,7 @@ func TestACompactionSwitchesFiles(t *testing.T) {
 	if d.l.seq != uint64(len(batches)) || len(batches) < 4 {
 		t.Errorf("the compacted part holds %d batches, and the Log has read %d", len(batches), d.l.seq)
 	}
-	linked := false
+	linked, vectors := false, 0
 	for _, bt := range batches {
 		n := 0
 		for i := range bt.Changes {
@@ -362,9 +368,23 @@ func TestACompactionSwitchesFiles(t *testing.T) {
 			t.Errorf("batch %d holds links and other changes: %v", bt.Seq, bt.Changes)
 		}
 		linked = linked || links
+		if i := blockAt(bt.Changes); i >= 0 {
+			if len(bt.Changes) > 1 {
+				t.Errorf("batch %d holds a vector block and other changes: %v", bt.Seq, bt.Changes)
+			}
+			vectors += len(bt.Changes[i].Vecs)
+		}
+		for _, c := range bt.Changes {
+			if c.Op == format.Put && slices.ContainsFunc(c.Fields, func(f format.Field) bool { return f.Value.Kind() == value.KindVector }) {
+				t.Errorf("batch %d puts %s's vector, where it goes in a vector block", bt.Seq, c.Key)
+			}
+		}
 	}
 	if !linked {
 		t.Error("the compacted part holds no links")
+	}
+	if vectors != 3 {
+		t.Errorf("the compacted part's vector blocks hold %d vectors, where the copy holds 3", vectors)
 	}
 	if got := names(t, dir); got != "db" {
 		t.Errorf("the folder holds %q", got)
@@ -441,6 +461,9 @@ func TestChangeSize(t *testing.T) {
 	changes = append(changes,
 		format.Change{Op: format.CreateTable, Table: "docs", Size: 3, Names: []string{"title", "vec", "_x9"}},
 		format.Change{Op: format.Put, Key: "docs:1"},
+		format.Change{Op: format.Vectors, Table: "docs", Size: 1, Vecs: []format.Vector{{Key: "docs:1", Bits: "\x00\x00\x80\x3f"}}},
+		format.Change{Op: format.Vectors, Table: "t2", Size: 2, Vecs: []format.Vector{
+			{Key: "t2:a", Bits: strings.Repeat("\x01\x00\x00\x00", 2)}, {Key: "t2:" + strings.Repeat("k", 300), Bits: strings.Repeat("\x00\x00\x00\x80", 2)}}},
 	)
 	for _, c := range changes {
 		b, _, err := format.AppendBatch(nil, 1, 1, []format.Change{c})

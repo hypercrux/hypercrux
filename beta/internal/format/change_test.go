@@ -14,7 +14,7 @@ import (
 	val "github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
-func TestTheSixChanges(t *testing.T) {
+func TestTheSevenChanges(t *testing.T) {
 	for _, c := range []struct {
 		c    Change
 		show string
@@ -25,6 +25,8 @@ func TestTheSixChanges(t *testing.T) {
 		{Change{Op: Link, Key: "docs:1", Type: "cites", To: "docs:2"}, "link docs:1 -cites-> docs:2"},
 		{Change{Op: Unlink, Key: "docs:1", Type: "cites", To: "docs:2"}, "unlink docs:1 -cites-> docs:2"},
 		{Change{Op: Drop, Table: "docs"}, "drop table docs"},
+		{Change{Op: Vectors, Table: "docs", Size: 1, Vecs: []Vector{{"docs:1", "\x00\x00\x80\x3f"}, {"docs:2", "\x00\x00\x00\x80"}}},
+			"vector block docs, vector size 1 {docs:1: vector [1 (3f800000)], docs:2: vector [-0 (80000000)]}"},
 		{Change{}, "Op(0)"},
 	} {
 		if got := c.c.String(); got != c.show {
@@ -61,6 +63,7 @@ func TestChangesCarryTheFixtures(t *testing.T) {
 		}
 	}
 	ops, kinds := map[Op]bool{}, map[val.Kind]bool{}
+	blocks := 0
 	for _, c := range all {
 		ch := toChange(c)
 		ops[ch.Op] = true
@@ -80,13 +83,23 @@ func TestChangesCarryTheFixtures(t *testing.T) {
 				t.Errorf("%s's vector holds % x, where the file holds % x", ch.Key, f.Value.Raw(), want)
 			}
 		}
+		for i, v := range ch.Vecs {
+			var want []byte
+			for _, bits := range c.vecs[i] {
+				want = binary.LittleEndian.AppendUint32(want, bits)
+			}
+			if v.Key != c.keys[i] || v.Bits != string(want) {
+				t.Errorf("%s's vector in a block holds % x, where the file holds % x for %s", v.Key, v.Bits, want, c.keys[i])
+			}
+			blocks++
+		}
 	}
-	if len(ops) != 6 || len(kinds) != 6 {
-		t.Errorf("the fixtures gave %d kinds of change and %d kinds of value, where there are 6 of each", len(ops), len(kinds))
+	if len(ops) != 7 || len(kinds) != 6 || blocks == 0 {
+		t.Errorf("the fixtures gave %d kinds of change, %d kinds of value and %d vectors in blocks, where there are 7, 6 and some", len(ops), len(kinds), blocks)
 	}
 }
 
-var opOf = map[byte]Op{'T': CreateTable, 'P': Put, 'D': Delete, 'L': Link, 'U': Unlink, 'X': Drop}
+var opOf = map[byte]Op{'T': CreateTable, 'P': Put, 'D': Delete, 'L': Link, 'U': Unlink, 'X': Drop, 'V': Vectors}
 
 func toChange(c change) Change {
 	ch := Change{Op: opOf[c.kind]}
@@ -102,6 +115,15 @@ func toChange(c change) Change {
 		ch.Key = c.name
 	case Link, Unlink:
 		ch.Key, ch.Type, ch.To = c.name, c.typ, c.to
+	case Vectors:
+		ch.Table, ch.Size = c.name, int(c.size)
+		for i, key := range c.keys {
+			var bits []byte
+			for _, x := range c.vecs[i] {
+				bits = binary.LittleEndian.AppendUint32(bits, x)
+			}
+			ch.Vecs = append(ch.Vecs, Vector{Key: key, Bits: string(bits)})
+		}
 	}
 	return ch
 }
@@ -125,6 +147,16 @@ func fromChange(ch Change) change {
 		c.name = ch.Key
 	case Link, Unlink:
 		c.name, c.typ, c.to = ch.Key, ch.Type, ch.To
+	case Vectors:
+		c.name, c.size = ch.Table, uint32(ch.Size)
+		for _, v := range ch.Vecs {
+			c.keys = append(c.keys, v.Key)
+			var bits []uint32
+			for i := 0; i+4 <= len(v.Bits); i += 4 {
+				bits = append(bits, binary.LittleEndian.Uint32([]byte(v.Bits[i:i+4])))
+			}
+			c.vecs = append(c.vecs, bits)
+		}
 	}
 	return c
 }

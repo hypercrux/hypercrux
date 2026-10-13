@@ -38,6 +38,7 @@ const (
 	maxVecDims   = 65536          // the most values in a vector, and the largest vector size
 	maxCount     = math.MaxUint16 // the most fields a create change or a put carries
 	maxBlob      = math.MaxUint32 // the most bytes in a text or bytes value
+	maxBlock     = math.MaxUint32 // the most vectors in a vector block
 )
 
 // problem says what's wrong with c by the rules for a change on its own,
@@ -45,7 +46,7 @@ const (
 // that its Op names, so one that sets any other is refused too, which
 // keeps decode(encode(c)) the same as c.
 func (c *Change) problem() string {
-	if c.Op < CreateTable || c.Op > Drop {
+	if c.Op < CreateTable || c.Op > Vectors {
 		return "a change of unknown kind " + c.Op.String()
 	}
 	if why := c.strays(); why != "" {
@@ -119,6 +120,47 @@ func (c *Change) problem() string {
 		if !isTableName(c.Table) {
 			return badTable(c.Table)
 		}
+	case Vectors:
+		return c.blockProblem()
+	}
+	return ""
+}
+
+// blockProblem says what's wrong with c, a vector block, by the rules for a
+// change on its own, or returns "": the table's name, a vector size of 1 to
+// 65,536, one vector at least, and each key a key of the table, in byte
+// order, with as many bytes of values as the vector size takes. The values
+// themselves aren't looked at here. A reader checks them as it takes them
+// into its table's array, where it works out each vector's norm from the
+// same sum, so a vector block costs no pass of the codec's over its values,
+// and a writer's store holds only vectors that keep the rules.
+func (c *Change) blockProblem() string {
+	if !isTableName(c.Table) {
+		return badTable(c.Table)
+	}
+	if c.Size < 1 || c.Size > maxVecDims {
+		return fmt.Sprintf("a vector block of the vector size %d, outside 1 to 65,536", c.Size)
+	}
+	switch {
+	case len(c.Vecs) == 0:
+		return "a vector block of no vectors"
+	case len(c.Vecs) > maxBlock:
+		return fmt.Sprintf("a vector block of %d vectors, more than the 4,294,967,295 one holds", len(c.Vecs))
+	}
+	each := 4 * c.Size
+	for i, v := range c.Vecs {
+		switch {
+		case !isKey(v.Key):
+			return badKey(v.Key)
+		case len(v.Key) <= len(c.Table) || v.Key[len(c.Table)] != ':' || v.Key[:len(c.Table)] != c.Table:
+			return fmt.Sprintf("the key %s in a vector block for the table %s", show(v.Key), c.Table)
+		case i > 0 && v.Key <= c.Vecs[i-1].Key:
+			return fmt.Sprintf("the key %s after %s in a vector block, out of byte order", show(v.Key), show(c.Vecs[i-1].Key))
+		case len(v.Bits) != each:
+			// Only a writer can get this wrong: the decoder gives each vector
+			// the bytes the vector size takes.
+			return fmt.Sprintf("the vector of %s in a vector block holding %d bytes, where %d values take %d", show(v.Key), len(v.Bits), c.Size, each)
+		}
 	}
 	return ""
 }
@@ -126,16 +168,16 @@ func (c *Change) problem() string {
 // strays names the fields of Change that c sets and its Op doesn't use.
 func (c *Change) strays() string {
 	var set []string
-	if c.Table != "" && c.Op != CreateTable && c.Op != Drop {
+	if c.Table != "" && c.Op != CreateTable && c.Op != Drop && c.Op != Vectors {
 		set = append(set, "Table")
 	}
-	if c.Size != 0 && c.Op != CreateTable {
+	if c.Size != 0 && c.Op != CreateTable && c.Op != Vectors {
 		set = append(set, "Size")
 	}
 	if len(c.Names) != 0 && c.Op != CreateTable {
 		set = append(set, "Names")
 	}
-	if c.Key != "" && (c.Op == CreateTable || c.Op == Drop) {
+	if c.Key != "" && (c.Op == CreateTable || c.Op == Drop || c.Op == Vectors) {
 		set = append(set, "Key")
 	}
 	if len(c.Fields) != 0 && c.Op != Put {
@@ -146,6 +188,9 @@ func (c *Change) strays() string {
 	}
 	if c.To != "" && c.Op != Link && c.Op != Unlink {
 		set = append(set, "To")
+	}
+	if len(c.Vecs) != 0 && c.Op != Vectors {
+		set = append(set, "Vecs")
 	}
 	if set == nil {
 		return ""

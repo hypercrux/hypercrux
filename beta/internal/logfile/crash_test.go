@@ -553,11 +553,17 @@ func (d *db) crashCommit(m model, i int, compact bool) {
 // a crash would, and returns its state. Open's check of the end of the log
 // holds the write lock, once it has checked that the file it locked is the
 // one at the path, so a NAME.compact that a crash left is gone by the time
-// Open returns, and it's a failure if it isn't.
+// Open returns, and it's a failure if it isn't. The copy's own check has to
+// find nothing either, its vectors read from a compacted file's vector
+// blocks among them (V2).
 func compactReopen(sys fsys.FS) (string, error) {
 	d, err := openDB(sys, crashPath, crashOptions)
 	if err != nil {
 		return "", err
+	}
+	if c := d.c.s.Check(); len(c.Problems) != 0 {
+		d.l.Close()
+		return "", fmt.Errorf("the copy's check finds %q", c.Problems)
 	}
 	state := d.state()
 	if err := d.l.Close(); err != nil {

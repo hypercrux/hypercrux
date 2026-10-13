@@ -153,12 +153,15 @@ func (s *Store) direct(op string) {
 // in byte order of name, and keeps the rules Put keeps. A Delete needs its
 // record, and a Drop its table. A Link needs both its records, a type that
 // keeps the rules, and no link of that type between them already, since a
-// writer never adds one twice. An Unlink needs its link. A change that sets
-// a field of format.Change its Op doesn't use is refused, as
-// format.AppendBatch refuses it. On an error nothing changes. The errors
-// wrap errs.ErrInvalid, or errs.ErrNotFound for a missing record, table or
-// link. ApplyBatch and LoadBatch apply a whole batch from the log, and
-// report any of them as damage.
+// writer never adds one twice. An Unlink needs its link. A Vectors change, a
+// vector block, needs its table with the block's vector size, and each
+// record it names one of the table's, in byte order of key, with no vector
+// yet, and each vector's values finite and not all zero (applyVectors, in
+// vectors.go). A change that sets a field of format.Change its Op doesn't
+// use is refused, as format.AppendBatch refuses it. On an error nothing
+// changes. The errors wrap errs.ErrInvalid, or errs.ErrNotFound for a
+// missing record, table or link. ApplyBatch and LoadBatch apply a whole
+// batch from the log, and report any of them as damage.
 func (s *Store) Apply(c format.Change) error {
 	s.direct("Apply")
 	return s.apply(c)
@@ -183,6 +186,8 @@ func (s *Store) apply(c format.Change) error {
 		return s.applyLink(c)
 	case format.Unlink:
 		return s.applyUnlink(c)
+	case format.Vectors:
+		return s.applyVectors(c)
 	}
 	return fmt.Errorf("%w: a change of kind %v", errs.ErrInvalid, c.Op)
 }
@@ -192,7 +197,7 @@ func (s *Store) apply(c format.Change) error {
 // puts one in its change list. A change of an Op that isn't one of the six
 // is apply's to refuse.
 func unused(c *format.Change) error {
-	var table, size, names, key, fields, link bool // what the Op uses
+	var table, size, names, key, fields, link, vecs bool // what the Op uses
 	switch c.Op {
 	case format.CreateTable:
 		table, size, names = true, true, true
@@ -204,6 +209,8 @@ func unused(c *format.Change) error {
 		key, link = true, true
 	case format.Drop:
 		table = true
+	case format.Vectors:
+		table, size, vecs = true, true, true
 	default:
 		return nil
 	}
@@ -219,6 +226,7 @@ func unused(c *format.Change) error {
 		{"Fields", len(c.Fields) != 0, fields},
 		{"Type", c.Type != "", link},
 		{"To", c.To != "", link},
+		{"Vecs", len(c.Vecs) != 0, vecs},
 	} {
 		if f.set && !f.used {
 			set = append(set, f.name)

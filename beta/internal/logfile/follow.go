@@ -364,12 +364,12 @@ func (l *Log) followOn(size int64) (*errs.Damage, error) {
 		if err != nil {
 			return nil, unread(err)
 		}
-		bt, err := format.DecodeBatch(b, l.hdr.Gen, seq)
+		bt, err := l.decode(b, off, seq)
 		counts := !errors.Is(err, format.ErrDoesNotCount)
 		if counts && err != nil {
 			// A batch that counts, whose changes are malformed or break the
-			// rules for a change on its own: damage, marked or not, as
-			// readOn has it.
+			// rules for a change on its own, or hold a vector block past the
+			// compacted part: damage, marked or not, as readOn has it.
 			return nil, l.placed(off, err)
 		}
 		if counts && m == (format.Marker{Seq: seq, Sum: bt.Sum}) {

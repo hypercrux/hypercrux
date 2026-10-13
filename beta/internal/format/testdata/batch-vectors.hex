@@ -1,0 +1,30 @@
+# A batch with one change: a vector block, as compaction writes one for
+# each table's vectors after the table's puts. It names the table and the
+# vector size, then the records it gives a vector, in byte order of key,
+# then their vectors back to back, in the same order, with awkward values
+# that have to come back bit for bit: -0, the smallest subnormal, the
+# largest and smallest finite values, and the smallest normal one.
+# It stands alone, to show the encoding, so its change needn't fit any state. Its
+# sequence number, 258, shows a u64's byte order.
+# See beta/FORMAT.md. Every fixture uses the database ID 0123456789abcdef fedcba9876543210.
+
+48 43 52 42                                       # batch: magic number "HCRB"
+01 00 00 00 00 00 00 00                           # generation: 1
+57 00 00 00 00 00 00 00                           # length: 87 bytes
+02 01 00 00 00 00 00 00                           # sequence number: 258
+56                                                # V: a vector block
+04 00                                             # table name: 4 bytes
+70 69 63 73                                       # pics
+03 00 00 00                                       # vector size: 3
+02 00 00 00                                       # vectors: 2
+06 00                                             # key: 6 bytes
+70 69 63 73 3a 31                                 # pics:1
+06 00                                             # key: 6 bytes
+70 69 63 73 3a 32                                 # pics:2
+00 00 00 80                                       # pics:1's vector: -0
+01 00 00 00                                       #   1.4e-45, the smallest subnormal
+ff ff 7f 7f                                       #   3.4028235e38, the largest finite value
+ff ff 7f ff                                       # pics:2's vector: -3.4028235e38, the smallest finite value
+00 00 80 00                                       #   1.1754944e-38, the smallest normal value
+00 00 c0 3f                                       #   1.5
+53 84 1d 1e                                       # checksum: 0x1e1d8453, the CRC32C of the 83 bytes before it

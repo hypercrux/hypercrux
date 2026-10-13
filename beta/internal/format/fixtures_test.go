@@ -142,12 +142,14 @@ type field struct {
 
 type change struct {
 	kind   byte
-	name   string   // the table for T and X, the key for P and D, the key a link is from for L and U
-	typ    string   // a link's type
-	to     string   // the key a link is to
-	size   uint32   // T's vector size
-	fields []string // T's fields
-	puts   []field  // P's fields
+	name   string     // the table for T, X and V, the key for P and D, the key a link is from for L and U
+	typ    string     // a link's type
+	to     string     // the key a link is to
+	size   uint32     // T's and V's vector size
+	fields []string   // T's fields
+	puts   []field    // P's fields
+	keys   []string   // V's keys
+	vecs   [][]uint32 // V's vectors, one for each key, as their values' bits
 }
 
 type batch struct {
@@ -324,6 +326,40 @@ func (r *reader) change() change {
 		c.to = r.key()
 	case 'X':
 		c.name = r.table()
+	case 'V':
+		// A vector block: the table, the vector size, the number of vectors,
+		// each key, then the vectors back to back. The rules for its values
+		// are kept as it applies (state.apply), where a reader checks them.
+		c.name = r.table()
+		c.size = r.u32()
+		if r.err == nil && (c.size < 1 || c.size > maxDims) {
+			r.fail("a vector block of the vector size %d", c.size)
+		}
+		n := r.u32()
+		if r.err == nil && n < 1 {
+			r.fail("a vector block of no vectors")
+		}
+		for i := uint32(0); i < n && r.err == nil; i++ {
+			k := r.key()
+			switch {
+			case r.err != nil:
+			case !strings.HasPrefix(k, c.name+":"):
+				r.fail("the key %q in a vector block for the table %s", k, c.name)
+			case i > 0 && k <= c.keys[i-1]:
+				r.fail("the key %q after %q in a vector block, out of byte order", k, c.keys[i-1])
+			}
+			c.keys = append(c.keys, k)
+		}
+		for range c.keys {
+			if r.err != nil {
+				break
+			}
+			v := make([]uint32, c.size)
+			for j := range v {
+				v[j] = r.u32()
+			}
+			c.vecs = append(c.vecs, v)
+		}
 	default:
 		r.fail("a change of unknown kind %#02x", c.kind)
 	}
@@ -562,6 +598,42 @@ func (s *state) apply(c change) error {
 			}
 		}
 		delete(s.tables, c.name)
+	case 'V':
+		t := s.tables[c.name]
+		switch {
+		case t == nil:
+			return fmt.Errorf("gives vectors to records of the table %s, which doesn't exist", c.name)
+		case t.size == 0 || t.size != c.size:
+			return fmt.Errorf("gives vectors of %d values to the table %s, whose vector size is %d", c.size, c.name, t.size)
+		}
+		vec := ""
+		for _, f := range t.fields {
+			if strings.EqualFold(f, "vec") {
+				vec = f
+			}
+		}
+		for i, key := range c.keys {
+			rec := s.records[key]
+			if rec == nil {
+				return fmt.Errorf("gives a vector to %s, which doesn't exist", key)
+			}
+			for name, v := range rec {
+				if v.kind == 'v' {
+					return fmt.Errorf("gives a vector to %s, which holds one in %s already", key, name)
+				}
+			}
+			zeros := true
+			for _, bits := range c.vecs[i] {
+				if f := float64(math.Float32frombits(bits)); math.IsNaN(f) || math.IsInf(f, 0) {
+					return fmt.Errorf("gives %s a vector holding the value %v", key, f)
+				}
+				zeros = zeros && bits&0x7fffffff == 0
+			}
+			if zeros {
+				return fmt.Errorf("gives %s a vector of zeros", key)
+			}
+			rec[vec] = value{kind: 'v', vec: c.vecs[i]}
+		}
 	}
 	return nil
 }
@@ -614,6 +686,7 @@ var fixtures = []string{
 	"batch-put.hex",
 	"batch-several.hex",
 	"batch-unlink.hex",
+	"batch-vectors.hex",
 	"file-compacted.hex",
 	"file-new.hex",
 	"header-compacted.hex",
@@ -655,6 +728,7 @@ func TestBatches(t *testing.T) {
 		"batch-link.hex":         'L',
 		"batch-unlink.hex":       'U',
 		"batch-drop.hex":         'X',
+		"batch-vectors.hex":      'V',
 	} {
 		b := readFixture(t, name)
 		bt, err := readBatch(b, 1)
@@ -679,6 +753,25 @@ func TestBatches(t *testing.T) {
 	for _, k := range []byte("nirtbv") {
 		if !kinds[k] {
 			t.Errorf("batch-put.hex has no value of kind %c", k)
+		}
+	}
+
+	// batch-vectors.hex's vectors hold the awkward values, to come back bit
+	// for bit: -0, the smallest subnormal, the largest and smallest finite
+	// values, and the smallest normal one.
+	bt, err = readBatch(readFixture(t, "batch-vectors.hex"), 1)
+	if err != nil {
+		t.Fatalf("batch-vectors.hex: %v", err)
+	}
+	held := map[uint32]bool{}
+	for _, v := range bt.changes[0].vecs {
+		for _, bits := range v {
+			held[bits] = true
+		}
+	}
+	for _, bits := range []uint32{0x80000000, 0x00000001, 0x7f7fffff, 0xff7fffff, 0x00800000} {
+		if !held[bits] {
+			t.Errorf("batch-vectors.hex holds no vector value with the bits %08x", bits)
 		}
 	}
 
@@ -780,9 +873,11 @@ func TestFiles(t *testing.T) {
 		t.Errorf("file-compacted.hex, after the compacted part: %v", err)
 	}
 
-	// The compacted part's order: each table with its records, then the links.
-	var lastTable, lastKey string
+	// The compacted part's order: each table with its records, then its
+	// vectors in vector blocks, each block alone in its batch, then the links.
+	var lastTable, lastKey, lastVector string
 	var lastLink *link
+	blocks := 0
 	for i, bt := range cf.batches {
 		if cf.ends[i] > int(cf.end) {
 			break
@@ -797,17 +892,29 @@ func TestFiles(t *testing.T) {
 				case w == nil || c.size != w.size || !slices.Equal(c.fields, w.fields):
 					t.Errorf("the compacted part creates %s without its vector size and whole field list", c.name)
 				}
-				lastTable, lastKey = c.name, ""
+				lastTable, lastKey, lastVector = c.name, "", ""
 			case 'P':
-				if lastLink != nil || tableOf(c.name) != lastTable || c.name <= lastKey {
+				if lastLink != nil || tableOf(c.name) != lastTable || c.name <= lastKey || lastVector != "" {
 					t.Errorf("the compacted part puts %s out of order", c.name)
 				}
 				for _, f := range c.puts {
-					if f.v.kind == 'n' {
+					switch f.v.kind {
+					case 'n':
 						t.Errorf("the compacted part puts a null into %s's field %s", c.name, f.name)
+					case 'v':
+						t.Errorf("the compacted part puts %s's vector, where its vectors come in vector blocks", c.name)
 					}
 				}
 				lastKey = c.name
+			case 'V':
+				switch {
+				case lastLink != nil || c.name != lastTable || c.keys[0] <= lastVector:
+					t.Errorf("the compacted part gives a vector block for %s out of order", c.name)
+				case len(bt.changes) != 1:
+					t.Errorf("the compacted part's batch %d holds a vector block and other changes", bt.seq)
+				}
+				lastVector = c.keys[len(c.keys)-1]
+				blocks++
 			case 'L':
 				l := link{c.name, c.typ, c.to}
 				if lastLink != nil && !linkBefore(*lastLink, l) {
@@ -816,6 +923,25 @@ func TestFiles(t *testing.T) {
 				lastLink = &l
 			default:
 				t.Errorf("the compacted part holds a change of kind %c", c.kind)
+			}
+		}
+	}
+	if blocks == 0 {
+		t.Error("the compacted part holds no vector block")
+	}
+	// Past the compacted part, no batch holds a vector block, and file-new.hex
+	// is generation 1, so it holds none at all.
+	for i, bt := range cf.batches {
+		for _, c := range bt.changes {
+			if c.kind == 'V' && cf.ends[i] > int(cf.end) {
+				t.Errorf("file-compacted.hex holds a vector block in batch %d, past its compacted part", bt.seq)
+			}
+		}
+	}
+	for _, bt := range nf.batches {
+		for _, c := range bt.changes {
+			if c.kind == 'V' {
+				t.Errorf("file-new.hex holds a vector block in batch %d, in generation 1", bt.seq)
 			}
 		}
 	}

@@ -29,8 +29,10 @@ import (
 //     anything is written to it (startCompact).
 //  2. The live data goes into it from offset 68 as ordinary batches, each
 //     with its marker, from a snapshot of the in-memory copy in FORMAT.md's
-//     order: every table with its records, then every link. A batch ends at
-//     the change that would take it past about a megabyte, and the links
+//     order: every table with its records, then its vectors in vector
+//     blocks, then every link. A batch ends at the change that would take it
+//     past about a megabyte, or at 1,024 changes, each vector block is alone
+//     in its batch and holds as many vectors as fit in one, and the links
 //     start a batch of their own, as in P2's fixture (writeCompact). Then
 //     comes the header, which names the next generation, the batch the file
 //     continues from, and where the compacted part ends. That offset is
@@ -84,6 +86,16 @@ import (
 // change longer than this goes in a batch of its own. Batches of this size
 // keep the memory a compaction takes flat, whatever the size of the database.
 const partSize = 1 << 20
+
+// partChanges is the most changes a batch of the compacted part holds, apart
+// from a vector block, which is one change however many vectors it holds. A
+// reader decodes a batch into a list of changes, which grows as it's read,
+// and the Target keeps what it needs and drops the list. Since V2 took the
+// vectors out of the puts, a megabyte of puts holds about 40,000 changes,
+// where it held about 680 with a vector of 384 values in each, and growing
+// lists that long took about 100 ms of opening 100,000 such records here.
+// Batches of 1,024 changes took most of that back.
+const partChanges = 1024
 
 // minDead is how far, at least, the end of the log must be past the live
 // data before a compaction is due, so a small database isn't compacted after
@@ -309,7 +321,17 @@ func (l *Log) startCompact() (*compaction, error) {
 // The snapshot uses a put's Fields slice again for the next put, so the
 // fields of the puts in a batch are copied into one slice that serves the
 // whole batch. A batch ends at the change that would take its changes past
-// partSize, or l.part when a test has set it, and before the first link.
+// partSize, or l.part when a test has set it, at partChanges changes, and
+// before the first link.
+//
+// Since V2 the snapshot is the store's compacted one, which gives each
+// table's vectors after its puts, a Vectors change for each, and
+// writeCompact joins them into vector blocks (FORMAT.md, "Vector blocks"). A
+// block is alone in its batch, and grows a vector at a time until the next
+// would take it past the batch's size, when the next block starts in the
+// next batch; a vector longer than that goes in a block of its own. A
+// vector's bits are its slot's in the store, which stays as it is while the
+// compaction reads it, so they go from there straight into the batch.
 //
 // Should ranging over the snapshot panic, NAME.compact goes before the panic
 // carries on, as it does when the compaction fails, so a caller that
@@ -328,15 +350,20 @@ func (l *Log) writeCompact(c *compaction, snapshot iter.Seq[format.Change]) erro
 	}
 	var (
 		changes []format.Change
-		fields  []format.Field // the fields of the batch's puts, one after another
-		size    int            // the batch's changes, in bytes
-		links   bool           // the links have begun
+		fields  []format.Field  // the fields of the batch's puts, one after another
+		vecs    []format.Vector // the vectors of the batch's vector block, when it's one
+		size    int             // the batch's changes, in bytes
+		links   bool            // the links have begun
 		buf     []byte
 		err     error
 	)
+	block := func() bool { return len(changes) == 1 && changes[0].Op == format.Vectors }
 	flush := func() bool {
 		if len(changes) == 0 {
 			return true
+		}
+		if block() {
+			changes[0].Vecs = vecs
 		}
 		seq := c.seq + 1
 		var sum uint32
@@ -353,10 +380,41 @@ func (l *Log) writeCompact(c *compaction, snapshot iter.Seq[format.Change]) erro
 		copy(c.last[:], buf[n:])
 		clear(changes)
 		clear(fields)
-		changes, fields, size = changes[:0], fields[:0], 0
+		clear(vecs) // so nothing keeps the store's slots in reach once it changes
+		changes, fields, vecs, size = changes[:0], fields[:0], vecs[:0], 0
 		return true
 	}
 	for ch := range snapshot {
+		if ch.Op == format.Vectors {
+			// Each vector joins the batch's block when it's this table's
+			// and has room, or starts a block in a batch of its own.
+			for _, v := range ch.Vecs {
+				k := format.BlockVectorSize(v)
+				join := block() && changes[0].Table == ch.Table && changes[0].Size == ch.Size
+				if join && size+k > limit && plant != "logfile/block-one-batch" {
+					if plant == "logfile/block-cut-short" {
+						continue
+					}
+					join = false
+				}
+				if !join {
+					if !flush() {
+						break
+					}
+					changes = append(changes, format.Change{Op: format.Vectors, Table: ch.Table, Size: ch.Size})
+					size = format.BlockHeadSize(ch.Table)
+				}
+				vecs = append(vecs, v)
+				size += k
+			}
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if block() && !flush() {
+			break
+		}
 		k := changeSize(&ch)
 		if plant != "logfile/compact-one-batch" {
 			if ch.Op == format.Link && !links {
@@ -365,7 +423,7 @@ func (l *Log) writeCompact(c *compaction, snapshot iter.Seq[format.Change]) erro
 					break
 				}
 			}
-			if size > 0 && size+k > limit && !flush() {
+			if size > 0 && (size+k > limit || len(changes) >= partChanges) && !flush() {
 				break
 			}
 		}
@@ -413,6 +471,11 @@ func changeSize(c *format.Change) int {
 		n += 2 + len(c.Key) + 2 + len(c.Type) + 2 + len(c.To)
 	case format.Drop:
 		n += 2 + len(c.Table)
+	case format.Vectors:
+		n = format.BlockHeadSize(c.Table)
+		for _, v := range c.Vecs {
+			n += format.BlockVectorSize(v)
+		}
 	}
 	return n
 }

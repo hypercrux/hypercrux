@@ -8,8 +8,10 @@ package procs
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,9 +31,10 @@ import (
 // backup's, and after a compaction its batches aren't the commits. So each
 // commit puts a record of its own, keyed by its place in the log, which the
 // writer works out from its copy once it holds the write lock: c:000000001
-// for the first, and so on, with the commit's text in the field t. A reader
-// works out the commits from the store's state, record by record, whatever
-// batches brought them. A backup's era is a record of its own, c:000000000,
+// for the first, and so on, with the commit's text in the field t, and a
+// vector worked out from its place (vectorOf), so a compaction writes vector
+// blocks (V2). A reader works out the commits from the store's state, record
+// by record, whatever batches brought them, and checks each vector. A backup's era is a record of its own, c:000000000,
 // with the field era, which the run's Backup puts into the copy before it's
 // moved into place, and every compaction after carries.
 //
@@ -97,6 +100,7 @@ type copyOf struct {
 
 func openCopy(files fsys.FS, path string, o logfile.Options) (*copyOf, error) {
 	g := &glue{s: store.New(), opening: true}
+	o.BlocksInPlace = true // as the public package's log hands the store its vector blocks (V2)
 	l, err := logfile.Open(files, path, g, o)
 	if err != nil {
 		return nil, err
@@ -108,7 +112,8 @@ func openCopy(files fsys.FS, path string, o logfile.Options) (*copyOf, error) {
 // commit is the public package's Update in small: the write lock, the copy's
 // transaction running fn, Commit with the log's Append, and when compact is
 // true, a compaction under the same lock from a read of the copy, as the
-// public package's is after a commit (G5); then the lock goes. It returns the commit's error,
+// public package's is after a commit (G5), which writes the copy's vectors
+// in vector blocks (V2); then the lock goes. It returns the commit's error,
 // and the compaction's.
 func (d *copyOf) commit(fn func(tx *store.Tx) error, compact bool) (err, cerr error) {
 	if err := d.l.Lock(); err != nil {
@@ -131,7 +136,8 @@ func (d *copyOf) commit(fn func(tx *store.Tx) error, compact bool) (err, cerr er
 		return err, nil
 	}
 	if compact {
-		cerr = d.g.s.Read(func(r store.Reader) error { return d.l.Compact(r.Snapshot()) })
+		s := d.g.s
+		cerr = s.Read(func(store.Reader) error { return d.l.Compact(s.Compacted()) })
 	}
 	return nil, cerr
 }
@@ -140,8 +146,22 @@ func (d *copyOf) commit(fn func(tx *store.Tx) error, compact bool) (err, cerr er
 // for 0.
 func place(n int64) string { return fmt.Sprintf("c:%09d", n) }
 
+// vectorOf is the vector that commit n's record holds, worked out from n,
+// so a reader can tell it came through whole: n, n's bits as a float32,
+// which is a subnormal number, and -0. So after a compaction, the readers
+// that reload the file read the commits' vectors from its vector blocks.
+func vectorOf(n int64) []float32 {
+	return []float32{float32(n), math.Float32frombits(uint32(n)), float32(math.Copysign(0, -1))}
+}
+
+// sameVector reports whether v holds vectorOf(n), bit for bit.
+func sameVector(v []float32, n int64) bool {
+	return slices.EqualFunc(v, vectorOf(n), func(x, y float32) bool { return math.Float32bits(x) == math.Float32bits(y) })
+}
+
 // stateOf works out from a copy its era and its commits, in order, from the
-// records each commit puts, keyed by its place in the log.
+// records each commit puts, keyed by its place in the log. Each commit's
+// record has to hold the vector its place gives (vectorOf).
 func stateOf(s *store.Store) (era int, commits []string, err error) {
 	err = s.Read(func(r store.Reader) error {
 		c, err := r.Scan("c:", "")
@@ -163,12 +183,25 @@ func stateOf(s *store.Store) (era int, commits []string, err error) {
 				era = int(rec.Field(ofEra).Int())
 			case n != int64(len(commits))+1:
 				return fmt.Errorf("the copy holds commit %d after commit %d", n, len(commits))
+			case !sameVector(rec.Vec, n):
+				return fmt.Errorf("the copy holds commit %d's record with the vector %v, where its place gives %v", n, rec.Vec, vectorOf(n))
 			default:
 				commits = append(commits, rec.Field(text).Text())
 			}
 		}
 	})
 	return era, commits, err
+}
+
+// checked runs the copy's own check, which has to find nothing, the vectors
+// a reload read from a compacted file's vector blocks among what it reads.
+func checked(s *store.Store) error {
+	return s.Read(func(store.Reader) error {
+		if c := s.Check(); len(c.Problems) != 0 {
+			return fmt.Errorf("the copy's check finds %q", c.Problems)
+		}
+		return nil
+	})
 }
 
 // reloadWrite is a writer's work: commits, each putting the record of its
@@ -197,7 +230,7 @@ func reloadWrite(w *Writer) error {
 			}
 			w.Begin(text)
 			begun = true
-			if err := tx.Put(place(count+1), []format.Field{{Name: "t", Value: value.Text(text)}}); err != nil {
+			if err := tx.Put(place(count+1), []format.Field{{Name: "t", Value: value.Text(text)}, {Name: "vec", Value: value.Vector(vectorOf(count + 1))}}); err != nil {
 				return err
 			}
 			return tx.Put("meta:n", []format.Field{{Name: "n", Value: value.Int(count + 1)}})
@@ -286,7 +319,9 @@ func followThroughTheLog(r *Reader) error {
 		time.Sleep(time.Duration(r.Rand().IntN(2000)) * time.Microsecond)
 		err := l.Follow()
 		if errors.Is(err, logfile.ErrReplaced) {
-			err = l.Reload()
+			if err = l.Reload(); err == nil {
+				err = checked(g.s)
+			}
 		}
 		if err != nil {
 			return err
@@ -325,6 +360,22 @@ func followThroughThePackage(r *Reader) error {
 				commits = append(commits, rec.Fields["t"].(string))
 			}
 		}
+		// A scan leaves the vectors out, so one commit's, picked at random,
+		// is read with Get. A backup moved into place since the scan can
+		// hold fewer commits, and then the record isn't there.
+		if len(commits) > 0 {
+			n := 1 + r.Rand().Int64N(int64(len(commits)))
+			f, err := db.Get(place(n))
+			switch {
+			case errors.Is(err, hc.ErrNotFound):
+			case err != nil:
+				return err
+			default:
+				if v, _ := f["vec"].(hc.Vector); !sameVector(v, n) {
+					return fmt.Errorf("a read found commit %d's record with the vector %v, where its place gives %v", n, v, vectorOf(n))
+				}
+			}
+		}
 		if era != last {
 			r.Count(dbReadNewEra)
 			last = era
@@ -350,6 +401,9 @@ func reloadFinal(path string) ([]string, error) {
 		return nil, err
 	}
 	_, commits, err := stateOf(d.g.s)
+	if err == nil {
+		err = checked(d.g.s)
+	}
 	if e := d.l.Unlock(); err == nil {
 		err = e
 	}

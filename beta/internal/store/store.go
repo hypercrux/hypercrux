@@ -72,6 +72,9 @@ type Store struct {
 	// uses it again, so a vector costs no allocation of its own. Only writes
 	// use it.
 	buf []float32
+	// recs holds the records a vector block names while it's applied
+	// (applyVectors), and each block uses it again. Only writes use it.
+	recs []*record
 }
 
 var _ Reader = (*Store)(nil)

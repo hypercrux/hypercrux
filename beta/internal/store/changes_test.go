@@ -42,7 +42,9 @@ import (
 // and the model, cut into batches as compaction cuts a compacted part,
 // encoded and decoded, and loaded into an empty store C, with LoadBatch or
 // ApplyBatch. Then C, and B once it follows the log, must hold what A holds,
-// through the read API and through their snapshots.
+// through the read API and through their snapshots. Since V2, A's compacted
+// snapshot, with its vectors in vector blocks, goes into an empty store D
+// the same way, and D must hold what A holds too.
 func TestChangeLists(t *testing.T) {
 	seeds, txs := 12, 300
 	if testing.Short() {
@@ -116,7 +118,8 @@ func runChangeLists(t *testing.T, seed uint64, n int) {
 	for _, o := range []string{"put ok", "put invalid", "delete ok", "delete not found", "drop ok", "drop not found",
 		"create ok", "create invalid", "link ok", "link already there", "unlink ok", "statement rolled back", "commit",
 		"commit failed", "rollback", "batch loaded", "batch applied", "damage found", "damage in a link",
-		"snapshot loaded", "snapshot applied", "snapshot with links"} {
+		"snapshot loaded", "snapshot applied", "snapshot with links", "compacted part loaded", "compacted part applied",
+		"compacted part with vector blocks"} {
 		if outcomes[o] < max(1, n/150) {
 			t.Errorf("%q came up %d times in %d transactions: %v", o, outcomes[o], n, outcomes)
 		}
@@ -208,11 +211,18 @@ func changeListTx(t *testing.T, g *gen, s *Store, committed *model, seen *states
 // it decoded, which is what the log hands a store.
 func writable(t *testing.T, gen, seq uint64, changes []format.Change) []format.Change {
 	t.Helper()
+	return writableAs(t, format.DecodeBatch, gen, seq, changes)
+}
+
+// writableAs is writable with decode in place of format.DecodeBatch, such as
+// format.DecodeBatchInPlace, whose changes share the batch's bytes.
+func writableAs(t *testing.T, decode func([]byte, uint64, uint64) (format.Batch, error), gen, seq uint64, changes []format.Change) []format.Change {
+	t.Helper()
 	b, sum, err := format.AppendBatch(nil, gen, seq, changes)
 	if err != nil {
 		t.Fatalf("AppendBatch refused batch %d: %v\nits changes: %v", seq, err, changes)
 	}
-	bt, err := format.DecodeBatch(b, gen, seq)
+	bt, err := decode(b, gen, seq)
 	if err != nil {
 		t.Fatalf("DecodeBatch refused batch %d, as AppendBatch wrote it: %v", seq, err)
 	}
@@ -308,6 +318,51 @@ func checkpoint(t *testing.T, g *gen, a, b *Store, m *model, outcomes map[string
 	if b != nil {
 		sameStores(t, "B", a, b)
 	}
+
+	// The compacted part as compaction writes it since V2: the snapshot with
+	// each table's vectors in vector blocks after its puts. It's checked
+	// against the snapshot, joined into blocks of one to five vectors,
+	// encoded and decoded, and loaded into an empty store D, which must hold
+	// what A holds too. D takes the batches with LoadBatch and ApplyBatch by
+	// turns, and the blocks are decoded in place every other two turns. The
+	// sizes of the blocks and batches are aside's choices, so the ones made
+	// with g.r stay as they were before V2.
+	side := g.aside()
+	part := compactedOf(a)
+	checkCompacted(t, snap, part)
+	d := New()
+	turn := outcomes["compacted part loaded"] + outcomes["compacted part applied"]
+	how, decode := "compacted part loaded", format.DecodeBatch
+	if turn%2 == 1 {
+		how = "compacted part applied"
+	}
+	if turn%4 >= 2 {
+		decode = format.DecodeBatchInPlace
+	}
+	blocks := 0
+	batches := joined(part, func() int { return 1 + side.r.IntN(5) }, func() int { return 1 + side.r.IntN(8) })
+	for i, batch := range batches {
+		seq := uint64(i + 1)
+		decoded := writableAs(t, decode, 2, seq, batch)
+		if decoded[0].Op == format.Vectors {
+			blocks++
+		}
+		var err error
+		if how == "compacted part loaded" {
+			err = d.LoadBatch(seq, decoded)
+		} else {
+			err = d.ApplyBatch(seq, decoded)
+		}
+		if err != nil {
+			t.Fatalf("D couldn't take batch %d of A's compacted part: %v", seq, err)
+		}
+	}
+	outcomes[how]++
+	if blocks > 0 {
+		outcomes["compacted part with vector blocks"]++
+	}
+	sameStores(t, "D", a, d)
+	inKeyOrder(t, d)
 }
 
 // cut splits a snapshot into batches of one to eight changes, as compaction
@@ -477,6 +532,12 @@ func sameStores(t *testing.T, name string, want, got *Store) {
 			}
 			if ws, gs := collect(w), collect(g); !slices.EqualFunc(ws, gs, equalChange) {
 				return fmt.Errorf("the snapshot is\n%v\nwhere it should be\n%v", gs, ws)
+			}
+			// The compacted snapshot too, which mustn't depend on the
+			// slots that hold the vectors, and those differ: C and D took
+			// their vectors in byte order of key.
+			if ws, gs := collectCompacted(want), collectCompacted(got); !slices.EqualFunc(ws, gs, equalChange) {
+				return fmt.Errorf("the compacted snapshot is\n%v\nwhere it should be\n%v", gs, ws)
 			}
 			if a, b := dump(want), dump(got); a != b {
 				return fmt.Errorf("the store holds\n%s\nwhere it should hold\n%s", b, a)

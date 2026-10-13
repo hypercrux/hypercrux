@@ -131,13 +131,15 @@ func TestSnapshot(t *testing.T) {
 }
 
 // TestSnapshotOfTheFixtures loads file-new.hex, P2's small database, and
-// takes its snapshot. P2 wrote file-compacted.hex by hand from FORMAT.md, as
-// that database compacted, and its compacted part is two batches: the first
-// holds every table with its records, and the second every link. The
-// snapshot, cut where the links start and written as those two batches,
-// must match them byte for byte. Loading the compacted part, then the
-// commit after it, gives back what the store holds with that commit
-// applied.
+// takes its compacted snapshot. file-compacted.hex is that database
+// compacted, written by hand from FORMAT.md, and its compacted part is four
+// batches: the table docs with its record, without its vector; docs's
+// vectors in a vector block; the other tables with their records; and every
+// link. The compacted snapshot, its vectors joined into blocks and cut into
+// batches as compaction does (joinBlocks), must match them byte for byte.
+// Loading the compacted part, straight in or through a transaction a batch,
+// gives back what the store holds, and so does the commit after it, applied
+// to both.
 func TestSnapshotOfTheFixtures(t *testing.T) {
 	s := store.New()
 	for _, bt := range fixtureBatches(t, "file-new.hex", false) {
@@ -145,31 +147,31 @@ func TestSnapshotOfTheFixtures(t *testing.T) {
 	}
 	snap := snapshot(t, s)
 	comp := fixtureBatches(t, "file-compacted.hex", true)
-	if len(comp) != 2 {
-		t.Fatalf("the compacted part holds %d batches, where the test expects two", len(comp))
-	}
-	cut := slices.IndexFunc(snap, func(c format.Change) bool { return c.Op == format.Link })
-	if cut < 0 {
-		t.Fatalf("the snapshot holds no links: %v", snap)
+	parts := joinBlocks(compacted(t, s))
+	if len(comp) != 4 || len(parts) != len(comp) {
+		t.Fatalf("the compacted part holds %d batches, and the compacted snapshot cuts into %d, where the test expects four: %v", len(comp), len(parts), parts)
 	}
 	file := readHex(t, "file-compacted.hex")
 	at := format.HeaderSize
-	for i, part := range [][]format.Change{snap[:cut], snap[cut:]} {
+	for i, part := range parts {
 		got, sum, err := format.AppendBatch(nil, 2, uint64(i+1), part)
 		ok(t, err)
 		want := file[at : at+comp[i].Length]
 		if !bytes.Equal(got, want) || sum != comp[i].Sum {
-			t.Fatalf("the snapshot's part %d, written as a batch, is\n%x\nwhere the compacted part's batch is\n%x\nits changes: %v", i+1, got, want, part)
+			t.Fatalf("the compacted snapshot's part %d, written as a batch, is\n%x\nwhere the compacted part's batch is\n%x\nits changes: %v", i+1, got, want, part)
 		}
 		at += comp[i].Length + format.MarkerSize
 	}
 
-	c := store.New()
+	c, d := store.New(), store.New()
 	for _, bt := range comp {
 		ok(t, c.LoadBatch(bt.Seq, bt.Changes))
+		ok(t, d.ApplyBatch(bt.Seq, bt.Changes))
 	}
-	if again := snapshot(t, c); !slices.EqualFunc(again, snap, equalChanges) {
-		t.Fatalf("the compacted part loads as\n%v\nwhere file-new.hex loads as\n%v", again, snap)
+	for _, x := range []*store.Store{c, d} {
+		if again := snapshot(t, x); !slices.EqualFunc(again, snap, equalChanges) {
+			t.Fatalf("the compacted part loads as\n%v\nwhere file-new.hex loads as\n%v", again, snap)
+		}
 	}
 	after := fixtureBatches(t, "file-compacted.hex", false)[len(comp):]
 	for _, bt := range after {
@@ -181,9 +183,55 @@ func TestSnapshotOfTheFixtures(t *testing.T) {
 	}
 }
 
+// compacted returns s's compacted snapshot, taken inside Read as compaction
+// takes it, with each change's slices copied out, its vectors' bits among
+// them, since those are the slots' own.
+func compacted(t *testing.T, s *store.Store) []format.Change {
+	t.Helper()
+	var out []format.Change
+	ok(t, s.Read(func(store.Reader) error {
+		for c := range s.Compacted() {
+			c.Names, c.Fields, c.Vecs = slices.Clone(c.Names), slices.Clone(c.Fields), slices.Clone(c.Vecs)
+			for i := range c.Vecs {
+				c.Vecs[i].Bits = strings.Clone(c.Vecs[i].Bits)
+			}
+			out = append(out, c)
+		}
+		return nil
+	}))
+	return out
+}
+
+// joinBlocks cuts a compacted snapshot into batches as compaction cuts a
+// small database's: each table's vectors joined into one vector block, alone
+// in its batch, the links in a batch of their own, and the rest together.
+func joinBlocks(part []format.Change) [][]format.Change {
+	var out [][]format.Change
+	var cur []format.Change
+	flush := func() {
+		if len(cur) > 0 {
+			out, cur = append(out, cur), nil
+		}
+	}
+	for _, c := range part {
+		block := len(cur) == 1 && cur[0].Op == format.Vectors
+		switch {
+		case c.Op == format.Vectors && block && cur[0].Table == c.Table:
+			cur[0].Vecs = append(cur[0].Vecs, c.Vecs...)
+		case c.Op == format.Vectors, block, c.Op == format.Link && len(cur) > 0 && cur[0].Op != format.Link:
+			flush()
+			cur = []format.Change{c}
+		default:
+			cur = append(cur, c)
+		}
+	}
+	flush()
+	return out
+}
+
 func equalChanges(a, b format.Change) bool {
 	return a.Op == b.Op && a.Table == b.Table && a.Size == b.Size && slices.Equal(a.Names, b.Names) && a.Key == b.Key &&
-		slices.Equal(a.Fields, b.Fields) && a.Type == b.Type && a.To == b.To
+		slices.Equal(a.Fields, b.Fields) && a.Type == b.Type && a.To == b.To && slices.Equal(a.Vecs, b.Vecs)
 }
 
 // readHex reads one of P2's fixtures, annotated hex in which everything
@@ -295,11 +343,16 @@ func TestApplyRefusesUnusedFields(t *testing.T) {
 		"Fields": func(c *format.Change) { c.Fields = []format.Field{{Name: "title", Value: value.Text("a")}} },
 		"Type":   func(c *format.Change) { c.Type = "cites" },
 		"To":     func(c *format.Change) { c.To = "docs:2" },
+		"Vecs":   func(c *format.Change) { c.Vecs = []format.Vector{{Key: "docs:3", Bits: "\x00\x00\x80\x3f"}} },
 	}
 	start := func() *store.Store {
 		s := store.New()
 		ok(t, putGo(s, "docs:1", fields{"title": "a"}))
 		ok(t, putGo(s, "docs:2", fields{"title": "b"}))
+		ok(t, putGo(s, "docs:3", fields{"title": "c"}))
+		ok(t, putGo(s, "pics:1", fields{"vec": []float32{1}}))
+		must[[]format.Change](t)(s.Delete(nil, "pics:1"))
+		ok(t, putGo(s, "pics:2", nil)) // a record of a table with a vector size, holding no vector, for a vector block
 		must[[]format.Change](t)(s.Link(nil, "docs:1", "cites", "docs:2"))
 		return s
 	}
@@ -313,6 +366,7 @@ func TestApplyRefusesUnusedFields(t *testing.T) {
 		{format.Change{Op: format.Link, Key: "docs:2", Type: "cites", To: "docs:1"}, []string{"Key", "Type", "To"}},
 		{format.Change{Op: format.Unlink, Key: "docs:1", Type: "cites", To: "docs:2"}, []string{"Key", "Type", "To"}},
 		{format.Change{Op: format.Drop, Table: "docs"}, []string{"Table"}},
+		{format.Change{Op: format.Vectors, Table: "pics", Size: 1, Vecs: []format.Vector{{Key: "pics:2", Bits: "\x00\x00\x00\x40"}}}, []string{"Table", "Size", "Vecs"}},
 	} {
 		if _, _, err := format.AppendBatch(nil, 1, 1, []format.Change{c.change}); err != nil {
 			t.Fatalf("AppendBatch refused %v: %v", c.change, err)

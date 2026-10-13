@@ -12,6 +12,7 @@ import (
 	"hash/crc32"
 	"math"
 	"slices"
+	"unsafe"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	val "github.com/hypercrux/hypercrux/beta/internal/value"
@@ -55,9 +56,9 @@ const (
 // computes it with the processor's own instruction on x86 and ARM.
 var crcTable = crc32.MakeTable(crc32.Castagnoli)
 
-// The kind letters of the six changes and the six kinds of value.
+// The kind letters of the seven changes and the six kinds of value.
 var (
-	opLetter   = [...]byte{CreateTable: 'T', Put: 'P', Delete: 'D', Link: 'L', Unlink: 'U', Drop: 'X'}
+	opLetter   = [...]byte{CreateTable: 'T', Put: 'P', Delete: 'D', Link: 'L', Unlink: 'U', Drop: 'X', Vectors: 'V'}
 	kindLetter = [...]byte{val.KindNull: 'n', val.KindInt: 'i', val.KindReal: 'r', val.KindText: 't', val.KindBytes: 'b', val.KindVector: 'v'}
 )
 
@@ -76,11 +77,16 @@ type Batch struct {
 // It checks every change by FORMAT.md's rules for a change on its own, the
 // rules DecodeBatch checks, so it never writes a batch that a reader would
 // take for damage: the syntax, and the rules for names, kinds, lengths and
-// values. The rules that depend on the state are the store's. A change
+// values. The rules that depend on the state are the store's, and so are
+// the values of a vector block's vectors, which a reader checks as it
+// takes them into its arrays, and a store holds only checked ones. A change
 // that sets a field of Change its Op doesn't use is refused too. A batch
 // needs one change at least, and a generation and a sequence number of 1
 // or more. When anything is refused, the error wraps errs.ErrInvalid, and
 // dst comes back as it was.
+//
+// Where a change may stand is the log's to know: a vector block goes only
+// in a compacted part.
 func AppendBatch(dst []byte, gen, seq uint64, changes []Change) ([]byte, uint32, error) {
 	switch {
 	case gen == 0:
@@ -141,6 +147,18 @@ func appendChange(b []byte, c *Change) []byte {
 		b = appendString(b, c.To)
 	case Drop:
 		b = appendString(b, c.Table)
+	case Vectors:
+		// The keys first, then the vectors back to back, as a table's vector
+		// array holds them, so the values are one run of bytes.
+		b = appendString(b, c.Table)
+		b = binary.LittleEndian.AppendUint32(b, uint32(c.Size))
+		b = binary.LittleEndian.AppendUint32(b, uint32(len(c.Vecs)))
+		for _, v := range c.Vecs {
+			b = appendString(b, v.Key)
+		}
+		for _, v := range c.Vecs {
+			b = append(b, v.Bits...)
+		}
 	}
 	return b
 }
@@ -165,9 +183,25 @@ func (c *Change) size() int {
 		n += 2 + len(c.Key) + 2 + len(c.Type) + 2 + len(c.To)
 	case Drop:
 		n += 2 + len(c.Table)
+	case Vectors:
+		n += BlockHeadSize(c.Table) - 1
+		for _, v := range c.Vecs {
+			n += BlockVectorSize(v)
+		}
 	}
 	return n
 }
+
+// BlockHeadSize is how many bytes a vector block for the table called table
+// takes in a batch before its first vector: its kind, the table's name, the
+// vector size and the number of vectors. A writer that fills a batch with a
+// block a vector at a time, as compaction does, adds BlockVectorSize for
+// each.
+func BlockHeadSize(table string) int { return 1 + 2 + len(table) + 4 + 4 }
+
+// BlockVectorSize is how many bytes v takes in a vector block: its key, and
+// its values.
+func BlockVectorSize(v Vector) int { return 2 + len(v.Key) + len(v.Bits) }
 
 // valueSize is how many bytes v takes in a put, as appendValue writes it: its
 // kind, then what the kind holds.
@@ -261,13 +295,34 @@ func BatchLength(b []byte, gen, seq uint64, room int64) (int64, error) {
 //
 // DecodeBatch copies the batch's changes out of b into one string, so the
 // caller can use b again, and every string in the changes is a slice of
-// that one: keys, table and field names, link types, text and bytes, and
-// the bits of each vector, made with value.VectorBits. Holding any of them
-// holds the whole string in memory. A caller that keeps one past the
-// batch, as the store keeps keys, names and values, copies it with
-// strings.Clone, so the batch's string can go. The store copies vectors
-// into its table's array anyway.
+// that one: keys, table and field names, link types, text and bytes, the
+// bits of each vector, made with value.VectorBits, and each vector block's
+// keys and bits. Holding any of them holds the whole string in memory. A
+// caller that keeps one past the batch, as the store keeps keys, names and
+// values, copies it with strings.Clone, so the batch's string can go. The
+// store copies vectors into its table's array anyway.
 func DecodeBatch(b []byte, gen, seq uint64) (Batch, error) {
+	return decodeBatch(b, gen, seq, false)
+}
+
+// DecodeBatchInPlace is DecodeBatch for a reader that hands a batch's changes
+// on and is done with them before it uses b again, as the log does when its
+// Target copies out what it keeps (logfile's Options.BlocksInPlace).
+//
+// When every change in the batch is a vector block, as each of compaction's
+// batches that holds one is, nothing is copied: every string in the changes,
+// the vectors' bits among them, is made over b itself, so the changes are
+// good only until b changes. That saves a copy of about a megabyte for each
+// such batch, most of a compacted file when it holds vectors. Any other
+// batch is copied as DecodeBatch copies it, so the records' fields, names
+// and keys always come in a string of their own.
+//
+// It checks everything DecodeBatch checks, and gives the same errors.
+func DecodeBatchInPlace(b []byte, gen, seq uint64) (Batch, error) {
+	return decodeBatch(b, gen, seq, true)
+}
+
+func decodeBatch(b []byte, gen, seq uint64, inPlace bool) (Batch, error) {
 	n, err := BatchLength(b, gen, seq, int64(len(b)))
 	if err != nil {
 		return Batch{}, err
@@ -276,7 +331,24 @@ func DecodeBatch(b []byte, gen, seq uint64) (Batch, error) {
 	if want := crc32.Checksum(b[:n-4], crcTable); sum != want {
 		return Batch{}, fmt.Errorf("%w: the checksum is %#08x, where CRC32C gives %#08x", ErrDoesNotCount, sum, want)
 	}
-	changes, err := decodeChanges(string(b[BatchHeadSize:n-4]), seq)
+	body := b[BatchHeadSize : n-4]
+	if inPlace && len(body) > 0 && body[0] == opLetter[Vectors] {
+		// A string over the batch's own bytes, made with package unsafe so
+		// that a block's values aren't copied. Nothing writes to b until the
+		// caller has handed the changes on, as DecodeBatchInPlace requires.
+		// The damage reasons the decoder writes are made with fmt, so they
+		// don't share b.
+		changes, err := decodeChanges(unsafe.String(&body[0], len(body)), seq)
+		if err != nil {
+			return Batch{}, err
+		}
+		if !slices.ContainsFunc(changes, func(c Change) bool { return c.Op != Vectors }) {
+			return Batch{Seq: seq, Length: int(n), Sum: sum, Changes: changes}, nil
+		}
+		// Other changes besides: decoded again from a copy below, so
+		// nothing kept from them shares b.
+	}
+	changes, err := decodeChanges(string(body), seq)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -292,11 +364,12 @@ type decoder struct {
 	n      int    // the change being read, from 1, for errors
 	damage *errs.Damage
 
-	// Every put's fields and every create change's field names, one change
-	// after another, so a batch costs a few allocations however many
-	// changes it holds.
+	// Every put's fields, every create change's field names, and every
+	// vector block's vectors, one change after another, so a batch costs a
+	// few allocations however many changes it holds.
 	fields []Field
 	names  []string
+	vecs   []Vector
 }
 
 // decodeChanges reads s, a batch's changes, one after another.
@@ -325,7 +398,7 @@ func decodeChanges(s string, seq uint64) ([]Change, error) {
 	// into the final arrays, so the old ones can go, with each slice's
 	// capacity ending where it does, so appending to one change's slice
 	// never reaches the next change's.
-	f, nm := 0, 0
+	f, nm, v := 0, 0, 0
 	for i := range changes {
 		c := &changes[i]
 		if k := len(c.Fields); k > 0 {
@@ -339,6 +412,12 @@ func decodeChanges(s string, seq uint64) ([]Change, error) {
 			nm += k
 		} else {
 			c.Names = nil
+		}
+		if k := len(c.Vecs); k > 0 {
+			c.Vecs = d.vecs[v : v+k : v+k]
+			v += k
+		} else {
+			c.Vecs = nil
 		}
 	}
 	return changes, nil
@@ -440,10 +519,42 @@ func (d *decoder) change() Change {
 		return c
 	case 'X':
 		return Change{Op: Drop, Table: d.str()}
+	case 'V':
+		return d.block(at)
 	default:
 		d.fail(at, "a change of unknown kind %#02x", kind)
 	}
 	return Change{}
+}
+
+// block reads a vector block's syntax, from just past its kind, for the
+// change that starts at at: the table's name, the vector size, the number of
+// vectors, each record's key, then the vectors' values, back to back. Each
+// vector's bits are a slice of the values, which are a slice of d.s.
+func (d *decoder) block(at int) Change {
+	c := Change{Op: Vectors, Table: d.str()}
+	c.Size = int(d.u32())
+	count := d.u32()
+	if d.damage == nil && (c.Size < 1 || c.Size > maxVecDims) {
+		// The values' length rests on the vector size, so one outside
+		// FORMAT.md's limits stops the read here, in the words the rules
+		// give it. The limit keeps count*each well inside a uint64.
+		d.fail(at, "%s", c.problem())
+		return c
+	}
+	start := len(d.vecs)
+	for i := uint32(0); i < count && d.damage == nil; i++ {
+		d.vecs = append(d.vecs, Vector{Key: d.str()})
+	}
+	each := 4 * uint64(c.Size)
+	values := d.take(uint64(count) * each)
+	if d.damage == nil {
+		for i := range d.vecs[start:] {
+			d.vecs[start+i].Bits = values[uint64(i)*each : uint64(i+1)*each]
+		}
+	}
+	c.Vecs = d.vecs[start:] // until decodeChanges points it into the final array
+	return c
 }
 
 // value reads one value of a put.

@@ -23,6 +23,14 @@ Every file is made from one of two small databases, with the database ID
   its whole field list and its records, and a commit after it that puts
   `docs:3`.
 
+The files named `block-` damage a vector block, which V2 added. Those of
+generation 2 are made from a third small database, compacted from the new
+one's batch 4 too: a table `pics` with the vector size 2 and the records
+`pics:1` and `pics:2`, then their vectors in a vector block, in a batch of
+its own, which ends the compacted part, and a commit after it that puts
+`pics:3`. The last, `block-generation-1-middle`, is the new one with a
+vector block in place of batch 2.
+
 A name ending in `-end` is damaged in the log's last batch, so the only sign
 past the end of the log is that batch's own marker. A name ending in
 `-middle` is damaged in batch 2, with batches 3 and 4 after it, which a
@@ -44,7 +52,11 @@ The kinds of damage, after FORMAT.md:
 - a batch that counts whose marker is damaged, with marked batches after
   it, which the check of the end of the log would otherwise mark, cutting
   off the batches after it;
-- in a compacted file, a log that ends before the compacted part does.
+- in a compacted file, a log that ends before the compacted part does;
+- a vector block that's malformed, that's for a table that doesn't exist,
+  or whose vector holds NaN, in the compacted part, and one outside it:
+  in a commit after the compacted part, and in generation 1, which has
+  none.
 
 ## How they're made and changed
 
@@ -61,8 +73,8 @@ To change them, change `damagedFixtures`, then write the files and
 HYPERCRUX_LOGFILE_RECORD=1 go test -run TestTheDamagedFixtures ./beta/internal/logfile
 ```
 
-That also removes a `.hcx` file the table no longer names. A change to the
-format raises its version, and every file here is written again with it.
+That also removes a `.hcx` file the table no longer names. When a change to
+the format raises its version, every file here is written again with it.
 
 ## Who reads them
 

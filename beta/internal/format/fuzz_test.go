@@ -15,12 +15,13 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 )
 
-// The decoders' fuzz targets, seeded from the fixtures. Each checks the
-// bytes as they come, then again with their checksum made to fit, so the
-// fuzzer reaches past the checksum to what it guards. The codec has to
-// agree with fixtures_test.go's reader on every input, keep the line
-// between a batch that doesn't count and damage, and encode what it reads
-// back to the same bytes.
+// The decoders' fuzz targets, seeded from the fixtures, a vector block's
+// among them. Each checks the bytes as they come, then again with their
+// checksum made to fit, so the fuzzer reaches past the checksum to what it
+// guards. The codec has to agree with fixtures_test.go's reader on every
+// input, keep the line between a batch that doesn't count and damage, and
+// encode what it reads back to the same bytes, and DecodeBatchInPlace has
+// to read what DecodeBatch reads.
 
 // FuzzDecodeBatch is the main target: DecodeBatch on any bytes.
 func FuzzDecodeBatch(f *testing.F) {
@@ -64,6 +65,7 @@ func checkBatch(t *testing.T, b []byte) {
 	}
 	bt, err := DecodeBatch(b, gen, seq)
 	ref, refErr := readBatch(b, gen) // which doesn't look at the sequence number
+	checkInPlace(t, b, gen, seq)
 
 	// Whether the batch counts, by FORMAT.md's five checks. The generation
 	// and the sequence number asked for are the batch's own, and FORMAT.md
