@@ -247,3 +247,8 @@ logfile/dead-not-restarted ./beta/internal/logfile
 logfile/commit-limit-off-by-one ./beta/internal/logfile
 logfile/dead-floor-left-out ./beta/internal/logfile
 hypercrux/dead-uncounted ./beta/hypercrux
+query/filter-copies-every-vector ./beta/internal/query
+query/filter-drops-the-vector ./beta/internal/query
+query/comment-takes-in-nothing ./beta/internal/query
+logfile/path-before-the-name ./beta/internal/logfile
+hypercrux/check-copy-over-unseen ./beta/hypercrux

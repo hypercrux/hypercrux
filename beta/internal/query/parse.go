@@ -65,7 +65,9 @@ func Parse(text string) (Statement, error) {
 //
 // 0.x puts the condition in parentheses at the end of its own query, so a
 // NUL byte in it ends that query before the closing parenthesis, which is
-// "incomplete input", and the Beta refuses it the same way.
+// "incomplete input", and the Beta refuses it the same way. So is a
+// condition that ends inside a comment, such as n = 1 -- c or n = 1 /* c,
+// whose comment takes in the closing parenthesis in 0.x (closed).
 func ParseCondition(text string) (cond Expr, params int, err error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, 0, nil
@@ -84,7 +86,28 @@ func ParseCondition(text string) (cond Expr, params int, err error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	if !closed(text) && plant != "query/comment-takes-in-nothing" {
+		return nil, 0, &Error{Pos: len(text), Msg: "incomplete input"}
+	}
 	return cond, p.params, nil
+}
+
+// closed reports whether a closing parenthesis after text, as 0.x writes
+// one after Nearest's condition, would be a token of its own: whether text
+// ends outside a comment. A condition that parses can't end inside quotes,
+// so a comment is the one thing that could take the parenthesis in: a --
+// with no line feed after it, or a /* with no */.
+func closed(text string) bool {
+	l := lexer{text: text + ")"}
+	for {
+		t := l.next()
+		switch {
+		case t.kind == tEOF:
+			return false
+		case t.pos >= len(text):
+			return t.kind == tRP && t.pos == len(text)
+		}
+	}
 }
 
 // parser reads one statement. It stops at the first error, by panicking

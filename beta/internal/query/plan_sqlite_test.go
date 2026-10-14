@@ -745,6 +745,62 @@ func plannedAs0x(t *testing.T, seed uint64, queries int) {
 	t.Logf("%d statements: %v", 2*queries, counts)
 }
 
+// TestFiltersThatEndInACommentAs0xHasThem runs Nearest with filters that end
+// in a comment, or hold one, in 0.x and through plannedNearest. 0.x puts the
+// filter in parentheses at the end of its query, so a comment the filter
+// leaves open takes in the closing parenthesis, and the query is incomplete
+// input there (R1.md's note for R2). Either way the errors agree by kind,
+// and the hits as conformance.CompareHits has them.
+func TestFiltersThatEndInACommentAs0xHasThem(t *testing.T) {
+	r := rand.New(rand.NewPCG(9, 0x5135))
+	d := newRandomData(r, 3, 60, 10)
+	e, db, s := d.open(t)
+	defer db.Close()
+	q := []float32{1, 0.5, -0.25}
+	for _, cs := range []struct {
+		where string
+		fails bool
+	}{
+		{"n > 0 -- the rest", true},
+		{"n > 0 --", true},
+		{"n > 0 -- a line\r", true},
+		{"n > 0 /* the rest", true},
+		{"n > 0 /* the rest *", true},
+		{"-- all of it", true},
+		{"n > 0 -- a line\n", false},
+		{"n > 0 /* the rest */", false},
+		{"n > 0 /**/", false},
+		{"n > 0 -- a line\nAND n < 100", false},
+		{"n > 0 AND title <> '-- not a comment'", false},
+		{"n > 0 AND title <> '/* not a comment'", false},
+		{"n > 0 AND \"title\" <> '--'", false},
+	} {
+		want, werr := db.Nearest("docs", c.Vector(q), 5, cs.where)
+		var got []store.Hit
+		var gerr error
+		if err := s.Read(func(rd store.Reader) error {
+			got, gerr = plannedNearest(rd, "docs", q, 5, cs.where, nil, planNow)
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		wk, gk := difftest.Kind(e, werr), betaKind(gerr)
+		if wk != gk || (werr != nil) != cs.fails {
+			t.Errorf("Nearest with %q: 0.x %s %v, Beta %s %v; want an error: %v", cs.where, wk, werr, gk, gerr, cs.fails)
+			continue
+		}
+		if werr == nil {
+			hits := make([]c.Hit, len(got))
+			for j, h := range got {
+				hits[j] = c.Hit{Key: h.Key, Distance: h.Distance}
+			}
+			if err := c.CompareHits(hits, want); err != nil || len(hits) == 0 {
+				t.Errorf("Nearest with %q: %d hits, %v", cs.where, len(hits), err)
+			}
+		}
+	}
+}
+
 // TestNearestFiltersAs0xHasThem runs Nearest with random filters on the
 // same random data in 0.x and through plannedNearest, which takes its
 // filter from NearestFilter: up to three conditions, among them names it

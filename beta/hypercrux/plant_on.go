@@ -158,6 +158,13 @@ import (
 //   - hypercrux/dead-uncounted: the copy tells the log of no dead bytes, so
 //     a database whose commits write over its data is compacted only at the
 //     limit on commits, and its file grows to many times its live data.
+//
+// R2's:
+//
+//   - hypercrux/check-copy-over-unseen: Check's read of the file takes the
+//     header and the batches it finds there, as before R2, so another
+//     database's file of the same length copied over the file in place reads
+//     as sound (G7.md's note).
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -175,7 +182,7 @@ var plant = func() string {
 		"hypercrux/compaction-error-returned", "hypercrux/compaction-error-dropped", "hypercrux/no-compaction-after-commit",
 		"hypercrux/compact-stale-snapshot",
 		"hypercrux/compaction-without-blocks",
-		"hypercrux/dead-uncounted":
+		"hypercrux/dead-uncounted", "hypercrux/check-copy-over-unseen":
 		return p
 	}
 	return ""

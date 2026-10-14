@@ -218,7 +218,7 @@ func (db *DB) readFile(at logfile.Applied, check bool) (int64, error) {
 	if err != nil || !got.Same(info) {
 		return info.Size, err
 	}
-	return got.Size, readLog(f, path, at.End, got.Size)
+	return got.Size, readLog(f, path, at, got.Size)
 }
 
 // readSize is how much readLog reads from the file at a time.
@@ -228,20 +228,24 @@ const readSize = 1 << 20
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 
 // readLog reads the log in f, a file of size bytes at path, from its start
-// to end, the end of the log as a process has read it. Nothing before the
-// end of a marker ever changes in a HyperCrux file, so every batch up to end
-// has to count and be marked, one after another, and end at end. readLog
-// checks the header, then each batch's head, its checksum and its marker,
-// streaming the batch through the checksum a megabyte at a time, so a batch
-// of any size costs that much memory. It decodes no changes: the process
-// read each batch whole and took its changes, or wrote them, and the
-// checksum shows the bytes are as they were.
+// to at.End, the end of the log as a process has read it. Nothing before the
+// end of a marker ever changes in a HyperCrux file, so every batch up to the
+// end has to count and be marked, one after another, and end there, and the
+// header and the last marker have to be the ones the process read, at.Head
+// and at.Last: another database's file, or another copy of this one, copied
+// over the file in place can have its length and keep every rule (G7.md's
+// note for R2). readLog checks the header, then each batch's head, its
+// checksum and its marker, streaming the batch through the checksum a
+// megabyte at a time, so a batch of any size costs that much memory. It
+// decodes no changes: the process read each batch whole and took its
+// changes, or wrote them, and the checksum shows the bytes are as they were.
 //
 // It returns the first damage it finds, a *Damage naming the batch and the
 // offset where the damage was found: the batch's start for its head and its
-// checksum, and its marker's offset for its marker. Or it returns a failed
-// read's error.
-func readLog(f fsys.File, path string, end, size int64) error {
+// checksum, and its marker's offset for its marker, or the header's start.
+// Or it returns a failed read's error.
+func readLog(f fsys.File, path string, at logfile.Applied, size int64) error {
+	end := at.End
 	r := bufio.NewReaderSize(io.NewSectionReader(f, 0, end), readSize)
 	var head [format.HeaderSize]byte
 	if _, err := io.ReadFull(r, head[:]); err != nil {
@@ -255,6 +259,9 @@ func readLog(f fsys.File, path string, end, size int64) error {
 		}
 		d.Path, d.Reason = path, d.Reason+"; this process read the header whole, so the file has changed since"
 		return d
+	}
+	if head != at.Head && plant != "hypercrux/check-copy-over-unseen" {
+		return &Damage{Path: path, Reason: "the header isn't the one this process read: another database's file, or another copy of this one, has been copied over it"}
 	}
 	sum := crc32.New(castagnoli)
 	var tail [4 + format.MarkerSize]byte
@@ -311,6 +318,11 @@ func readLog(f fsys.File, path string, end, size int64) error {
 		}
 		off += n + format.MarkerSize
 		seq++
+	}
+	// The log ends at the batch the process read last, with its marker.
+	if (seq-1 != at.Seq || at.Seq > 0 && [format.MarkerSize]byte(tail[4:]) != at.Last) && plant != "hypercrux/check-copy-over-unseen" {
+		return &Damage{Path: path, Offset: off - format.MarkerSize, Batch: seq - 1, Reason: fmt.Sprintf(
+			"the marker that ends the log isn't the one this process read there, after batch %d: another database's file, or another copy of this one, has been copied over it", at.Seq)}
 	}
 	return nil
 }

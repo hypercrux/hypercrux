@@ -499,6 +499,57 @@ func TestTheSearchFilterIsSafeOnGoroutines(t *testing.T) {
 	}
 }
 
+// TestASearchsFilterCopiesNoVectorItDoesntRead checks that a nearest
+// search's filter leaves each record's vector out of the row it fills when
+// none of its terms reads the vector, though the statement reads it to sort
+// (G4.md's note): the filter allocates nothing for a record. A filter whose
+// terms read the vector gets it, and gives what the sort gives.
+func TestASearchsFilterCopiesNoVectorItDoesntRead(t *testing.T) {
+	s := planStore(t)
+	rec, err := s.Get("docs:1")
+	if err != nil || rec.Vec == nil {
+		t.Fatalf("docs:1 has no vector: %v", err)
+	}
+	for _, cs := range []struct {
+		where string
+		reads bool // whether the filter's terms read the vector
+	}{
+		{"status = 'open'", false},
+		{"n > 0 AND title LIKE '%a%'", false},
+		{"length(vec) = 12", true},
+		{"distance(vec, '[0, 1, 0]') < 2", true},
+	} {
+		q := "SELECT key FROM docs WHERE vec IS NOT NULL AND " + cs.where + " ORDER BY distance(vec, '[1, 0, 0]') LIMIT 3"
+		st, err := Parse(q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, err := Prepare(s, st.(*Select))
+		if err != nil || p.Shape() != ShapeNearest {
+			t.Fatalf("%s: %v, %v", q, p, err)
+		}
+		keep := p.filter(&Frame{Now: planNow})
+		keep(rec)
+		allocs := testing.AllocsPerRun(100, func() {
+			if _, err := keep(rec); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if cs.reads != (allocs > 0) {
+			t.Errorf("%s: the filter allocates %v times a record; want a copy of the vector only when it reads it, %v", q, allocs, cs.reads)
+		}
+	}
+	// The same searches' answers, against the sort that + 0 makes them, which
+	// reads every row's vector.
+	for _, where := range []string{"length(vec) = 12", "distance(vec, '[0, 1, 0]') < 1", "distance(vec, '[0, 1, 0]') > 0.5 AND status = 'open'"} {
+		q := "SELECT key FROM docs WHERE vec IS NOT NULL AND " + where + " ORDER BY distance(vec, '[1, 0, 0]')%s LIMIT 3"
+		near, sorted := planQuery(s, fmt.Sprintf(q, ""), nil, planNow), planQuery(s, fmt.Sprintf(q, " + 0"), nil, planNow)
+		if answerText(near) != answerText(sorted) || answerText(near) == "" {
+			t.Errorf("%s: the search gives %q, and the sort %q", where, answerText(near), answerText(sorted))
+		}
+	}
+}
+
 // TestTheSortForASearchWorksOutItsQueryOnce checks that a nearest search
 // that sorts instead, since its query vector is NULL, works out the
 // subquery that gives it once, for the check and the sort alike.

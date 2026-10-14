@@ -61,14 +61,20 @@ A key is table:id, such as docs:7. A VECTOR is a JSON array, such as
 except with sql, whose options go before FILE: everything after FILE is the
 statement and its arguments. Only init, put and import create a file.`
 
-func main() {
+// The command, which doc.go's main runs. It's set here, in the one place
+// that builds only on Linux, so the package has a main on every system.
+func init() { command = start }
+
+// start runs the command with the process's arguments and gives its exit
+// code.
+func start() int {
 	out := bufio.NewWriter(os.Stdout)
 	code := run(os.Args[1:], os.Stdin, out, os.Stderr)
 	if err := out.Flush(); err != nil && code == 0 {
 		fmt.Fprintln(os.Stderr, "hypercrux: writing the output:", err)
 		code = 1
 	}
-	os.Exit(code)
+	return code
 }
 
 // errUsage marks a mistake in how the command was called.

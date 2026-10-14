@@ -38,6 +38,9 @@ import "os"
 //   - query/space-name-printed-bare: a column whose bare name is only
 //     characters strings.TrimSpace removes, such as U+00A0, prints alone as
 //     that name, which a condition reads as white space and no condition.
+//   - query/comment-takes-in-nothing: Nearest's condition may end inside a
+//     comment, so n = 1 -- c filters as n = 1, where 0.x's comment takes in
+//     the parenthesis it closes the condition with, and refuses it (R2).
 //
 // The dates' (Q2):
 //
@@ -98,7 +101,7 @@ var plant = func() string {
 	case "query/and-or-one-level", "query/between-takes-comparisons", "query/sign-takes-operators",
 		"query/plus-kept", "query/left-as-alias", "query/params-from-one", "query/text-without-comments",
 		"query/aggregate-in-where", "query/record-key-takes-or", "query/is-not-printed-bare",
-		"query/slash-star-comment", "query/space-name-printed-bare",
+		"query/slash-star-comment", "query/space-name-printed-bare", "query/comment-takes-in-nothing",
 		"query/real-text-shortest", "query/text-reads-as-number", "query/plus-keeps-affinity",
 		"query/in-takes-item-affinity", "query/in-list-stops-early", "query/in-record-is-a-list",
 		"query/and-or-sees-signs", "query/minus-zero-lost", "query/div-rounds-down", "query/nan-kept",

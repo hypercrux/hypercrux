@@ -798,13 +798,19 @@ func TestConditions(t *testing.T) {
 // removes. Alone, such text is no condition, as in 0.x, and a column of
 // that name prints in parentheses, so its text parses back as the same
 // column (columnText). R1's long fuzzing found " --" and "　--",
-// which testdata/fuzz/FuzzParse keeps.
+// which testdata/fuzz/FuzzParse keeps. Since R2 a condition that ends in a
+// comment is incomplete input, as it is in 0.x, whose comment takes in the
+// parenthesis it closes the condition with, so the column comes before a
+// comment that ends with its line.
 func TestConditionsOfSpaceNames(t *testing.T) {
 	for _, c := range []string{"\u0085", " ", " ", " ", " ", " ", " ", " ", " ", "　", " 　"} {
 		if e, n, err := ParseCondition(c); e != nil || n != 0 || err != nil {
 			t.Errorf("%q alone gives %s, %d, %v, where no condition is wanted", c, dumpExpr(e), n, err)
 		}
-		for _, q := range []string{c + "--", c + "/**/", "(" + c + ")"} {
+		if e, _, err := ParseCondition(c + "--"); err == nil || err.Error() != "incomplete input" {
+			t.Errorf("%q gives %s, %v, where incomplete input is wanted", c+"--", dumpExpr(e), err)
+		}
+		for _, q := range []string{c + "--\n", c + "/**/", "(" + c + ")"} {
 			e, _, err := ParseCondition(q)
 			col, ok := e.(*Column)
 			if err != nil || !ok || col.Name.Name != c || col.Name.Quoted {

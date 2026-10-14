@@ -16,5 +16,24 @@
 // problems, and 2 for a mistake in how it was called, such as an unknown
 // verb or option, or more than one SQL statement.
 //
-// Like the rest of beta/, it builds only on Linux.
+// Like the rest of beta/, it runs only on Linux. Elsewhere it builds all the
+// same, so go build ./... works on macOS and Windows, and it says it runs on
+// Linux only and exits with 1.
 package main
+
+import (
+	"fmt"
+	"os"
+)
+
+// command runs the command and gives its exit code. Only a Linux build has
+// one, which main.go sets.
+var command func() int
+
+func main() {
+	if command == nil {
+		fmt.Fprintln(os.Stderr, "hypercrux: the Beta's command runs on Linux only, for now; HyperCrux 0.x's runs on macOS and Windows")
+		os.Exit(1)
+	}
+	os.Exit(command())
+}

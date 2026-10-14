@@ -93,10 +93,15 @@ var ErrReplaced = errors.New("hypercrux: another file has taken the database's p
 func (l *Log) replaced() error { return fmt.Errorf("%w: %s", ErrReplaced, l.path) }
 
 // spot is how far this process has applied the log: the file, by device and
-// inode number, and the end of its log there.
+// inode number, and the end of its log there, with the file's header and
+// the last batch's sequence number and marker, as this process read them,
+// for Applied.
 type spot struct {
 	dev, ino uint64
 	end      int64
+	seq      uint64
+	head     [format.HeaderSize]byte
+	last     [format.MarkerSize]byte // zeros when no batch has been applied
 }
 
 // publish tells Follow how far this process has applied the log, holding
@@ -105,7 +110,10 @@ type spot struct {
 func (l *Log) publish() {
 	var s *spot
 	if l.f != nil && !l.closed {
-		s = &spot{dev: l.file.Dev, ino: l.file.Ino, end: l.end}
+		s = &spot{dev: l.file.Dev, ino: l.file.Ino, end: l.end, seq: l.seq, head: l.head}
+		if l.seq > 0 {
+			s.last = l.last
+		}
 		if old := l.seen.Load(); old != nil && *old == *s {
 			return
 		}

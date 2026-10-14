@@ -103,7 +103,12 @@ func (s *RowSource) use(i int) {
 // value of kind KindVector, a copy, and only when the statement reads it.
 // Fill only reads the source, so goroutines may fill rows of their own at
 // once, as a nearest search's filter may (Q5).
-func (s *RowSource) Fill(row []value.Value, r store.Record) {
+func (s *RowSource) Fill(row []value.Value, r store.Record) { s.fill(row, r, true) }
+
+// fill is Fill, with the vector's place left NULL unless vec is set, for a
+// row whose expressions read every field the statement reads but the
+// vector, as a nearest search's filter's may (filter, in plan_run.go).
+func (s *RowSource) fill(row []value.Value, r store.Record, vec bool) {
 	row[s.Base] = value.Text(r.Key)
 	fs, j := r.Fields, 0
 	for _, i := range s.reads {
@@ -112,7 +117,7 @@ func (s *RowSource) Fill(row []value.Value, r store.Record) {
 		case i == 0:
 			continue
 		case i == s.vec:
-			if r.Vec != nil {
+			if vec && r.Vec != nil {
 				v = value.Vector(r.Vec)
 			}
 		default:

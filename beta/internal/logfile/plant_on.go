@@ -224,6 +224,12 @@ import (
 //   - logfile/dead-floor-left-out: a compaction is due once half the file
 //     is dead, without the megabyte, so a small database whose commits
 //     write over each other is compacted after every few commits.
+//
+// R2's:
+//
+//   - logfile/path-before-the-name: Open's error for a file that isn't a
+//     database puts the path before the codec's words, which start with the
+//     package's name, so the message names it twice, as before R2.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -242,7 +248,8 @@ var plant = func() string {
 		"logfile/folder-unsynced-before-commit", "logfile/named-kept-on-another-file",
 		"logfile/block-cut-short", "logfile/block-one-batch", "logfile/block-anywhere", "logfile/block-appended",
 		"logfile/blocks-always-in-place",
-		"logfile/dead-not-restarted", "logfile/commit-limit-off-by-one", "logfile/dead-floor-left-out":
+		"logfile/dead-not-restarted", "logfile/commit-limit-off-by-one", "logfile/dead-floor-left-out",
+		"logfile/path-before-the-name":
 		return p
 	}
 	return ""

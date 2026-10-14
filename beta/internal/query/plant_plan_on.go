@@ -40,13 +40,22 @@ import "os"
 //     column's alias is found before a field of the same name.
 //   - query/filter-first-term-dropped: NearestFilter leaves out the first
 //     term of its condition, as if vec IS NOT NULL took two places.
+//
+// R2's:
+//
+//   - query/filter-copies-every-vector: a nearest search's filter fills each
+//     record's vector into its row, a copy, even when none of its terms
+//     reads it, as before R2 (G4.md's note).
+//   - query/filter-drops-the-vector: a nearest search's filter leaves the
+//     vector out of its row even when a term reads it, so distance(vec, ?)
+//     in the filter is NULL there.
 func init() {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "query/nearest-ignores-filter", "query/nearest-without-vec-check", "query/nearest-k-is-the-limit",
 		"query/walk-join-drops-a-depth", "query/walk-lookup-in-walk-order", "query/null-not-in-walk-kept",
 		"query/record-every-time", "query/record-of-any-table", "query/once-terms-for-each-row",
 		"query/join-terms-after-lookup", "query/and-not-folded", "query/order-alias-first",
-		"query/filter-first-term-dropped":
+		"query/filter-first-term-dropped", "query/filter-copies-every-vector", "query/filter-drops-the-vector":
 		plant = p
 	}
 }

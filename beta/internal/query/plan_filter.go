@@ -69,6 +69,6 @@ func NearestFilter(r store.Reader, table string, where Expr, params int, f *Fram
 	if plant == "query/filter-first-term-dropped" && len(terms) > 0 {
 		terms = terms[1:]
 	}
-	p.near = &nearPlan{filter: terms}
+	p.near = &nearPlan{filter: terms, filterTerms: p.condTerms}
 	return p.filter(&frame), false, nil
 }

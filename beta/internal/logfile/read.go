@@ -12,6 +12,7 @@ import (
 	"io"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/hypercrux/hypercrux/beta/internal/errs"
 	"github.com/hypercrux/hypercrux/beta/internal/format"
@@ -53,12 +54,31 @@ func (l *Log) load() (int64, error) {
 			d.Path = l.path
 			return 0, d
 		}
-		return 0, fmt.Errorf("%s: %w", l.path, err)
+		if plant == "logfile/path-before-the-name" {
+			return 0, fmt.Errorf("%s: %w", l.path, err)
+		}
+		return 0, &inFile{path: l.path, err: err}
 	}
 	l.hdr = h
 	l.end = format.HeaderSize
 	return st.Size, l.readOn(st.Size)
 }
+
+// inFile is an error the codec gave for the file at path, such as one that
+// wraps errs.ErrNotDatabase, with the path in it after the package's name,
+// which the codec's words start with: "hypercrux: PATH: not a HyperCrux
+// database: ...". Put in front of those words, the path left the name twice
+// in the message the command prints (G5.md's note for R2).
+type inFile struct {
+	path string
+	err  error
+}
+
+func (e *inFile) Error() string {
+	return "hypercrux: " + e.path + ": " + strings.TrimPrefix(e.err.Error(), "hypercrux: ")
+}
+
+func (e *inFile) Unwrap() error { return e.err }
 
 // readOn reads the log on from l.end, in a file of size bytes, handing
 // every marked batch to the Target in order, and stops at the end of the

@@ -167,6 +167,74 @@ func TestCheckNamesDamageInTheFile(t *testing.T) {
 	}
 }
 
+// TestCheckFindsAFileCopiedOverInPlace copies a file of the same length over
+// an open database's file in place, so the file keeps its inode and its
+// length, and every rule of the format holds in it: another database made
+// by the same calls, and another copy of the same database, which has the
+// same ID and generation and another last commit. Reads in this process go
+// on, since the file looks as it did, and Check's read of the file finds
+// that the header, or the marker that ends the log, isn't the one this
+// process read (G7.md's note for R2).
+func TestCheckFindsAFileCopiedOverInPlace(t *testing.T) {
+	for _, c := range []struct {
+		what   string
+		other  func(t *testing.T, path, dir string) []byte // the bytes copied over the file at path
+		at     func(b []spot) int64
+		batch  int
+		reason string
+	}{
+		{"another database's file", func(t *testing.T, path, dir string) []byte {
+			other := filepath.Join(dir, "other.hcx")
+			db := fourCommits(t, other)
+			ok(t, db.Put("docs:4", hc.Fields{"n": 4}))
+			db.Close()
+			b, err := os.ReadFile(other)
+			ok(t, err)
+			return b
+		}, func([]spot) int64 { return 0 }, 0, "the header isn't the one this process read"},
+		{"another copy of the same database", func(t *testing.T, path, dir string) []byte {
+			b, err := os.ReadFile(path)
+			ok(t, err)
+			other := filepath.Join(dir, "copy.hcx")
+			ok(t, os.WriteFile(other, b, 0o644))
+			db := open(t, other)
+			ok(t, db.Put("docs:3", hc.Fields{"n": 3}))
+			db.Close()
+			b, err = os.ReadFile(other)
+			ok(t, err)
+			return b
+		}, func(b []spot) int64 { return b[4].at + b[4].n }, 5, "the marker that ends the log isn't the one this process read there"},
+	} {
+		t.Run(c.what, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "test.hcx")
+			db := fourCommits(t, path)
+			defer db.Close()
+			other := c.other(t, path, dir)
+			ok(t, db.Put("docs:4", hc.Fields{"n": 4})) // the same length as the copy's docs:3
+			b := batchesIn(t, path)
+			if info, err := os.Stat(path); err != nil || info.Size() != int64(len(other)) {
+				t.Fatalf("the file is %v bytes and the other %d: %v", info.Size(), len(other), err)
+			}
+			if rep, err := db.Check(); err != nil || !rep.OK() {
+				t.Fatalf("before the copy, Check gives %+v, %v", rep, err)
+			}
+			ok(t, os.WriteFile(path, other, 0o644)) // in place, so the inode stays
+			if _, err := db.Get("docs:2"); err != nil {
+				t.Fatalf("after the copy, a read gives %v", err)
+			}
+			rep, err := db.Check()
+			want := fmt.Sprintf("the file is damaged: offset %d: %s", c.at(b), c.reason)
+			if c.batch != 0 {
+				want = fmt.Sprintf("the file is damaged: batch %d at offset %d: %s", c.batch, c.at(b), c.reason)
+			}
+			if err != nil || len(rep.Problems) != 1 || !strings.HasPrefix(rep.Problems[0], want) {
+				t.Fatalf("Check gave %q, %v, where one problem starting %q is wanted", rep.Problems, err, want)
+			}
+		})
+	}
+}
+
 // TestCheckNamesTheDamagedFixtures moves each of the damaged fixtures into
 // place under an open database, as a backup put back, so the database's next
 // read reloads the file and fails on its damage. Check names the batch and

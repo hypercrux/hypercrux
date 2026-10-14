@@ -463,12 +463,25 @@ func (p *Plan) queryVector(f *Frame) ([]float32, bool) {
 // own, and the terms worked out over it in turn, as Filter does. The
 // search may call it from several goroutines, so each takes a row and a
 // Frame from a pool. With no terms there's no filter.
+//
+// The row holds every field the statement reads, apart from the vector
+// unless one of the terms reads it. The search's own ORDER BY distance()
+// reads the vector, and a copy of each record's into its row took a search
+// of 100,000 records with 384-value vectors, a tenth through the filter,
+// about 150 ms here, ten times what the search takes without it (G4.md).
 func (p *Plan) filter(f *Frame) store.Filter {
 	conds := p.near.filter
 	if len(conds) == 0 || plant == "query/nearest-ignores-filter" {
 		return nil
 	}
 	src, width := p.table.RowSource, p.width
+	vec := p.readsVec(p.near.filterTerms)
+	switch plant {
+	case "query/filter-copies-every-vector":
+		vec = true
+	case "query/filter-drops-the-vector":
+		vec = false
+	}
 	pool := &sync.Pool{New: func() any {
 		fr := &filterRow{frame: *f, row: make([]value.Value, width)}
 		fr.frame.Row = &fr.row
@@ -477,7 +490,7 @@ func (p *Plan) filter(f *Frame) store.Filter {
 	return func(rec store.Record) (bool, error) {
 		fr := pool.Get().(*filterRow)
 		defer pool.Put(fr)
-		src.Fill(fr.row, rec)
+		src.fill(fr.row, rec, vec)
 		for _, c := range conds {
 			if ok, err := c(&fr.frame); err != nil || !ok {
 				return false, err
@@ -490,6 +503,19 @@ func (p *Plan) filter(f *Frame) store.Filter {
 type filterRow struct {
 	frame Frame
 	row   []value.Value
+}
+
+// readsVec reports whether any of terms reads the table's vector field. A
+// term's subqueries can't read fields, so its names are all there is to it.
+func (p *Plan) readsVec(terms []Expr) bool {
+	for _, term := range terms {
+		for _, c := range columnsOf(term) {
+			if p.isVec(c) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // hitRows gives the records a search found, in its order.

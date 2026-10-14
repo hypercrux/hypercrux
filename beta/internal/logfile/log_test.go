@@ -185,7 +185,9 @@ func TestARefusedBatchIsDamage(t *testing.T) {
 }
 
 // TestNotADatabase checks the header's errors, in FORMAT.md's order, and
-// that opening changes none of the files.
+// that opening changes none of the files. Each error names the file once,
+// and the package once, at its start: "hypercrux: PATH: not a HyperCrux
+// database: ..." (G5.md's note for R2).
 func TestNotADatabase(t *testing.T) {
 	good, err := format.AppendHeader(nil, format.Header{ID: [16]byte{1}, Gen: 1})
 	if err != nil {
@@ -215,6 +217,8 @@ func TestNotADatabase(t *testing.T) {
 			_, err := Open(fsys.OS{}, path, &recorder{}, Options{})
 			if !errors.Is(err, c.want) || !strings.Contains(err.Error(), path) {
 				t.Errorf("Open gave %v, where %v with the path is wanted", err, c.want)
+			} else if msg := err.Error(); !strings.HasPrefix(msg, "hypercrux: ") || strings.Count(msg, "hypercrux: ") != 1 || strings.Count(msg, path) != 1 {
+				t.Errorf("Open gave %q, which should start with the package's name, and name it and the file once", msg)
 			}
 			if !bytes.Equal(fileBytes(t, path), c.file) {
 				t.Error("the file changed")

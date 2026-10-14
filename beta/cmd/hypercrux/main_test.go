@@ -7,6 +7,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -211,4 +212,25 @@ func TestAFailedPutLeavesNothing(t *testing.T) {
 		t.Errorf("a failed put left %s behind: %v", fresh, err)
 	}
 	expect(t, 1, "no such file", "get", filepath.Join(t.TempDir(), "x.db"), "docs:1")
+}
+
+// TestTheCommandBuildsOnEveryOS: go build ./... works on macOS and Windows,
+// where the rest of beta/ builds to empty packages and the command to one
+// that says it runs on Linux only (G5.md's note for R2). On Linux the
+// command is main.go's.
+func TestTheCommandBuildsOnEveryOS(t *testing.T) {
+	if command == nil {
+		t.Fatal("a Linux build has no command for main to run")
+	}
+	if testing.Short() {
+		t.Skip("building for two other systems takes a few seconds the first time")
+	}
+	for _, target := range []string{"darwin/arm64", "windows/amd64"} {
+		goos, goarch, _ := strings.Cut(target, "/")
+		build := exec.Command("go", "build", "-o", filepath.Join(t.TempDir(), "hypercrux"), ".")
+		build.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "CGO_ENABLED=0")
+		if out, err := build.CombinedOutput(); err != nil {
+			t.Errorf("go build for %s: %v\n%s", target, err, out)
+		}
+	}
 }

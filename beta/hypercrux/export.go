@@ -35,9 +35,11 @@ import (
 // memory. Other processes carry on writing while it runs. In this process,
 // an Update waits from its first change until the export ends, as it waits
 // for any read, and inside an Update, Export works only until the first
-// change, as every read through the database does. An export that stops on
-// an error, such as one from w, has no last line, and Import refuses an
-// export without it.
+// change, as every read through the database does. w is written to inside
+// that read, so w mustn't call this database itself: a read there can wait
+// for an Update in another goroutine that waits for the export, and then
+// neither ends. An export that stops on an error, such as one from w, has no
+// last line, and Import refuses an export without it.
 //
 // As 0.x's does, Export refuses a database that Check finds problems in,
 // before it writes anything, with an error that wraps ErrInvalid and gives
