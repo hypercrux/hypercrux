@@ -3,7 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # Checks the Beta's task board against BETA.md's task table: the same tasks,
-# the same hours, and every task after the tasks it needs.
+# the same hours, and every task after the tasks it needs. Hours in
+# parentheses, such as V2's and C1's, are on top of the plan's estimate, so
+# the total leaves them out.
 #
 #   python3 scripts/check-board.py
 import os
@@ -15,11 +17,14 @@ beta = open(os.path.join(root, "BETA.md")).read()
 board = open(os.path.join(root, "beta", "tasks", "README.md")).read()
 
 plan = {}
+extras = []  # the tasks whose hours are in parentheses, in the table's order
 for line in beta.splitlines():
-    m = re.match(r"^\| (V2|[A-Z]\d) \| (.*?) \| (.*?) \| (.*?) \| \(?(\d+)\)? \|$", line)
+    m = re.match(r"^\| (V2|[A-Z]\d) \| (.*?) \| (.*?) \| (.*?) \| (\(?)(\d+)\)? \|$", line)
     if not m:
         continue
-    tid, _, needs, _, hours = m.groups()
+    tid, _, needs, _, extra, hours = m.groups()
+    if extra:
+        extras.append(tid)
     deps = []
     if needs.strip() != "none":
         for d in re.split(r",\s*", needs):
@@ -50,6 +55,6 @@ for t, hours in rows:
             problems.append(f"{t} comes before {d}, which it needs")
 for p in problems:
     print(p)
-total = sum(h for t, h in rows if t != "V2")
-print(f"{len(rows)} tasks, {total} hours without V2, {len(problems)} problems")
+total = sum(h for t, h in rows if t not in extras)
+print(f"{len(rows)} tasks, {total} hours without {' and '.join(extras)}, {len(problems)} problems")
 sys.exit(1 if problems else 0)
