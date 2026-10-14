@@ -93,7 +93,10 @@ func get(r store.Reader, key string) (Fields, error) {
 // value clears a field. The first Put into a table creates the table, and a
 // field the table hasn't seen before joins its fields, even with a nil
 // value. Field names match regardless of case, and a table keeps the
-// spelling it saw first.
+// spelling it saw first. Text and bytes hold at most 1,000,000,000 bytes, as
+// in 0.x, whose SQLite stops them there: a longer value fails, once every
+// other check has passed, with SQLite's error, "string or blob too big",
+// which wraps neither ErrInvalid nor ErrNotFound.
 func (db *DB) Put(key string, f Fields) error {
 	return db.Update(func(tx *Tx) error { return tx.Put(key, f) })
 }

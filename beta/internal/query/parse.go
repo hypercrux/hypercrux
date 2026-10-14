@@ -38,8 +38,12 @@ func (e *Error) Error() string { return e.Msg }
 // literals, and Q2 that they're 'now' and modifiers the subset takes.
 //
 // The text ends at its first NUL byte, if it has one, since SQLite reads the
-// text as a C string, and 0.x hands it the text as one.
+// text as a C string, and 0.x hands it the text as one. Before that, a text
+// longer than SQLite takes is refused (statementLength).
 func Parse(text string) (Statement, error) {
+	if err := statementLength(text); err != nil {
+		return nil, err
+	}
 	if i := strings.IndexByte(text, 0); i >= 0 {
 		text = text[:i]
 	}
@@ -54,6 +58,46 @@ func Parse(text string) (Statement, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// statementLength refuses a statement longer than SQLite takes, as SQLite
+// refuses 0.x's text. go-sqlite3 hands SQLite the text with its length, and
+// SQLite refuses more than maxSQLLength bytes as "statement too long" before
+// it reads any of them, NUL bytes included. A text whose last byte is a NUL
+// SQLite reads as a C string instead, counting the bytes up to the first
+// NUL as it reads them, so more than maxSQLLength of those is "string or
+// blob too big". SQLite gives a syntax error there instead when one comes
+// sooner, which is of kind "error" too, so the Beta doesn't look for one
+// (L1).
+func statementLength(text string) error {
+	if len(text) <= maxSQLLength || plant == "query/statement-length-unchecked" {
+		return nil
+	}
+	if text[len(text)-1] != 0 {
+		return &Error{Msg: "statement too long"}
+	}
+	if strings.IndexByte(text, 0) > maxSQLLength {
+		return &Error{Pos: maxSQLLength, Msg: "string or blob too big"}
+	}
+	return nil
+}
+
+// FilterLength refuses a filter that makes 0.x's query longer than SQLite
+// takes. 0.x runs Nearest(table, q, k, where, args...) as SELECT key, vec
+// FROM "table" WHERE vec IS NOT NULL AND (where), and go-sqlite3 hands
+// SQLite that text with its length, so a where that makes it more than
+// maxSQLLength bytes, NUL bytes included, is "statement too long", of kind
+// "error", before SQLite reads any of it. A where that holds only spaces,
+// as strings.TrimSpace sees them, is no filter, and leaves 0.x's query
+// short. Nearest calls it once its own checks have passed and its arguments
+// are values, before ParseCondition, as 0.x's query reaches SQLite once
+// database/sql has converted the arguments (L1).
+func FilterLength(table, where string) error {
+	const query = len(`SELECT key, vec FROM "" WHERE vec IS NOT NULL AND ()`)
+	if strings.TrimSpace(where) == "" || query+len(table)+len(where) <= maxSQLLength {
+		return nil
+	}
+	return &Error{Msg: "statement too long"}
 }
 
 // ParseCondition reads a condition on a table's records, as Nearest takes

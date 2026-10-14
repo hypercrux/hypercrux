@@ -22,6 +22,9 @@ import (
 // size, and the filter takes that query's rules here:
 //
 //   - its errors are of kind "error", the names it can't find among them;
+//   - its arguments are bound once it's planned, so one of more than
+//     SQLite's 1,000,000,000 bytes is refused before anything is worked
+//     out (Bind);
 //   - its terms that read no field are worked out once, now, as SQLite
 //     works them out before the query's first row. When one is false or
 //     NULL, none is true, and the search finds nothing;
@@ -53,6 +56,14 @@ func NearestFilter(r store.Reader, table string, where Expr, params int, f *Fram
 	p, err := prepare(r, sel, false)
 	if err != nil {
 		return nil, false, err
+	}
+	// SQLite binds 0.x's arguments once it has prepared the query, before
+	// its first row, so an argument too long for it is refused even when
+	// the terms worked out once would rule every record out (L1).
+	if plant != "query/filter-argument-unchecked" {
+		if err := Bind(f.Args); err != nil {
+			return nil, false, err
+		}
 	}
 	frame := *f
 	frame.Row = nil

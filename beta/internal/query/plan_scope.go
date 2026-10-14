@@ -129,7 +129,7 @@ func (s *planScope) Call(c *Call, args []Eval) (Eval, error) {
 		if err != nil {
 			return null, err
 		}
-		return walkJSON(steps), nil
+		return walkJSON(c, steps, maxLength)
 	}, nil
 }
 

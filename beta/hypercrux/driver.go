@@ -237,7 +237,12 @@ func (v via) statement(text string, s query.Statement, args []driver.NamedValue)
 // bind gives a statement's arguments in order, one for each ? mark. An
 // argument with a name, from sql.Named, is refused, since the Beta's SQL
 // has ? marks only and the arguments fill them in order, and so are fewer
-// arguments than marks or more (SQL.md, "Arguments").
+// arguments than marks or more (SQL.md, "Arguments"). Then text and bytes
+// of more than SQLite's 1,000,000,000 bytes are refused, as go-sqlite3's
+// bind refuses them, before anything runs (query.Bind, L1). 0.x binds once
+// SQLite has found the statement's names, so a statement with a name that
+// isn't there and an argument too long gives the name's error there and
+// this one here, both of kind "error".
 func bind(s query.Statement, args []driver.NamedValue) ([]value.Value, error) {
 	if err := unnamed(args); err != nil {
 		return nil, err
@@ -262,6 +267,11 @@ func bind(s query.Statement, args []driver.NamedValue) ([]value.Value, error) {
 			}
 		}
 		vals[i] = v
+	}
+	if plant != "hypercrux/argument-length-unchecked" {
+		if err := query.Bind(vals); err != nil {
+			return nil, err
+		}
 	}
 	return vals, nil
 }

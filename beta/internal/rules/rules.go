@@ -6,6 +6,7 @@
 package rules
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -36,7 +37,33 @@ const (
 	// held to this one, so MaxFields can rise later without a change to
 	// the format, and a build with the lower limit still opens the file.
 	FormatMaxFields = 65535
+	// MaxLength is the longest text or bytes value, in bytes: SQLite's
+	// SQLITE_MAX_LENGTH, which 0.x has from go-sqlite3, and which SQLite
+	// holds every value to as it binds an argument or makes a value of its
+	// own. FORMAT.md's u32 can say more, and a batch that holds a longer
+	// value is damage (L1).
+	MaxLength = 1000000000
 )
+
+// errTooBig is SQLite's error for a text or bytes value longer than
+// MaxLength, as go-sqlite3 hands it to 0.x: its words alone, wrapping
+// neither ErrInvalid nor ErrNotFound, so it's of kind "error".
+var errTooBig = errors.New("string or blob too big")
+
+// Length checks the length of a text or bytes value of n bytes, as SQLite
+// checks a value it binds or makes: at most MaxLength, or else SQLite's
+// error, "string or blob too big", of kind "error", which is 0.x's for a
+// value Put, SQL or an import would store, and for an argument.
+func Length(n int) error {
+	most := int64(MaxLength)
+	if plant == "rules/old-length-limit" {
+		most = math.MaxUint32
+	}
+	if int64(n) > most || int64(n) == most && plant == "rules/length-off-by-one" {
+		return errTooBig
+	}
+	return nil
+}
 
 // Table checks a table's name: lower-case letters, digits and underscores,
 // starting with a letter, 1 to 63 bytes, and not starting with hc_ or

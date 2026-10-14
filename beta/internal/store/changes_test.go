@@ -732,15 +732,10 @@ func TestLoadBatch(t *testing.T) {
 	tx.Rollback()
 }
 
-// TestFits: text and bytes fit the format up to 4,294,967,295 bytes. A test
-// can't make a longer value, so fits is tested alone. A put of text and
-// bytes too long for a u16 length goes through the codec as well.
-func TestFits(t *testing.T) {
-	ok(t, fits("t", math.MaxUint32))
-	err := fits("t", math.MaxUint32+1)
-	if !errors.Is(err, errs.ErrInvalid) || err.Error() != "hypercrux: invalid: field t holds 4294967296 bytes, and a value holds at most 4294967295" {
-		t.Errorf("fits gave %v", err)
-	}
+// TestLongValuesAreWritable: a put of text and bytes too long for a u16
+// length goes through the codec. How long they may be is L1's limit, which
+// TestTheLimitOnTextAndBytes, in limit_test.go, holds to its edge.
+func TestLongValuesAreWritable(t *testing.T) {
 	s := New()
 	long := strings.Repeat("é", 1<<16)
 	changes, err := s.Put(nil, "docs:1", []format.Field{{Name: "b", Value: value.Bytes(long)}, {Name: "t", Value: value.Text(long)}})

@@ -95,9 +95,13 @@ func walkSteps(r store.Reader, pos int, vals []value.Value) ([]store.Step, error
 	return steps, nil
 }
 
-// walkJSON is walk() as a function: the keys as Go's encoding/json writes a
-// []string, and [] for none, as 0.x gives them.
-func walkJSON(steps []store.Step) value.Value {
+// walkJSON is walk() as a function, called at c: the keys as Go's
+// encoding/json writes a []string, and [] for none, as 0.x gives them. Text
+// of more than most bytes is SQLite's error, "string or blob too big", of
+// kind "error", as SQLite refuses 0.x's walk() a result longer than its
+// limit (L1). The evaluator passes maxLength, and a test a smaller limit,
+// since a walk to a gigabyte of keys takes gigabytes.
+func walkJSON(c *Call, steps []store.Step, most int) (value.Value, error) {
 	keys := make([]string, len(steps))
 	for i, s := range steps {
 		keys[i] = s.Key
@@ -106,7 +110,10 @@ func walkJSON(steps []store.Step) value.Value {
 	if err != nil {
 		panic("query: a walk's keys don't make JSON: " + err.Error())
 	}
-	return value.Text(string(b))
+	if len(b) > most && plant != "query/walk-length-unchecked" {
+		return null, fail(c, "string or blob too big")
+	}
+	return value.Text(string(b)), nil
 }
 
 // walkOnce is a walk worked out once for each statement: the keys it

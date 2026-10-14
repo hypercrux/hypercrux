@@ -8,7 +8,6 @@ package store
 import (
 	"cmp"
 	"fmt"
-	"math"
 	"slices"
 	"strings"
 
@@ -53,9 +52,12 @@ import (
 // rules.MaxFields.
 //
 // fields may come in any order, and Put neither keeps the slice nor
-// changes it. The errors wrap errs.ErrInvalid, with 0.x's messages, and
-// come in 0.x's order: the key, the field names, the values in byte order
-// of name, the number of fields, then the vector's size.
+// changes it. The errors come in 0.x's order: the key, the field names, the
+// values in byte order of name, the number of fields, then the vector's
+// size, each wrapping errs.ErrInvalid with 0.x's message, and last the
+// length of each text and bytes value, which SQLite holds to
+// rules.MaxLength as 0.x binds the put's values, with SQLite's error, of
+// kind "error" (L1).
 func (s *Store) Put(dst []format.Change, key string, fields []format.Field) ([]format.Change, error) {
 	s.direct("Put")
 	return s.putFields(dst, key, fields)
@@ -76,7 +78,12 @@ func (s *Store) putFields(dst []format.Change, key string, fields []format.Field
 	}
 	put := slices.Clone(fields)
 	slices.SortFunc(put, byName)
-	vec, dot, err := s.keepAll(put)
+	if plant == "store/length-first" {
+		if err := lengths(put); err != nil {
+			return dst, err
+		}
+	}
+	vec, dot, err := s.checkAll(put)
 	if err != nil {
 		return dst, err
 	}
@@ -98,6 +105,12 @@ func (s *Store) putFields(dst []format.Change, key string, fields []format.Field
 	if err := t.check(tbl, key, added, rules.MaxFields, len(vec)); err != nil {
 		return dst, err
 	}
+	if plant != "store/put-length-unchecked" {
+		if err := lengths(put); err != nil {
+			return dst, err
+		}
+	}
+	own(put)
 	if t == nil {
 		dst = append(dst, format.Change{Op: format.CreateTable, Table: tbl})
 		t = s.newTable(strings.Clone(tbl))
@@ -160,8 +173,10 @@ func (s *Store) direct(op string) {
 // vectors.go). A change that sets a field of format.Change its Op doesn't
 // use is refused, as format.AppendBatch refuses it. On an error nothing
 // changes. The errors wrap errs.ErrInvalid, or errs.ErrNotFound for a
-// missing record, table or link. ApplyBatch and LoadBatch apply a whole
-// batch from the log, and report any of them as damage.
+// missing record, table or link, apart from SQLite's for text or bytes
+// longer than rules.MaxLength, which wraps neither, as Put's does.
+// ApplyBatch and LoadBatch apply a whole batch from the log, and report any
+// of them as damage.
 func (s *Store) Apply(c format.Change) error {
 	s.direct("Apply")
 	return s.apply(c)
@@ -302,13 +317,19 @@ func (s *Store) applyPut(c format.Change) error {
 		return err
 	}
 	put := slices.Clone(c.Fields)
-	vec, dot, err := s.keepAll(put)
+	vec, dot, err := s.checkAll(put)
 	if err != nil {
 		return err
 	}
 	if err := t.check(tbl, c.Key, added, rules.FormatMaxFields, len(vec)); err != nil {
 		return err
 	}
+	if plant != "store/batch-length-unchecked" {
+		if err := lengths(put); err != nil {
+			return err
+		}
+	}
+	own(put)
 	s.put(t, c.Key, put, vec, dot)
 	return nil
 }
@@ -526,15 +547,14 @@ func unique(n int, name func(int) string) error {
 	return nil
 }
 
-// keepAll checks each value of a put by 0.x's rules, in order, and puts in
-// its place the value the store keeps. It returns the put's vector, if it
-// has one, as checkVector gives it: its values, in the store's buffer, and
-// their dot product with themselves.
-func (s *Store) keepAll(fields []format.Field) ([]float32, float64, error) {
+// checkAll checks each value of a put by 0.x's rules, in order, and copies
+// nothing: lengths and own come once the put's other checks have passed. It
+// returns the put's vector, if it has one, as checkVector gives it: its
+// values, in the store's buffer, and their dot product with themselves.
+func (s *Store) checkAll(fields []format.Field) ([]float32, float64, error) {
 	var vec []float32
 	var dot float64
-	for i := range fields {
-		f := &fields[i]
+	for _, f := range fields {
 		if rules.IsVec(f.Name) && f.Value.Kind() == value.KindVector {
 			var err error
 			if vec, dot, err = s.checkVector(f.Value); err != nil {
@@ -542,60 +562,66 @@ func (s *Store) keepAll(fields []format.Field) ([]float32, float64, error) {
 			}
 			continue
 		}
-		v, err := keep(f.Name, f.Value)
-		if err != nil {
+		if err := check(f.Name, f.Value); err != nil {
 			return nil, 0, err
 		}
-		f.Value = v
 	}
 	return vec, dot, nil
 }
 
-// keep checks a value for the field called name by 0.x's rules: the vector
+// check checks a value for the field called name by 0.x's rules: the vector
 // field holds a vector or null, no other field holds a vector, text is
-// valid UTF-8, and reals are finite. Text and bytes also have to fit the
-// format, which gives their length as a u32 (see fits). It returns the
-// value the store keeps, with a copy of its text or bytes of its own, so
-// the store never holds on to a decoded batch. A vector in the vector field
-// is checkVector's to check, and the store keeps its values in the table's
+// valid UTF-8, and reals are finite. A vector in the vector field is
+// checkVector's to check, and the store keeps its values in the table's
 // array, and never the value.
-func keep(name string, v value.Value) (value.Value, error) {
+func check(name string, v value.Value) error {
 	if rules.IsVec(name) {
 		switch v.Kind() {
 		case value.KindNull, value.KindVector:
-			return v, nil
+			return nil
 		}
-		return v, fmt.Errorf("%w: the vector field %s holds a vector or null, and this value is of kind %s", errs.ErrInvalid, name, v.Kind())
+		return fmt.Errorf("%w: the vector field %s holds a vector or null, and this value is of kind %s", errs.ErrInvalid, name, v.Kind())
 	}
 	switch v.Kind() {
 	case value.KindReal:
-		return v, rules.Real(name, v.Real())
+		return rules.Real(name, v.Real())
 	case value.KindText:
-		if err := fits(name, len(v.Raw())); err != nil {
-			return v, err
-		}
-		if err := rules.Text(name, v.Text()); err != nil {
-			return v, err
-		}
-		return value.Text(strings.Clone(v.Text())), nil
-	case value.KindBytes:
-		if err := fits(name, len(v.Raw())); err != nil {
-			return v, err
-		}
-		return value.Bytes(strings.Clone(v.Raw())), nil
+		return rules.Text(name, v.Text())
 	case value.KindVector:
-		return v, rules.VectorElsewhere(name)
-	}
-	return v, nil
-}
-
-// fits checks the length of a text or bytes value for the field called
-// name: FORMAT.md writes it as a u32, so a value holds 4,294,967,295 bytes
-// at most, and format.AppendBatch refuses a longer one. 0.x's limit is
-// SQLite's, 1,000,000,000 bytes.
-func fits(name string, n int) error {
-	if uint64(n) > math.MaxUint32 {
-		return fmt.Errorf("%w: field %s holds %d bytes, and a value holds at most %d", errs.ErrInvalid, name, n, uint64(math.MaxUint32))
+		return rules.VectorElsewhere(name)
 	}
 	return nil
+}
+
+// lengths checks each text and bytes value of a put against SQLite's limit,
+// rules.MaxLength, with SQLite's error, of kind "error". 0.x meets that
+// limit last, as it binds the put's values, once Put's other checks have
+// passed. FORMAT.md's u32 can give a longer value, so a batch holding one
+// is damage, as a batch that breaks any other rule is (L1). It reads each
+// value's length alone, so a value it refuses is never copied.
+func lengths(fields []format.Field) error {
+	for _, f := range fields {
+		switch f.Value.Kind() {
+		case value.KindText, value.KindBytes:
+			if err := rules.Length(len(f.Value.Raw())); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// own puts in place of each text and bytes value of a put that has passed
+// its checks a copy of its own, so the store never holds on to a caller's
+// memory or a decoded batch.
+func own(fields []format.Field) {
+	for i := range fields {
+		f := &fields[i]
+		switch f.Value.Kind() {
+		case value.KindText:
+			f.Value = value.Text(strings.Clone(f.Value.Text()))
+		case value.KindBytes:
+			f.Value = value.Bytes(strings.Clone(f.Value.Raw()))
+		}
+	}
 }

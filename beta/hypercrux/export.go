@@ -168,11 +168,14 @@ type placed struct {
 // tables", a database that Check finds problems in reads "hypercrux check
 // finds problems in the file" and gives the first, as Export does, and
 // anything Put or Link would refuse, or a record or a link that's there
-// twice, names the line of the export. Two refusals are the Beta's own. A
-// table can't have a vector size without a vector field in the Beta, as it
-// can in 0.x. And a table of more than 1,999 fields, which 0.x's SQLite
-// refuses with a plain error of its own, is invalid here, as a Put that made
-// one would be.
+// twice, names the line of the export. A text or bytes value of more than
+// 1,000,000,000 bytes is refused as 0.x refuses it, with SQLite's error
+// after the line and the record's key, "line 3 of the export: docs:1:
+// string or blob too big", which wraps neither ErrInvalid nor ErrNotFound.
+// Two refusals are the Beta's own. A table can't have a vector size without
+// a vector field in the Beta, as it can in 0.x. And a table of more than
+// 1,999 fields, which 0.x's SQLite refuses with a plain error of its own, is
+// invalid here, as a Put that made one would be.
 func (db *DB) Import(r io.Reader) error {
 	s, err := db.current()
 	if err != nil {
@@ -303,8 +306,10 @@ func (im importer) table(t export.Table) error {
 // value.FromGo, which is what Put does with a Go value, in the table's
 // order as 0.x converts them, and then the store's Put checks them again
 // and keeps them. 0.x checks the key, then each value, with the vector's
-// size against the table's as it comes, and then refuses a record that's
-// there twice, where Put would merge the two.
+// size against the table's as it comes. Then it binds the values, and
+// SQLite refuses text or bytes of more than its 1,000,000,000 bytes, with
+// its error after the key, of kind "error" (L1). Last it refuses a record
+// that's there twice, where Put would merge the two.
 func (im importer) record(r export.Record) error {
 	tbl, err := rules.TableOf(r.Key)
 	if err != nil {
@@ -323,6 +328,13 @@ func (im importer) record(r export.Record) error {
 			return fmt.Errorf("%w: %s has a vector of %d values, and table %s holds vectors of %d", ErrInvalid, r.Key, v.Dims(), tbl, t.Size)
 		}
 		fields[i] = format.Field{Name: f.Name, Value: v}
+	}
+	for _, f := range fields {
+		if k := f.Value.Kind(); (k == value.KindText || k == value.KindBytes) && plant != "hypercrux/import-length-after-twice" {
+			if err := rules.Length(len(f.Value.Raw())); err != nil {
+				return fmt.Errorf("%s: %w", r.Key, err)
+			}
+		}
 	}
 	if _, err := im.tx.Get(r.Key); err == nil && plant != "hypercrux/import-twice-merged" {
 		return fmt.Errorf("%w: the record %s is there twice", ErrInvalid, r.Key)

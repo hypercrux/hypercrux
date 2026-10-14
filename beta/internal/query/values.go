@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hypercrux/hypercrux/beta/internal/rules"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
@@ -492,8 +493,9 @@ func realArith(op Op, l, r value.Value) value.Value {
 	return value.Real(z)
 }
 
-// maxLength is SQLITE_MAX_LENGTH, the longest text or bytes SQLite makes.
-const maxLength = 1000000000
+// maxLength is SQLITE_MAX_LENGTH, the longest text or bytes SQLite makes or
+// binds, which is rules.MaxLength, the store's limit too (L1).
+const maxLength = rules.MaxLength
 
 // concat is OP_Concat: the text of l followed by the text of r, or NULL when
 // either is NULL. It reports false when the result would be longer than

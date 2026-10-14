@@ -151,3 +151,9 @@ const (
 	maxNesting    = 250   // the Beta's own: see parser.enter
 	subqueryDepth = 10    // what a subquery counts for in maxNesting
 )
+
+// maxSQLLength is SQLITE_MAX_SQL_LENGTH, the longest statement SQLite
+// takes, in bytes. A literal can't be longer than the statement it's in, so
+// no literal is longer than SQLite's limit on text and bytes either, as in
+// 0.x (L1).
+const maxSQLLength = 1000000000

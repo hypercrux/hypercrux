@@ -156,6 +156,26 @@ func TestTextAndReals(t *testing.T) {
 	}
 }
 
+// TestLength holds the limit on text and bytes to its edge, on lengths
+// alone, since a value of a gigabyte takes a gigabyte: SQLite's
+// 1,000,000,000 bytes is taken, and one byte more gets SQLite's words, of
+// kind "error", as 0.x gives them (L1). The ways a value comes in are the
+// store's, query's and the public package's to test.
+func TestLength(t *testing.T) {
+	if rules.MaxLength != 1000000000 {
+		t.Errorf("MaxLength is %d, and SQLite's is 1,000,000,000", rules.MaxLength)
+	}
+	for _, n := range []int{0, 1, 1 << 20, rules.MaxLength - 1, rules.MaxLength} {
+		fine(t, "Length("+strconv.Itoa(n)+")", rules.Length(n))
+	}
+	for _, n := range []int{rules.MaxLength + 1, rules.MaxLength + 2, 1 << 31, math.MaxUint32, math.MaxUint32 + 1, math.MaxInt} {
+		err := rules.Length(n)
+		if err == nil || err.Error() != "string or blob too big" || errors.Is(err, errs.ErrInvalid) || errors.Is(err, errs.ErrNotFound) {
+			t.Errorf("Length(%d) = %v, want SQLite's error, of kind error", n, err)
+		}
+	}
+}
+
 func TestCase(t *testing.T) {
 	for in, want := range map[string]string{"TiTle": "title", "title": "title", "VEC": "vec", "_A1": "_a1", "": "",
 		"\u212a": "\u212a", "É": "É"} {

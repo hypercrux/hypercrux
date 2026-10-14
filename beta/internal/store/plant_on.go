@@ -127,6 +127,18 @@ import "os"
 //     as the transaction left it, so a transaction taken back, or a
 //     statement inside one, counts in the writer's copy and in no other
 //     process's.
+//
+// L1's, in the limit on text and bytes:
+//
+//   - store/put-length-unchecked: Put keeps text and bytes of any length,
+//     where 0.x refuses more than 1,000,000,000 bytes.
+//   - store/batch-length-unchecked: Apply's put, which a batch's changes and
+//     a transaction's Apply go through, keeps text and bytes of any length,
+//     so a batch holding a value too long isn't damage.
+//   - store/length-first: Put checks the lengths of text and bytes before
+//     its other checks, so a value too long hides a broken rule that 0.x
+//     reports first, such as an infinite number or a vector of the wrong
+//     size, with an error of another kind.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "store/nulls-kept", "store/drop-keeps-records", "store/spelt-as-given", "store/size-unchecked",
@@ -143,7 +155,8 @@ var plant = func() string {
 		"store/nearest-table-first",
 		"store/compacted-last-vector-dropped", "store/compacted-in-slot-order", "store/block-unchecked", "store/block-norm-left-out",
 		"store/dead-delete-links-left-out", "store/dead-inner-links-twice", "store/dead-frame-left-out",
-		"store/dead-vector-left-out", "store/dead-kept-on-rollback":
+		"store/dead-vector-left-out", "store/dead-kept-on-rollback",
+		"store/put-length-unchecked", "store/batch-length-unchecked", "store/length-first":
 		return p
 	}
 	return ""

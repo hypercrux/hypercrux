@@ -128,11 +128,13 @@ func (t *Tx) Nearest(table string, q Vector, k int, where string, args ...any) (
 //   - the arguments, each made a value as a statement's are, with
 //     database/sql's words for one it can't take (searchArgs), since 0.x
 //     hands them to database/sql with its query, filter or no filter;
-//   - the filter, unless where is only spaces: ParseCondition reads it, and
+//   - the filter, unless where is only spaces: a where too long for SQLite
+//     in 0.x's query is refused (FilterLength), ParseCondition reads it, and
 //     NearestFilter plans it as 0.x's query over the table, with the
-//     arguments in its ? marks, exactly one for each, and the moment read
-//     once for the call. When its terms that read no field rule every record
-//     out, there are no hits, and an empty list, as in 0.x;
+//     arguments in its ? marks, exactly one for each, each no longer than
+//     SQLite takes, and the moment read once for the call. When its terms
+//     that read no field rule every record out, there are no hits, and an
+//     empty list, as in 0.x;
 //   - the store's search, with the filter, which works out the filter's
 //     other terms for each record with a vector.
 //
@@ -152,6 +154,9 @@ func nearest(r store.Reader, table string, q Vector, k int, where string, args [
 	}
 	vals, names, err := searchArgs(args)
 	if err != nil {
+		return nil, err
+	}
+	if err := query.FilterLength(table, where); err != nil {
 		return nil, err
 	}
 	cond, params, err := query.ParseCondition(where)

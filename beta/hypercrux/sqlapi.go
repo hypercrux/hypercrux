@@ -19,6 +19,11 @@ import "database/sql"
 // statement that breaks one of their rules fails with an error that wraps
 // ErrInvalid. A statement is all or nothing.
 //
+// SQLite's limits hold, as in 0.x: a statement of more than 1,000,000,000
+// bytes fails with "statement too long", and an argument of text or bytes
+// longer than that with "string or blob too big", before anything runs, in
+// Exec, Query and QueryRow alike.
+//
 // The result's RowsAffected gives the count of rows the statement changed,
 // and 0 for a SELECT, whose rows Exec drops. Its LastInsertId returns an
 // error, since records have no row numbers.

@@ -6,6 +6,7 @@
 package hypercrux
 
 import (
+	"fmt"
 	"iter"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/hypercrux/hypercrux/beta/internal/query"
 	"github.com/hypercrux/hypercrux/beta/internal/store"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
+	"github.com/hypercrux/hypercrux/internal/export"
 )
 
 // OpenWith opens the database at path through the file calls files, with
@@ -82,6 +84,35 @@ func UseSnapshot(f func(r store.Reader) iter.Seq[format.Change]) (restore func()
 	old := snapshotOf
 	snapshotOf = f
 	return func() { snapshotOf = old }
+}
+
+// ImportItems puts tables, records and links into db as Import does, in one
+// Update, as an export's reader hands them over, each counted as the line
+// it would be on after an export's first line, for a test whose values are
+// too long to write out as an export (L1). The reader takes a line of any
+// length, and Import's other checks come before the first table, so a value
+// too long meets the importer's checks here as it would in Import.
+func ImportItems(db *DB, items ...any) error {
+	return db.Update(func(tx *Tx) error {
+		im := importer{tx: tx.stx}
+		for i, item := range items {
+			var err error
+			switch x := item.(type) {
+			case export.Table:
+				err = im.table(x)
+			case export.Record:
+				err = im.record(x)
+			case export.Link:
+				err = im.link(x)
+			default:
+				err = fmt.Errorf("ImportItems was given a %T, where it takes export.Table, export.Record and export.Link", item)
+			}
+			if err != nil {
+				return lineError(i+2, err)
+			}
+		}
+		return nil
+	})
 }
 
 // Pending gives what the log's Due weighs for db (C1), as db last read the

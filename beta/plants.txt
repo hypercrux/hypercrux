@@ -252,3 +252,13 @@ query/filter-drops-the-vector ./beta/internal/query
 query/comment-takes-in-nothing ./beta/internal/query
 logfile/path-before-the-name ./beta/internal/logfile
 hypercrux/check-copy-over-unseen ./beta/hypercrux
+rules/old-length-limit ./beta/internal/rules
+rules/length-off-by-one ./beta/internal/rules
+store/put-length-unchecked ./beta/internal/store
+store/batch-length-unchecked ./beta/internal/store
+store/length-first ./beta/internal/store
+query/statement-length-unchecked ./beta/internal/query
+query/filter-argument-unchecked ./beta/internal/query
+query/walk-length-unchecked ./beta/internal/query
+hypercrux/argument-length-unchecked ./beta/hypercrux
+hypercrux/import-length-after-twice ./beta/hypercrux

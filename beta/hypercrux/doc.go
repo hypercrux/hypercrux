@@ -28,9 +28,10 @@
 // path (tasks F6 and F9). Compact rewrites the file with only the live
 // data (task G5), and a commit is followed by one once the commits since
 // the last have made half the file dead, and a megabyte, or once 100,000
-// commits follow it (task C1). The helpers that hold
-// no state work as 0.x's do: ParseDirection, ParseVector, DecodeVector, and
-// the methods of Vector, Direction and Link.
+// commits follow it (task C1). Text and bytes hold at most 1,000,000,000
+// bytes, SQLite's limit, as in 0.x, wherever they come in (task L1). The
+// helpers that hold no state work as 0.x's do: ParseDirection, ParseVector,
+// DecodeVector, and the methods of Vector, Direction and Link.
 //
 // Query, QueryRow, Exec and SQL() go through the package's database/sql
 // driver (task G3), which parses each statement and takes its arguments,

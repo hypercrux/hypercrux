@@ -11,6 +11,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/hypercrux/hypercrux/beta/internal/rules"
 	"github.com/hypercrux/hypercrux/beta/internal/value"
 )
 
@@ -40,6 +41,26 @@ func Arg(v any) (value.Value, error) {
 	}
 	// A decimal, which database/sql hands on and go-sqlite3 can't bind.
 	return value.Value{}, fmt.Errorf("unsupported type %T", dv)
+}
+
+// Bind checks a statement's arguments as go-sqlite3 binds them, in order,
+// once SQLite has prepared the statement and before it runs: text and bytes
+// of more than SQLite's 1,000,000,000 bytes, rules.MaxLength, are refused
+// with SQLite's error, "string or blob too big", of kind "error", as in
+// 0.x, whether or not the statement would use the value (L1). The driver
+// calls it for a statement, once it has taken one argument for each ? mark,
+// and NearestFilter for a search's filter. It reads only each value's
+// length.
+func Bind(args []value.Value) error {
+	for _, a := range args {
+		switch a.Kind() {
+		case value.KindText, value.KindBytes:
+			if err := rules.Length(len(a.Raw())); err != nil {
+				return &Error{Msg: err.Error()}
+			}
+		}
+	}
+	return nil
 }
 
 // bound is what go-sqlite3 binds for one of database/sql's driver values.

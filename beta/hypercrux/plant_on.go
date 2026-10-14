@@ -165,6 +165,17 @@ import (
 //     header and the batches it finds there, as before R2, so another
 //     database's file of the same length copied over the file in place reads
 //     as sound (G7.md's note).
+//
+// L1's, in the limit on text and bytes:
+//
+//   - hypercrux/argument-length-unchecked: a statement's arguments go to the
+//     engine without their lengths checked, so a SELECT takes an argument of
+//     more than 1,000,000,000 bytes, which 0.x's bind refuses.
+//   - hypercrux/import-length-after-twice: Import refuses a record that's
+//     there twice before it checks the lengths of its values, and leaves
+//     them to the store's Put, so a record with a value too long gives
+//     "there twice" where 0.x gives SQLite's error, and the error leaves out
+//     the key.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -182,7 +193,8 @@ var plant = func() string {
 		"hypercrux/compaction-error-returned", "hypercrux/compaction-error-dropped", "hypercrux/no-compaction-after-commit",
 		"hypercrux/compact-stale-snapshot",
 		"hypercrux/compaction-without-blocks",
-		"hypercrux/dead-uncounted", "hypercrux/check-copy-over-unseen":
+		"hypercrux/dead-uncounted", "hypercrux/check-copy-over-unseen",
+		"hypercrux/argument-length-unchecked", "hypercrux/import-length-after-twice":
 		return p
 	}
 	return ""
