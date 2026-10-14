@@ -53,9 +53,10 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   Beta's SQL through its database/sql driver, and `SQL().Begin` returns an
   error. Each read through a `DB` follows what other processes commit, and
   reloads the file after a compaction or a backup moved into place. `Compact`
-  rewrites the file with only the live data, a commit that leaves the file
-  twice the size its last compaction left it at is followed by a compaction,
-  and `Check` reports one that failed. Its tests drive the crash-point driver
+  rewrites the file with only the live data, a commit is followed by a
+  compaction once the commits since the last have made half the file dead,
+  and a megabyte, or once 100,000 commits follow it, and `Check` reports one
+  that failed. Its tests drive the crash-point driver
   through it, on the fault layer, and time opening a compacted file.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
@@ -97,8 +98,11 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   log when the writer has gone. The holder of the write lock compacts the
   database from a snapshot of the copy into `NAME.compact`, each table's
   vectors in vector blocks of about a megabyte, which is synced and renamed
-  over the database, while writers wait it out, and the next
-  holder removes one a crash left. A process that finds another file at the
+  over the database, while writers wait it out, and the next holder
+  removes one a crash left. `Due` says when a compaction is due after a
+  commit, from the dead bytes a Target that's a `Counter` counts and the
+  commits past the compacted part, with `Options.MinGrowth` and
+  `Options.MaxCommits` in place of a megabyte and 100,000, for tests. A process that finds another file at the
   path reads it from its start with `Reload`, once its old copy has gone and
   a garbage collection has run. A Target that keeps nothing of a vector
   block can take a batch of blocks straight from the log's read buffer
@@ -143,7 +147,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   `Read`, and writes go through a transaction from `Begin`, which holds
   readers off from its first change until it ends, and puts the copy back
   with its undo list when it rolls back. `Check` checks that the copy's
-  parts agree, and adds up its size.
+  parts agree, and adds up its size. It counts the dead bytes its changes
+  leave in the file, which the log weighs for a compaction (`Dead`).
 - `internal/value/`: the value type, holding FORMAT.md's six kinds of value
   bit for bit, `FromGo`, 0.x's conversions from Go values, and SQLite's
   routines for reading numbers from text and writing reals as text.

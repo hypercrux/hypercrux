@@ -349,12 +349,22 @@ the new file itself, and the read reads the copy as it is.
 
 ### Compaction
 
-When the file has grown to twice the size its last compaction left it at,
-and by a megabyte at least, the writer compacts it at the end of a commit,
-still holding the lock, so the old file never changes again. Without a pass
-over the whole copy, the writer can't tell how much of what was added since
-is live, so a database that only grows is compacted each time it doubles as
-well, which rewrites its data about once more in all:
+Once the commits since the last compaction have made half the file dead, and
+a megabyte at least, or once 100,000 commits follow the compacted part, the
+writer compacts the file at the end of a commit, still holding the lock, so
+the old file never changes again. Dead bytes are the changes in the file
+that no longer reach the state, which a compaction leaves out: a put's old
+values, a deleted record with its links, a dropped table with its records,
+and a removed link with the change that removed it. Each process counts them
+in its copy as it applies the changes, and counts the commits from the
+sequence numbers. Every process applies the same changes to the same state,
+so every process counts the same and takes the same choice from the same
+file, and a compaction starts both counts from nothing. A batch's head,
+checksum and marker never count, so a database that only grows is compacted
+only at the limit on commits, which commits of 1,000 records reach at 100
+million records. The limit keeps opening bounded: a log of 100,000 small
+commits opens in about 0.3 seconds on a two-core cloud machine. C1.md sets
+out what each change makes dead. The writer compacts in five steps:
 
 1. It creates `NAME.compact` beside the database, with the database's
    permissions and, where it's allowed to, its owner, and takes `flock` on
@@ -844,8 +854,10 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   format after the release raises the version (R2.md, the second question).
 - On 14 October 2026, after the review's first part, the owner chose to
   compact by dead bytes, with a limit on the commits past the compacted
-  part, as a task of its own, C1, before the release run. The rule under
-  Compaction holds until C1 changes it (R2.md, the first question).
+  part, as a task of its own, C1, before the release run. C1 put the rule
+  under Compaction in place that day, with the limit at 100,000 commits,
+  which a log of small commits opens in about 0.3 seconds (R2.md, the first
+  question, and C1.md).
 - The Beta's Go package is `beta/hypercrux`, package `hypercrux`, beside
   0.x's until the release, so a program moves across by changing its import
   path (P3).
