@@ -857,7 +857,9 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   part, as a task of its own, C1, before the release run. C1 put the rule
   under Compaction in place that day, with the limit at 100,000 commits,
   which a log of small commits opens in about 0.3 seconds (R2.md, the first
-  question, and C1.md).
+  question, and C1.md). After C1 the owner kept the limit fixed whatever the
+  database's size, so a large database taking small commits is rewritten
+  once in every 100,000 (C1.md's notes for R2).
 - The Beta's Go package is `beta/hypercrux`, package `hypercrux`, beside
   0.x's until the release, so a program moves across by changing its import
   path (P3).
