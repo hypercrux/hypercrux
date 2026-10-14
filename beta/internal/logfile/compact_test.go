@@ -54,6 +54,10 @@ func (c *copyTarget) Reset() {
 	c.resets++
 }
 
+// Dead is the copy's count of dead bytes, as the public package's target
+// gives it (C1), so Due weighs what the copy counts.
+func (c *copyTarget) Dead() int64 { return c.s.Dead() }
+
 // db is a database opened in small, as the public package opens one: its
 // log and its copy.
 type db struct {
@@ -1069,89 +1073,6 @@ func TestALeftoverWaitsForTheInodeCheck(t *testing.T) {
 	if got := names(t, dir); got != "db db.compact" {
 		t.Errorf("the folder holds %q", got)
 	}
-}
-
-// TestDue: by the rule the log measures, a compaction is due once the end of
-// the log is twice as far into the file as the end of its compacted part,
-// or the header in generation 1, and a megabyte past it. With live data of
-// 300 KB, the megabyte decides; with 1.8 MB, twice does. After a compaction
-// that failed before the switch, the next isn't due until the file has grown
-// by as much again as it had since its last compaction. Due is false for a
-// Log that doesn't hold the lock.
-func TestDue(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "db")
-	trap := &trapFS{FS: fsys.OS{}}
-	d := openDBT(t, trap, path, Options{})
-	big := strings.Repeat("x", 300<<10)
-	put := func(key string) {
-		t.Helper()
-		if err := d.commit(func(tx *store.Tx) error {
-			return tx.Put(key, []format.Field{{Name: "s", Value: value.Text(big)}})
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	due := func() bool {
-		t.Helper()
-		if err := d.l.Lock(); err != nil {
-			t.Fatal(err)
-		}
-		defer d.l.Unlock()
-		return d.l.Due()
-	}
-	// upTo puts a:1 again and again while the next would leave the end of
-	// the log short of at, and checks that no compaction is due meanwhile.
-	// Then it puts it once more, past at, and checks that one is due.
-	upTo := func(at int64) {
-		t.Helper()
-		before := d.l.end
-		put("a:1")
-		step := d.l.end - before // what each of these commits adds
-		for d.l.end+step < at {
-			if due() {
-				t.Fatalf("due at %d bytes, before %d, with the compacted part ending at %d", d.l.end, at, d.l.hdr.CompactedEnd)
-			}
-			put("a:1")
-		}
-		if due() {
-			t.Fatalf("due at %d bytes, before %d, with the compacted part ending at %d", d.l.end, at, d.l.hdr.CompactedEnd)
-		}
-		put("a:1")
-		if !due() {
-			t.Fatalf("not due at %d bytes, past %d, with the compacted part ending at %d", d.l.end, at, d.l.hdr.CompactedEnd)
-		}
-	}
-	// In generation 1, due once the file holds a megabyte past its header.
-	upTo(format.HeaderSize + minDead)
-	if d.l.Due() {
-		t.Error("due without the lock")
-	}
-	if err := d.compact(); err != nil {
-		t.Fatal(err)
-	}
-	// Live data of about 300 KB: due a megabyte past it.
-	upTo(int64(d.l.hdr.CompactedEnd) + minDead)
-	// Live data of about 1.8 MB: due at twice that.
-	for i := range 5 {
-		put(fmt.Sprintf("b:%d", i))
-	}
-	if err := d.compact(); err != nil {
-		t.Fatal(err)
-	}
-	upTo(2 * int64(d.l.hdr.CompactedEnd))
-
-	if err := d.l.Lock(); err != nil {
-		t.Fatal(err)
-	}
-	trap.set(failNth("sync db.compact", 1))
-	err := d.compactLocked()
-	trap.set(nil)
-	if err == nil {
-		t.Fatal("the compaction worked with its sync failing")
-	}
-	retry := d.l.end + (d.l.end - int64(d.l.hdr.CompactedEnd))
-	d.l.Unlock()
-	upTo(retry)
 }
 
 // TestAWaitersLookDoesntStopACompaction: a writer waiting for the lock looks

@@ -377,6 +377,7 @@ func (l *Log) followOn(size int64) (*errs.Damage, error) {
 				return nil, l.refused(off, seq, err)
 			}
 			l.seq, l.end, l.last = seq, off+n+format.MarkerSize, marker
+			l.partRead()
 			again = false
 			continue
 		}

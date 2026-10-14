@@ -50,7 +50,10 @@ import (
 // G5's fix for I1's first finding is in Append: the first commit into a file
 // whose name this Log didn't make last itself syncs the folder first
 // (named), so a commit never relies on a rename that a power cut could take
-// back.
+// back. C1's rule for when a compaction is due is in compact.go: Due weighs
+// the dead bytes a Target that's a Counter counts, and the commits past the
+// compacted part, which the Log notes as it starts a file and reads on in it
+// (started, partRead, and switchTo for its own compaction).
 
 // DefaultWait is how long Lock waits for the write lock, as 0.x does.
 const DefaultWait = 10 * time.Second
@@ -106,6 +109,27 @@ type Target interface {
 	Reset()
 }
 
+// Counter is a Target that counts the dead bytes in what it holds (C1): the
+// bytes of changes that no longer reach its state, which a compaction would
+// leave out, such as a put's old values and a deleted record with its links.
+// Due weighs them. The public package's copy counts them (the store's Dead).
+// A Target that isn't a Counter counts none, and then only the limit on
+// commits makes a compaction due.
+type Counter interface {
+	Target
+
+	// Dead returns how many bytes of changes the changes the Target holds
+	// have made dead, in all: the batches it has been handed, and the
+	// commits made through it, which Append writes. The log measures a
+	// file's dead bytes from what Dead said when it began to read the file
+	// from its start, or when it compacted into it, so the count needn't
+	// start again at a Reset. Every process that holds the same changes has
+	// to give the same count, since they all read the same file and so take
+	// the same choice (Due). The log calls it holding the write lock's
+	// mutex, as it calls Apply.
+	Dead() int64
+}
+
 // Options holds a Log's settings.
 type Options struct {
 	// Wait is how long Lock waits for the write lock, the mutex and flock
@@ -125,12 +149,19 @@ type Options struct {
 	// the ID, and where a torn sector splits depends on the bytes it holds.
 	ID [16]byte
 
-	// MinGrowth, when it's above 0, is how far the end of the log has to be
-	// past the live data, at least, before Due says a compaction is due, in
-	// place of a megabyte (compact.go). The tests set a small one, so a few
-	// small commits set a compaction off, or a very large one, so a log of
-	// many commits stays as it is.
+	// MinGrowth, when it's above 0, is how many bytes the batches since the
+	// file's compacted part have to have made dead, at least, besides half
+	// the file, before Due says a compaction is due, in place of a megabyte
+	// (compact.go). The tests set a small one, so a few small commits set a
+	// compaction off, or a very large one, so a log of many commits that
+	// write over each other stays as it is.
 	MinGrowth int64
+
+	// MaxCommits, when it's above 0, is how many commits past the file's
+	// compacted part make a compaction due, whatever they've made dead, in
+	// place of 100,000 (compact.go). The tests set a small one, so a
+	// database that only grows is compacted after a few commits.
+	MaxCommits uint64
 
 	// BlocksInPlace lets the log hand the Target a batch that holds vector
 	// blocks alone straight from the bytes it read the batch into, without
@@ -164,6 +195,7 @@ type Log struct {
 	wait    time.Duration
 	id      [16]byte // Options.ID
 	growth  int64    // Options.MinGrowth
+	limit   uint64   // Options.MaxCommits
 	inPlace bool     // Options.BlocksInPlace
 
 	// fol keeps followers apart, so a follower that finds another reading
@@ -211,6 +243,14 @@ type Log struct {
 	batch  []byte // a commit's batch and marker, built in the same buffer each time
 	retry  int64  // after a compaction that failed, the end of the log the next waits for (Due), or 0
 	part   int    // the size of a compacted part's batches, when a test sets it; 0 means partSize
+
+	// What Due weighs besides the end of the log (C1, compact.go): the
+	// batches of the file's compacted part, which the commits past it are
+	// counted from, and what the Target's count of dead bytes said when this
+	// file's count began, which is when the Log began to read the file from
+	// its start, or compacted into it.
+	compacted uint64
+	deadAt    int64
 }
 
 // Open opens the database at path, or creates it when nothing's there, as
@@ -262,7 +302,7 @@ func Open(files fsys.FS, path string, t Target, o Options) (*Log, error) {
 	if err != nil {
 		return nil, err
 	}
-	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, growth: o.MinGrowth, inPlace: o.BlocksInPlace, mu: make(chan struct{}, 1)}
+	l := &Log{fsys: files, path: real, dir: filepath.Dir(real), t: t, wait: o.Wait, id: o.ID, growth: o.MinGrowth, limit: o.MaxCommits, inPlace: o.BlocksInPlace, mu: make(chan struct{}, 1)}
 	if l.wait <= 0 {
 		l.wait = DefaultWait
 	}

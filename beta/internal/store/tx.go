@@ -59,6 +59,7 @@ type Tx struct {
 	changes []format.Change // the change list
 	locked  bool            // the transaction holds s.mu, from its first change
 	done    bool            // Commit or Rollback has ended it
+	dead    int64           // the store's count of dead bytes at Begin, which Rollback puts back (dead.go)
 }
 
 var _ Reader = (*Tx)(nil)
@@ -78,7 +79,7 @@ func (s *Store) Begin() (*Tx, error) {
 	}
 	s.writer.Lock()
 	s.owner.Store(me)
-	tx := &Tx{s: s, undo: s.spare}
+	tx := &Tx{s: s, undo: s.spare, dead: s.dead}
 	s.spare = nil
 	s.tx = tx
 	return tx, nil
@@ -298,16 +299,21 @@ func (tx *Tx) undoTo(n int) {
 }
 
 // Mark is a point in a transaction, for RollbackTo.
-type Mark struct{ undo, changes int }
+type Mark struct {
+	undo, changes int
+	dead          int64 // the store's count of dead bytes then (dead.go)
+}
 
 // Mark returns the transaction's present point, for RollbackTo.
-func (tx *Tx) Mark() Mark { return Mark{len(tx.undo), len(tx.changes)} }
+func (tx *Tx) Mark() Mark { return Mark{len(tx.undo), len(tx.changes), tx.s.dead} }
 
 // RollbackTo takes back every change made since m, newest first, and cuts
-// the change list back to where it was at m. The transaction carries on,
-// and keeps the copy's lock if it has it. A mark that's past the
-// transaction's present point, after an earlier RollbackTo, panics. On a
-// transaction that has ended, RollbackTo does nothing.
+// the change list back to where it was at m. The count of dead bytes goes
+// back to what it was at m too, since the changes it counted no longer reach
+// the change list (dead.go). The transaction carries on, and keeps the
+// copy's lock if it has it. A mark that's past the transaction's present
+// point, after an earlier RollbackTo, panics. On a transaction that has
+// ended, RollbackTo does nothing.
 func (tx *Tx) RollbackTo(m Mark) {
 	if tx.done {
 		return
@@ -316,6 +322,7 @@ func (tx *Tx) RollbackTo(m Mark) {
 		panic(fmt.Sprintf("store: RollbackTo a mark at %d changes, past the transaction's %d", m.changes, len(tx.changes)))
 	}
 	tx.undoTo(m.undo)
+	tx.putDeadBack(m.dead)
 	if plant != "store/changes-kept" {
 		clear(tx.changes[m.changes:])
 		tx.changes = tx.changes[:m.changes]
@@ -382,14 +389,26 @@ func (tx *Tx) handOn(write func([]format.Change) error) (err error) {
 }
 
 // Rollback ends the transaction and takes back every change it made, newest
-// first, so the copy is as it was at Begin. On a transaction that has ended
-// it does nothing, so a caller can defer it straight after Begin.
+// first, so the copy is as it was at Begin, its count of dead bytes included.
+// On a transaction that has ended it does nothing, so a caller can defer it
+// straight after Begin.
 func (tx *Tx) Rollback() {
 	if tx.done {
 		return
 	}
 	tx.undoTo(0)
+	tx.putDeadBack(tx.dead)
 	tx.end()
+}
+
+// putDeadBack puts the store's count of dead bytes back to n, its value at a
+// point the transaction is taken back to. Only a change adds to the count,
+// once it holds the copy's lock, so a count that differs is one the
+// transaction holds the lock for.
+func (tx *Tx) putDeadBack(n int64) {
+	if tx.s.dead != n && plant != "store/dead-kept-on-rollback" {
+		tx.s.dead = n
+	}
 }
 
 // end releases the copy's lock, if the transaction took it, and then the

@@ -217,8 +217,8 @@ func (l *Log) newFile(perm fs.FileMode, uid, gid int) (*fresh, error) {
 }
 
 // use makes n the database file in l: a header, and a log with nothing in
-// it yet. Its name counts as made last once the caller's folder sync has
-// worked (named).
+// it yet, whose count of dead bytes and commits starts now (Due). Its name
+// counts as made last once the caller's folder sync has worked (named).
 func (l *Log) use(n *fresh) {
 	l.f = n.f
 	l.file = n.info
@@ -229,6 +229,7 @@ func (l *Log) use(n *fresh) {
 	l.seq = 0
 	l.end = format.HeaderSize
 	l.retry = 0
+	l.started()
 }
 
 // removeLeftovers removes the .new- files that creators left beside the

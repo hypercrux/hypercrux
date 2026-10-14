@@ -26,8 +26,9 @@
 // through a DB follows what other processes commit, and reloads the file
 // when a compaction or a backup moved into place has put another at the
 // path (tasks F6 and F9). Compact rewrites the file with only the live
-// data, and a commit that leaves the file twice the size its last
-// compaction left it at is followed by one (task G5). The helpers that hold
+// data (task G5), and a commit is followed by one once the commits since
+// the last have made half the file dead, and a megabyte, or once 100,000
+// commits follow it (task C1). The helpers that hold
 // no state work as 0.x's do: ParseDirection, ParseVector, DecodeVector, and
 // the methods of Vector, Direction and Link.
 //

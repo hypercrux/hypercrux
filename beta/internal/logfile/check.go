@@ -205,6 +205,7 @@ func (l *Log) markLeft(size int64) error {
 		return l.refused(off, bt.Seq, err)
 	}
 	l.seq, l.end, l.last = bt.Seq, off+n+format.MarkerSize, marker
+	l.partRead()
 	return nil
 }
 

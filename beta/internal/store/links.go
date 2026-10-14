@@ -174,9 +174,12 @@ func (s *Store) link(a *record, typ linkType, b *record) {
 	b.in.insert(half{typ, a})
 }
 
-// unlink takes out the link of the type typ from a to b, which is there.
+// unlink takes out the link of the type typ from a to b, which is there. The
+// link and the change that removes it, which is the same size, are dead from
+// then on (dead.go).
 func (s *Store) unlink(a *record, typ linkType, b *record) {
 	s.changing(undo{op: undoHadLink, record: a, half: half{typ, b}})
+	s.dead += 2 * linkSize(a.key, typ.Value(), b.key)
 	a.out.remove(linkAt{typ.Value(), b.key})
 	if plant != "store/unlink-one-end" {
 		b.in.remove(linkAt{typ.Value(), a.key})

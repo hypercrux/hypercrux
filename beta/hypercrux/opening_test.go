@@ -30,10 +30,12 @@ import (
 //
 // The file holds what beta/bench builds: docs:0 to docs:99999, each with grp,
 // from 0 to 9, and a vector of 384 values drawn from the same seed, 5,000
-// records a commit. The public package compacts a file each time it doubles
-// past a megabyte (G5), so the log is built with a MinGrowth no file reaches,
-// to keep its 20 commits. The compacted file is a copy of the log, compacted
-// by Compact.
+// records a commit. Those commits only add records, so they make nothing
+// dead, and the public package compacts such a file only at the limit on
+// commits (C1). The log is built with a MinGrowth no file reaches all the
+// same, as it was when the file was compacted each time it doubled (G5), so
+// it keeps its 20 commits whatever the rule. The compacted file is a copy of
+// the log, compacted by Compact.
 //
 // With HYPERCRUX_OPEN_DIR set, the files are built there once and kept, so a
 // run with -cpuprofile times the opens alone.

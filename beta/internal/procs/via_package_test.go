@@ -27,8 +27,10 @@ import (
 // with Update and compacts with Compact, a reader reads with Scan, Get,
 // Neighbours and Check, and the run's Final, Backup and Restore hold the
 // write lock through an Update of their own. Update compacts by itself too,
-// once a commit leaves the file twice the size its last compaction left it
-// at and a megabyte past that (G5), which the long kill test's file reaches.
+// once the commits since the last compaction have made half the file dead
+// and a megabyte, or 100,000 commits follow it (C1). These commits make
+// little dead, a counter written over and a scratch record deleted now and
+// then, so only a run long enough to make 100,000 commits reaches it.
 //
 // Each commit touches every handle at once, as 0.x's KilledWritersNeverLeaveAMess
 // has its writer do. Commit n, its place in the log, which the writer works

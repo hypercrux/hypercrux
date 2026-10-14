@@ -24,9 +24,12 @@ import (
 // yet, and load notes that and reads nothing more.
 //
 // The file is one this Log didn't make, so its first commit syncs the folder
-// first (named, in Append).
+// first (named, in Append). Its count of dead bytes and its commits start
+// here, from nothing, as every process that reads it from its start counts
+// them (Due).
 func (l *Log) load() (int64, error) {
 	l.empty, l.hdr, l.seq, l.end, l.retry = false, format.Header{}, 0, 0, 0
+	l.started()
 	if plant != "logfile/named-kept-on-another-file" {
 		l.named = false
 	}
@@ -121,6 +124,7 @@ func (l *Log) readOn(size int64) error {
 		l.seq = bt.Seq
 		l.end = off + n + format.MarkerSize
 		copy(l.last[:], b[n:])
+		l.partRead()
 	}
 	// A follower reads on in an order of its own, and looks at the batch it
 	// stops at (followOn, in follow.go).

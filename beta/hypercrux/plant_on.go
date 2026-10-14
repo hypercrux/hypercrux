@@ -152,6 +152,12 @@ import (
 //   - hypercrux/compaction-without-blocks: a compaction writes the copy's
 //     snapshot as S3 gave it, each vector in its record's put, so opening
 //     the compacted file decodes and checks every vector as a value again.
+//
+// C1's, in when a compaction is due:
+//
+//   - hypercrux/dead-uncounted: the copy tells the log of no dead bytes, so
+//     a database whose commits write over its data is compacted only at the
+//     limit on commits, and its file grows to many times its live data.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "hypercrux/append-error-dropped", "hypercrux/reset-kept", "hypercrux/load-after-open", "hypercrux/vector-shared",
@@ -168,7 +174,8 @@ var plant = func() string {
 		"hypercrux/filter-none-nil", "hypercrux/unlock-error-kept",
 		"hypercrux/compaction-error-returned", "hypercrux/compaction-error-dropped", "hypercrux/no-compaction-after-commit",
 		"hypercrux/compact-stale-snapshot",
-		"hypercrux/compaction-without-blocks":
+		"hypercrux/compaction-without-blocks",
+		"hypercrux/dead-uncounted":
 		return p
 	}
 	return ""

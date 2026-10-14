@@ -238,3 +238,12 @@ hypercrux/compaction-without-blocks ./beta/hypercrux
 crash/seeds-overridden ./beta/internal/crash
 format/changes-grown ./beta/internal/format
 format/block-count-trusted ./beta/internal/format
+store/dead-delete-links-left-out ./beta/internal/store
+store/dead-inner-links-twice ./beta/internal/store
+store/dead-frame-left-out ./beta/internal/store
+store/dead-vector-left-out ./beta/internal/store
+store/dead-kept-on-rollback ./beta/internal/store
+logfile/dead-not-restarted ./beta/internal/logfile
+logfile/commit-limit-off-by-one ./beta/internal/logfile
+logfile/dead-floor-left-out ./beta/internal/logfile
+hypercrux/dead-uncounted ./beta/hypercrux

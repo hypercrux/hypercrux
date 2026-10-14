@@ -33,8 +33,10 @@ import (
 // vector size and its fields in order, every record with every value's bits,
 // and every link, so two copies with the same state agree on all four
 // handles. A compaction goes through Compact, or comes after a commit, in
-// Update, when the workload opens the database with a small MinGrowth, so
-// that a few small commits make one due.
+// Update, by C1's rule: when the workload opens the database with a small
+// MaxCommits, so that a few commits reach the limit on commits, or with a
+// small MinGrowth and commits that write over a large record, so that half
+// the file is dead after a few.
 //
 // The tests here run one after another, and after the package's other tests,
 // so a planted bug that an earlier test catches stops a run with -failfast
@@ -95,6 +97,16 @@ func workloadOps(tx *hc.Tx, i int) error {
 	return nil
 }
 
+// overOps is workloadOps, and then a put over the record big:1 of 1,500
+// letters, which makes as much dead at each commit after the first, so the
+// commits that set off compactions by dead bytes do so after a few.
+func overOps(tx *hc.Tx, i int) error {
+	if err := workloadOps(tx, i); err != nil {
+		return err
+	}
+	return tx.Put("big:1", hc.Fields{"s": strings.Repeat(string(rune('a'+i%26)), 1500)})
+}
+
 // workloadCommit makes commit i through db, telling m the state it gives from
 // inside Update's function, and then m.Done once Update has returned nil. It
 // returns Update's error. A commit that fails leaves the copy as it was, so
@@ -106,8 +118,13 @@ func workloadOps(tx *hc.Tx, i int) error {
 // holds a commit Update reports as failed, and the next commit's state is
 // built without it.
 func workloadCommit(db *hc.DB, m *crash.Model, i int) error {
+	return commitWith(db, m, i, workloadOps)
+}
+
+// commitWith is workloadCommit with ops in place of workloadOps.
+func commitWith(db *hc.DB, m *crash.Model, i int, ops func(*hc.Tx, int) error) error {
 	err := db.Update(func(tx *hc.Tx) error {
-		if err := workloadOps(tx, i); err != nil {
+		if err := ops(tx, i); err != nil {
 			return err
 		}
 		if m != nil {
@@ -133,10 +150,15 @@ func workloadOpen(sys fsys.FS, o logfile.Options, carry bool) (*hc.DB, error) {
 	return db, err
 }
 
-// workloadGrowth is the MinGrowth of the workload whose commits set off
-// compactions by themselves: with it, commits 3 and 6 are each followed by
-// a compaction, with -short too.
-const workloadGrowth = 1000
+// workloadLimit is the MaxCommits of the workload whose commits set off
+// compactions by themselves at the limit on commits: with it, commits 3 and
+// 6 are each followed by a compaction, with -short too. workloadGrowth is
+// the MinGrowth of the one whose commits set them off by dead bytes, with
+// overOps: then commits 3 and 5 are, and 8 too without -short.
+const (
+	workloadLimit  = 3
+	workloadGrowth = 1000
+)
 
 // workloadReopen opens the database through sys as a process started after
 // a crash would, and returns the state the DB reads, once Check has found
@@ -162,21 +184,22 @@ func workloadReopen(sys fsys.FS) (string, error) {
 }
 
 // crashWorkload makes commits commits through one DB on a new database,
-// opened with the log's options o. With compact above 0, Compact follows
-// commit compact: through the same DB when other is false, and when it's
-// true, through another DB on the same file, opened for it, so the first
-// DB's next Update finds another file at the path and reads it. With
-// o.MinGrowth set small, Update compacts by itself whenever a commit leaves
-// a compaction due. With carry, it carries on after a commit or a compaction
-// that fails, as a program carries on after an Update that returned an
-// error; without it, it stops at the first error, as a crash would stop it.
+// opened with the log's options o, each with ops. With compact above 0,
+// Compact follows commit compact: through the same DB when other is false,
+// and when it's true, through another DB on the same file, opened for it,
+// so the first DB's next Update finds another file at the path and reads
+// it. With o.MaxCommits or o.MinGrowth set small, Update compacts by itself
+// whenever a commit leaves a compaction due. With carry, it carries on
+// after a commit or a compaction that fails, as a program carries on after
+// an Update that returned an error; without it, it stops at the first
+// error, as a crash would stop it.
 //
 // The other DB is closed once it has compacted, even when the folder's sync
 // after the rename failed and left it stuck. Then the first DB commits into
 // a file whose name may not have reached the drive, and it syncs the folder
 // before its first commit there, so a power cut can't lose the commit
 // (TestACommitAfterAStuckCompactionLasts).
-func crashWorkload(commits, compact int, other bool, o logfile.Options, carry bool) crash.Workload {
+func crashWorkload(commits, compact int, other bool, o logfile.Options, carry bool, ops func(*hc.Tx, int) error) crash.Workload {
 	return crash.Workload{
 		Path: workloadPath,
 		Run: func(sys fsys.FS, m *crash.Model) error {
@@ -186,7 +209,7 @@ func crashWorkload(commits, compact int, other bool, o logfile.Options, carry bo
 			}
 			defer db.Close()
 			for i := 1; i <= commits; i++ {
-				if err := workloadCommit(db, m, i); err != nil && !carry {
+				if err := commitWith(db, m, i, ops); err != nil && !carry {
 					return err
 				}
 				if i != compact {
@@ -218,7 +241,8 @@ func crashWorkload(commits, compact int, other bool, o logfile.Options, carry bo
 // crashWorkloads are the workloads the driver runs: commits through one DB
 // on a new database, Compact by that DB midway, Compact by another DB
 // midway, after which the first carries on in the new file, and commits that
-// set off compactions by themselves.
+// set off compactions by themselves, at the limit on commits and by dead
+// bytes.
 func crashWorkloads(carry bool) []struct {
 	name string
 	w    crash.Workload
@@ -227,16 +251,18 @@ func crashWorkloads(carry bool) []struct {
 	if testing.Short() {
 		commits = 6
 	}
-	growing := workloadOptions
+	limited, growing := workloadOptions, workloadOptions
+	limited.MaxCommits = workloadLimit
 	growing.MinGrowth = workloadGrowth
 	return []struct {
 		name string
 		w    crash.Workload
 	}{
-		{"a new database", crashWorkload(commits, 0, false, workloadOptions, carry)},
-		{"a compaction by the same DB", crashWorkload(commits, commits/2, false, workloadOptions, carry)},
-		{"a compaction by another DB", crashWorkload(commits, commits/2, true, workloadOptions, carry)},
-		{"compactions after commits", crashWorkload(commits, 0, false, growing, carry)},
+		{"a new database", crashWorkload(commits, 0, false, workloadOptions, carry, workloadOps)},
+		{"a compaction by the same DB", crashWorkload(commits, commits/2, false, workloadOptions, carry, workloadOps)},
+		{"a compaction by another DB", crashWorkload(commits, commits/2, true, workloadOptions, carry, workloadOps)},
+		{"compactions after commits, at the limit on commits", crashWorkload(commits, 0, false, limited, carry, workloadOps)},
+		{"compactions after commits, by dead bytes", crashWorkload(commits, 0, false, growing, carry, overOps)},
 	}
 }
 
@@ -393,11 +419,17 @@ func TestACommitAfterAStuckCompactionLasts(t *testing.T) {
 
 // TestTheWorkloadsCompact: run once with nothing done to it, each workload
 // leaves a file of the generation its name promises: 1 for a new database,
-// 2 after Compact by either DB, and 3 after the commits that set off
-// compactions by themselves. So the points of the suites above fall in
-// compactions of both kinds.
+// 2 after Compact by either DB, 3 after the commits that set off
+// compactions at the limit on commits, and 4 after those that set them off
+// by dead bytes, or 3 with -short. So the points of the suites above fall
+// in compactions of every kind.
 func TestTheWorkloadsCompact(t *testing.T) {
-	want := map[string]uint64{"a new database": 1, "a compaction by the same DB": 2, "a compaction by another DB": 2, "compactions after commits": 3}
+	byDead := uint64(4)
+	if testing.Short() {
+		byDead = 3
+	}
+	want := map[string]uint64{"a new database": 1, "a compaction by the same DB": 2, "a compaction by another DB": 2,
+		"compactions after commits, at the limit on commits": 3, "compactions after commits, by dead bytes": byDead}
 	for _, c := range crashWorkloads(false) {
 		d := fault.New(0)
 		ok(t, d.Mkdir(path.Dir(workloadPath)))

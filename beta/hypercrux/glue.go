@@ -76,7 +76,10 @@ type target struct {
 	kept *store.Store // the old copy, kept through a reload only by a planted bug
 }
 
-var _ logfile.Reloader = (*target)(nil)
+var (
+	_ logfile.Reloader = (*target)(nil)
+	_ logfile.Counter  = (*target)(nil)
+)
 
 func (t *target) Apply(seq uint64, changes []format.Change) error {
 	s := t.db.mem.Load()
@@ -108,6 +111,18 @@ func (t *target) Loaded(err error) {
 	t.db.unread = err
 	t.held = false
 	t.db.gate.Unlock()
+}
+
+// Dead is the copy's count of dead bytes (C1): what the batches it has taken
+// and the commits made through it have made dead, which the log's Due weighs
+// after each commit. The log calls it holding its mutex, so no write reaches
+// the copy meanwhile.
+func (t *target) Dead() int64 {
+	s := t.db.mem.Load()
+	if s == nil || plant == "hypercrux/dead-uncounted" {
+		return 0
+	}
+	return s.Dead()
 }
 
 // open opens the database at path through the file calls files, the real

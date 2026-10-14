@@ -140,8 +140,13 @@ func (a *vectors) room(size, i int) {
 
 // setVector gives r the put's vector, vals, whose dot product with itself is
 // dot, or takes r's vector away when vals is nil. A table's first vector sets
-// its size.
+// its size. The vector r had, if any, is dead from then on, as a put writes
+// it whatever form it came in (dead.go). The put has taken the copy's lock
+// already, with its record's undo entry.
 func (s *Store) setVector(t *table, r *record, vals []float32, dot float64) {
+	if r.slot >= 0 && plant != "store/dead-vector-left-out" {
+		s.dead += vectorSize(t)
+	}
 	if vals == nil {
 		if r.slot >= 0 {
 			s.freeSlot(t, r)

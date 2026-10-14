@@ -15,7 +15,10 @@ import (
 
 // Compaction through the public package (G5): Compact on demand, and the
 // compaction after a commit, which Update runs once the log's Due says one
-// is due. Both go the way F8 set out. Holding the log's write lock, a read
+// is due, by the rule C1 set: the commits since the last compaction have
+// made half the file dead, and a megabyte, as the copy counts the dead bytes
+// (the target's Dead, in glue.go), or 100,000 commits follow it. Both go the
+// way F8 set out. Holding the log's write lock, a read
 // of the copy hands its compacted snapshot to the log's Compact, which
 // writes it into NAME.compact, each table's vectors in vector blocks (V2),
 // syncs it, renames it over the database and syncs the folder. The copy
@@ -48,8 +51,8 @@ import (
 // takes about as long as opening it.
 //
 // The database compacts itself as well, at the end of a commit, once the
-// file has grown to twice the size its last compaction left it at, and by a
-// megabyte at least (Update).
+// commits since its last compaction have made half the file dead, and a
+// megabyte at least, or once 100,000 commits follow it (Update).
 //
 // When Compact fails before the new file has taken the path, because the
 // disk is full for example, NAME.compact is removed and the database carries

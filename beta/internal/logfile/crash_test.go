@@ -447,11 +447,13 @@ func TestACrashPointReplays(t *testing.T) {
 // with compactOps, through the copy, as the public package makes them, so
 // the file holds dead data. Run opens the database, makes the commit that
 // sets the compaction off, and compacts under the same lock from a read of
-// the copy, as the public package will once Due says so. Then it makes more
-// commits, which go into the compacted file. The compacted part's batches
-// are small, so it takes several, and the points fall in each of its writes.
-// A state is the copy's snapshot as text (dump), which is the same however a
-// file holds the live data.
+// the copy, as the public package does once Due says so: Run's Log has the
+// limit on commits at Setup's commits and one, so Due says so after that
+// commit, by C1's rule, and after no other unless a commit before it failed.
+// Then it makes more commits, which go into the compacted file. The
+// compacted part's batches are small, so it takes several, and the points
+// fall in each of its writes. A state is the copy's snapshot as text
+// (dump), which is the same however a file holds the live data.
 
 // noModel is the model for a run outside the driver, which tells nobody.
 type noModel struct{}
@@ -460,10 +462,10 @@ func (noModel) Begin(string) {}
 func (noModel) Done()        {}
 
 // compactWorkload makes setup commits in Setup, and in Run the commit that
-// sets the compaction off, the compaction when compact is set, and after
-// commits more. With leftover set, Setup leaves a NAME.compact beside the
-// database too, as a compaction leaves one when a crash cuts it short: part
-// of a file, synced, with its name, so no cut can take it.
+// sets the compaction off, the compaction when compact is set and Due says
+// so, and after commits more. With leftover set, Setup leaves a NAME.compact
+// beside the database too, as a compaction leaves one when a crash cuts it
+// short: part of a file, synced, with its name, so no cut can take it.
 func compactWorkload(setup, after int, compact, leftover bool) crash.Workload {
 	return crash.Workload{
 		Path: crashPath,
@@ -501,9 +503,11 @@ func compactWorkload(setup, after int, compact, leftover bool) crash.Workload {
 			if cm != nil {
 				m = cm
 			}
-			d, err := openDB(sys, crashPath, crashOptions)
+			o := crashOptions
+			o.MaxCommits = uint64(setup + 1)
+			d, err := openDB(sys, crashPath, o)
 			if err != nil {
-				d, err = openDB(sys, crashPath, crashOptions) // a failure in Open's check leaves the end of the log for the next
+				d, err = openDB(sys, crashPath, o) // a failure in Open's check leaves the end of the log for the next
 			}
 			if err != nil {
 				return err
@@ -511,7 +515,7 @@ func compactWorkload(setup, after int, compact, leftover bool) crash.Workload {
 			defer d.l.Close()
 			d.l.part = 200
 			for i := setup + 1; i <= setup+1+after; i++ {
-				d.crashCommit(m, i, compact && i == setup+1)
+				d.crashCommit(m, i, compact)
 			}
 			return nil
 		},
@@ -520,7 +524,8 @@ func compactWorkload(setup, after int, compact, leftover bool) crash.Workload {
 }
 
 // crashCommit makes commit i on d, telling m about it, and then, when
-// compact is set, a compaction, holding the lock still. It carries on after
+// compact is set and Due says one is due, a compaction, holding the lock
+// still, as Update makes them. It carries on after
 // a commit or a compaction that fails, as a program carries on after an
 // Update that returned an error. The commit's state is the copy's with its
 // changes made. A commit that fails takes its changes back out of the copy
@@ -544,7 +549,7 @@ func (d *db) crashCommit(m model, i int, compact bool) {
 		return
 	}
 	m.Done()
-	if compact {
+	if compact && d.l.Due() {
 		d.compactLocked() // the commit before it has succeeded, whatever this does
 	}
 }

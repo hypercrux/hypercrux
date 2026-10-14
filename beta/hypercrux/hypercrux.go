@@ -249,15 +249,19 @@ func (t *Tx) open() (*store.Tx, error) {
 // makes a commit twice. A lock that stays held that way goes at this DB's
 // next Update, or at Close.
 //
-// A commit that leaves the file twice the size its last compaction left it
-// at, and a megabyte past that at least, is followed by a compaction, as
-// Compact makes one, before Update lets go of the write lock, so writers
-// wait for it too. The commit has succeeded whatever the compaction does, so
-// Update returns nil all the same. A compaction that fails before its new
-// file takes the path leaves the database whole in its old file, and the
-// next comes once the file has grown as much again. One whose folder sync
-// fails after the rename makes every later write through db fail with
-// ErrStuck. Check reports what went wrong, in Report.CompactionError.
+// A commit is followed by a compaction, as Compact makes one, before Update
+// lets go of the write lock, so writers wait for it too, once the commits
+// since the file's last compaction have made half the file dead, and a
+// megabyte at least, or once 100,000 commits follow it. Dead data is what a
+// compaction leaves out: values written over, records deleted with their
+// links, tables dropped and links removed. So a database that only grows is
+// compacted once in 100,000 commits. The commit has succeeded whatever the
+// compaction does, so Update returns nil all the same. A compaction that
+// fails before its new file takes the path leaves the database whole in its
+// old file, and the next comes once the file has grown as much again. One
+// whose folder sync fails after the rename makes every later write through
+// db fail with ErrStuck. Check reports what went wrong, in
+// Report.CompactionError.
 func (db *DB) Update(fn func(tx *Tx) error) (err error) {
 	s, err := db.current()
 	if err != nil {

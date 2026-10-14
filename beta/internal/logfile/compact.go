@@ -97,46 +97,116 @@ const partSize = 1 << 20
 // Batches of 1,024 changes took most of that back.
 const partChanges = 1024
 
-// minDead is how far, at least, the end of the log must be past the live
-// data before a compaction is due, so a small database isn't compacted after
-// every few commits. It's a megabyte, like a batch of the compacted part.
+// minDead is how many bytes, at least, the batches since the compacted part
+// must have made dead, besides half the file, before a compaction is due, so
+// a small database isn't compacted after every few commits. It's a megabyte,
+// like a batch of the compacted part.
 const minDead = 1 << 20
+
+// maxCommits is how many commits past the compacted part make a compaction
+// due, whatever they've made dead, so the log a process reads on opening
+// stays bounded, however little its commits make dead. A database that only
+// grows, a commit of 1,000 records at a time, reaches it at 100 million
+// records. Opening 100,000 small commits, a put of two short fields each,
+// 9.8 MB, takes about 0.3 seconds on a two-core cloud machine, about as long
+// as opening 100,000 records with 384-value vectors from a compacted file
+// (C1.md).
+const maxCommits = 100_000
 
 // compactName is the compaction's file: the database's path with .compact
 // added.
 func (l *Log) compactName() string { return l.path + ".compact" }
 
-// Due reports whether a compaction is due by BETA.md's rule of thumb, a file
-// holding about twice as much as its live data. The live data it measures is
-// the most the log knows of without a pass over the copy: what the last
-// compaction wrote, which is the file up to the end of its compacted part, or
-// the header alone in generation 1. A compaction is due once the end of the
-// log is at least twice as far into the file as that, and at least a
-// megabyte past it, or Options.MinGrowth when that's set. Every process
-// reads the same from the file, so every process agrees.
+// Due reports whether a compaction is due, by BETA.md's rule (C1): once the
+// batches since the file's compacted part, or since its start in generation
+// 1, have made half the file dead, and a megabyte at least, or
+// Options.MinGrowth when that's set; or once 100,000 commits follow the
+// compacted part, or Options.MaxCommits.
 //
-// Of what commits add, the log can't tell what's live, so a database that
-// only grows is compacted each time it doubles too, which rewrites its data
-// about once more in all. After a compaction that failed before the switch,
-// the next isn't due until the file has grown by as much again as it had
+// The dead bytes are the Target's count, when it's a Counter, measured from
+// where this file's count began (Dead): the bytes of changes in the file that
+// no longer reach the state, a put's old values, a deleted record with its
+// links, a dropped table or a removed link. Each batch's head, checksum and
+// marker never count, so a database that only grows is compacted only at the
+// limit on commits, which every process reads from the sequence numbers
+// (Commits). Every process that has read the file applies the same changes
+// to the same state, so every process counts the same, and takes the same
+// choice from the same file. A Target that isn't a Counter counts nothing
+// dead, and then only the limit on commits applies.
+//
+// After a compaction that failed before the switch, the next isn't due,
+// whatever the rule says, until the file has grown by as much again as it had
 // since its last compaction, so a disk without room for a second copy isn't
-// written to the full after every commit.
+// written to the full after every commit. That hold-off is the one thing a
+// process keeps of its own.
 //
-// Due is for the holder of the write lock, after a commit, and makes no
+// Due is for the holder of the write lock, after a commit, and makes no file
 // call. It's false for a stuck Log.
 func (l *Log) Due() bool {
-	if !l.locked || l.stuck != nil || l.empty {
+	if !l.locked || l.stuck != nil || l.empty || l.end < l.retry {
 		return false
 	}
-	base, growth := l.liveBase(), int64(minDead)
-	if l.growth > 0 {
-		growth = l.growth
+	commits, limit := l.Commits(), uint64(maxCommits)
+	if l.limit > 0 {
+		limit = l.limit
 	}
-	return l.end >= 2*base && l.end-base >= growth && l.end >= l.retry
+	if plant == "logfile/commit-limit-off-by-one" {
+		limit++
+	}
+	if commits >= limit {
+		return true
+	}
+	dead, floor := l.Dead(), int64(minDead)
+	if l.growth > 0 {
+		floor = l.growth
+	}
+	if plant == "logfile/dead-floor-left-out" {
+		floor = 1
+	}
+	return dead >= floor && 2*dead >= l.end
+}
+
+// Dead returns how many bytes of changes the batches in the file since its
+// compacted part have made dead, as Due weighs them: what the Target's count
+// says now, less what it said when this file's count began. That was when
+// the Log began to read the file from its start, or when it compacted into
+// it, so a compaction starts the count from nothing. It's 0 for a Target
+// that isn't a Counter. Dead is for the holder of the write lock, or of its
+// mutex.
+func (l *Log) Dead() int64 { return l.counted() - l.deadAt }
+
+// Commits returns how many commits follow the file's compacted part, or all
+// of them in generation 1, as Due weighs them: the last batch's sequence
+// number less the compacted part's last. Commits is for the holder of the
+// write lock, or of its mutex.
+func (l *Log) Commits() uint64 { return l.seq - l.compacted }
+
+// counted is the Target's count of dead bytes, or 0 when it doesn't count.
+func (l *Log) counted() int64 {
+	if c, ok := l.t.(Counter); ok {
+		return c.Dead()
+	}
+	return 0
+}
+
+// started notes that this file's count of dead bytes and commits starts
+// now, as the Log begins to read a file from its start or makes a new one,
+// with nothing of it read yet.
+func (l *Log) started() {
+	l.compacted, l.deadAt = 0, l.counted()
+}
+
+// partRead notes the compacted part's last batch, once the log has read on
+// to just past it, so Commits counts from there.
+func (l *Log) partRead() {
+	if l.end == int64(l.hdr.CompactedEnd) {
+		l.compacted = l.seq
+	}
 }
 
 // liveBase is the live data as the log last knew it: the end of the file's
-// compacted part, or the header in generation 1.
+// compacted part, or the header in generation 1. The hold-off after a failed
+// compaction measures the file's growth from it.
 func (l *Log) liveBase() int64 {
 	return max(int64(l.hdr.CompactedEnd), format.HeaderSize)
 }
@@ -516,13 +586,21 @@ func (l *Log) dropCompact(c *compaction, err error, what string) error {
 // switchTo moves the Log over to the compacted file, which has taken the
 // database's path, and closes the old file, which lets go of its lock. The
 // new file's lock stays held, as the write lock, until Unlock or, for a stuck
-// Log, Close. The Target holds the compacted state already.
+// Log, Close. The Target holds the compacted state already. The new file
+// holds live data alone, so its count of dead bytes starts from what the
+// Target's count says now, and its commits from its compacted part's last
+// batch, as a process that reads the new file from its start counts them
+// (Due).
 func (l *Log) switchTo(c *compaction) {
 	old := l.f
 	l.f, l.file, l.empty, l.named = c.f, c.info, false, false
 	l.hdr, l.head = c.hdr, c.head
 	l.seq, l.end, l.last = c.seq, c.end, c.last
 	l.retry = 0
+	l.compacted = c.seq
+	if plant != "logfile/dead-not-restarted" {
+		l.deadAt = l.counted()
+	}
 	old.Close()
 }
 

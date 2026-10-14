@@ -58,6 +58,10 @@ var (
 //     "ready", and waits for a line on its standard input. Then it commits
 //     a batch creating the table "waited", and prints "committed after"
 //     and how long Lock took, or "failed after" that and the error.
+//   - count: opens the database with the store as its Target, prints
+//     "open", and answers what its standard input asks: the choice its Log
+//     takes, once it has followed the file, or a Log opened afresh, or a
+//     compaction (countRole, in due_test.go).
 func helper(role, path string) int {
 	fail := func(err error) int {
 		fmt.Fprintln(os.Stderr, "helper:", role+":", err)
@@ -173,6 +177,10 @@ func helper(role, path string) int {
 			fmt.Printf("committed after %v\n", took)
 		}
 		if err := l.Close(); err != nil {
+			return fail(err)
+		}
+	case "count":
+		if err := countRole(path); err != nil {
 			return fail(err)
 		}
 	default:

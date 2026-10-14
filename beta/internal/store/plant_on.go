@@ -112,6 +112,21 @@ import "os"
 //     is taken.
 //   - store/block-norm-left-out: a vector block's vectors get no norm, so a
 //     search after opening a compacted file finds every distance 1.
+//
+// C1's, in the count of dead bytes:
+//
+//   - store/dead-delete-links-left-out: a delete counts the record and
+//     itself, and leaves the record's links out of the count.
+//   - store/dead-inner-links-twice: a drop counts each link between two of
+//     its table's records twice, once from each end.
+//   - store/dead-frame-left-out: a put of a record that's there already
+//     leaves the frame of the record's earlier put out of the count.
+//   - store/dead-vector-left-out: a vector that a put writes over or takes
+//     away is left out of the count.
+//   - store/dead-kept-on-rollback: Rollback and RollbackTo leave the count
+//     as the transaction left it, so a transaction taken back, or a
+//     statement inside one, counts in the writer's copy and in no other
+//     process's.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "store/nulls-kept", "store/drop-keeps-records", "store/spelt-as-given", "store/size-unchecked",
@@ -126,7 +141,9 @@ var plant = func() string {
 		"store/freed-slot-taken-at-once", "store/overwrite-not-kept", "store/norm-not-undone",
 		"store/deleted-vector-found", "store/ties-by-slot", "store/filter-after-distance", "store/top-k-first-seen",
 		"store/nearest-table-first",
-		"store/compacted-last-vector-dropped", "store/compacted-in-slot-order", "store/block-unchecked", "store/block-norm-left-out":
+		"store/compacted-last-vector-dropped", "store/compacted-in-slot-order", "store/block-unchecked", "store/block-norm-left-out",
+		"store/dead-delete-links-left-out", "store/dead-inner-links-twice", "store/dead-frame-left-out",
+		"store/dead-vector-left-out", "store/dead-kept-on-rollback":
 		return p
 	}
 	return ""

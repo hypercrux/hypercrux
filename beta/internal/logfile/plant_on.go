@@ -212,6 +212,18 @@ import (
 //     vector blocks straight from its read buffer, without
 //     Options.BlocksInPlace, so a Target that keeps the changes finds the
 //     vectors of an earlier batch overwritten by a later one.
+//
+// C1's, in when a compaction is due:
+//
+//   - logfile/dead-not-restarted: a Log's own compaction doesn't start the
+//     count of dead bytes again, so the writer goes on counting the dead
+//     bytes of the file it compacted, where a process that reads the
+//     compacted file counts none, and the two take different choices.
+//   - logfile/commit-limit-off-by-one: a compaction is due once one more
+//     commit than the limit follows the compacted part.
+//   - logfile/dead-floor-left-out: a compaction is due once half the file
+//     is dead, without the megabyte, so a small database whose commits
+//     write over each other is compacted after every few commits.
 var plant = func() string {
 	switch p := os.Getenv("HYPERCRUX_PLANT"); p {
 	case "logfile/no-inode-check", "logfile/one-try", "logfile/any-marker", "logfile/marker-before-sync", "logfile/no-read-check",
@@ -229,7 +241,8 @@ var plant = func() string {
 		"logfile/fifo-opened-first", "logfile/links-unchecked", "logfile/dangling-link-retried",
 		"logfile/folder-unsynced-before-commit", "logfile/named-kept-on-another-file",
 		"logfile/block-cut-short", "logfile/block-one-batch", "logfile/block-anywhere", "logfile/block-appended",
-		"logfile/blocks-always-in-place":
+		"logfile/blocks-always-in-place",
+		"logfile/dead-not-restarted", "logfile/commit-limit-off-by-one", "logfile/dead-floor-left-out":
 		return p
 	}
 	return ""

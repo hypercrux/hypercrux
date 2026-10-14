@@ -39,9 +39,11 @@ import (
 // moved into place, and every compaction after carries.
 //
 //   - Writers commit through the real log, as realWrite does, on a slow disk,
-//     with a copy in the store, as the public package keeps one, and after
-//     about one commit in 16 they compact the database under the same lock,
-//     as the public package's Update does once Due says so (G5).
+//     with a copy in the store, as the public package keeps one, and they
+//     compact the database under the same lock once the log's Due says so,
+//     as the public package's Update does (G5), by C1's rule with a limit of
+//     16 commits past the compacted part, which every writer reads from the
+//     sequence numbers, so one commit in 16 is followed by a compaction.
 //   - Readers open the database once and follow it until they're killed.
 //     Half of them, by their numbers, follow through the log itself, calling
 //     Follow, and Reload when Follow asks for it, with the store as their
@@ -54,7 +56,10 @@ import (
 //     path and its rename.
 var realReloaded = Workload{Name: "real log reloaded", Write: reloadWrite, Read: reloadRead, Final: reloadFinal, Backup: reloadBackup, Restore: reloadRestore}
 
-// compactEvery is about how many commits a writer makes for each compaction.
+// compactEvery is about how many commits make a compaction: the limit on
+// commits past the compacted part of the real log's writers here, and how
+// often a writer through the public package calls Compact
+// (via_package_test.go).
 const compactEvery = 16
 
 // What the workload's processes count.
@@ -91,11 +96,16 @@ func (g *glue) Reset() {
 
 func (g *glue) Loaded(error) { g.loading = false }
 
+// Dead is the copy's count of dead bytes, as the public package's target
+// gives it (C1), so the log's Due weighs what the copy counts.
+func (g *glue) Dead() int64 { return g.s.Dead() }
+
 // copyOf is a database opened as the public package opens one, in small: its
-// log and its copy.
+// log and its copy, and the compactions its commits have made.
 type copyOf struct {
-	l *logfile.Log
-	g *glue
+	l           *logfile.Log
+	g           *glue
+	compactions int
 }
 
 func openCopy(files fsys.FS, path string, o logfile.Options) (*copyOf, error) {
@@ -111,10 +121,11 @@ func openCopy(files fsys.FS, path string, o logfile.Options) (*copyOf, error) {
 
 // commit is the public package's Update in small: the write lock, the copy's
 // transaction running fn, Commit with the log's Append, and when compact is
-// true, a compaction under the same lock from a read of the copy, as the
-// public package's is after a commit (G5), which writes the copy's vectors
-// in vector blocks (V2); then the lock goes. It returns the commit's error,
-// and the compaction's.
+// true and the log's Due says one is due, a compaction under the same lock
+// from a read of the copy, as the public package's is after a commit (G5),
+// which writes the copy's vectors in vector blocks (V2); then the lock goes.
+// It returns the commit's error, and the compaction's, and counts a
+// compaction that worked in d.compactions.
 func (d *copyOf) commit(fn func(tx *store.Tx) error, compact bool) (err, cerr error) {
 	if err := d.l.Lock(); err != nil {
 		return err, nil
@@ -135,9 +146,12 @@ func (d *copyOf) commit(fn func(tx *store.Tx) error, compact bool) (err, cerr er
 	if err := tx.Commit(d.l.Append); err != nil {
 		return err, nil
 	}
-	if compact {
+	if compact && d.l.Due() {
 		s := d.g.s
 		cerr = s.Read(func(store.Reader) error { return d.l.Compact(s.Compacted()) })
+		if cerr == nil {
+			d.compactions++
+		}
 	}
 	return nil, cerr
 }
@@ -205,10 +219,10 @@ func checked(s *store.Store) error {
 }
 
 // reloadWrite is a writer's work: commits, each putting the record of its
-// place in the log, and a count of them, and now and then a compaction,
-// until the process is killed.
+// place in the log, and a count of them, and a compaction when the log's Due
+// says one is due, until the process is killed.
 func reloadWrite(w *Writer) error {
-	d, err := openCopy(slowSync{fsys.OS{}}, w.Path(), logfile.Options{})
+	d, err := openCopy(slowSync{fsys.OS{}}, w.Path(), logfile.Options{MaxCommits: compactEvery})
 	if err != nil {
 		return err
 	}
@@ -220,7 +234,7 @@ func reloadWrite(w *Writer) error {
 		}
 		text := fmt.Sprintf("writer %d's commit %d: %s", w.ID(), n, letters)
 		begun := false
-		compact := w.Rand().IntN(compactEvery) == 0
+		compacted := d.compactions
 		err, cerr := d.commit(func(tx *store.Tx) error {
 			var count int64
 			if rec, err := tx.Get("meta:n"); err == nil {
@@ -234,7 +248,7 @@ func reloadWrite(w *Writer) error {
 				return err
 			}
 			return tx.Put("meta:n", []format.Field{{Name: "n", Value: value.Int(count + 1)}})
-		}, compact)
+		}, true)
 		switch {
 		case err == nil:
 			w.Done()
@@ -248,7 +262,7 @@ func reloadWrite(w *Writer) error {
 			return cerr
 		case cerr != nil:
 			w.Count(compactionFailed)
-		case compact && err == nil:
+		case d.compactions > compacted:
 			w.Count(writerCompacted)
 		}
 		time.Sleep(time.Duration(w.Rand().IntN(1000)) * time.Microsecond)

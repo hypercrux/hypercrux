@@ -83,3 +83,14 @@ func UseSnapshot(f func(r store.Reader) iter.Seq[format.Change]) (restore func()
 	snapshotOf = f
 	return func() { snapshotOf = old }
 }
+
+// Pending gives what the log's Due weighs for db (C1), as db last read the
+// file: the bytes the commits since the file's compacted part have made
+// dead, as the copy counts them, and the commits past the compacted part. It
+// takes no lock, so a test calls it on the goroutine that has db to itself:
+// between its calls, once a read has followed the file, or inside a
+// compaction db is making, from the func UseSnapshot gives, where the
+// commit that set the compaction off is in what it weighs.
+func Pending(db *DB) (dead int64, commits uint64) {
+	return db.log.Dead(), db.log.Commits()
+}

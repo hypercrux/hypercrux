@@ -75,6 +75,11 @@ type Store struct {
 	// recs holds the records a vector block names while it's applied
 	// (applyVectors), and each block uses it again. Only writes use it.
 	recs []*record
+	// dead is how many bytes of changes the changes the store has taken
+	// have made dead (C1, dead.go), which Dead gives. Writes add to it once
+	// their change has taken the copy's lock, and a rollback puts it back
+	// (tx.go).
+	dead int64
 }
 
 var _ Reader = (*Store)(nil)

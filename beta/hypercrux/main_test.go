@@ -31,6 +31,10 @@ func TestMain(m *testing.M) {
 //     just committed, puts b:k, and then prints "saw k", or what it found
 //     instead of a:k. At the end of its input it prints what Check counts,
 //     and closes the database.
+//   - count: opens the database, prints "open", and for each line on its
+//     standard input prints what the log's Due weighs, as a DB that follows
+//     the file sees it, or as one opened afresh (countHelper, in
+//     due_test.go).
 func helper(role, path string) int {
 	fail := func(err error) int {
 		fmt.Fprintln(os.Stderr, "helper:", role+":", err)
@@ -64,6 +68,10 @@ func helper(role, path string) int {
 		}
 		fmt.Printf("records %d\n", rep.Records)
 		if err := db.Close(); err != nil {
+			return fail(err)
+		}
+	case "count":
+		if err := countHelper(path); err != nil {
 			return fail(err)
 		}
 	default:

@@ -341,6 +341,11 @@ func tooMany(table string, n, most int) error {
 // values the store keeps. vec is its vector's values, as checkVector
 // decoded them, with dot, their dot product with themselves, or nil when the
 // put gives no vector.
+//
+// A put of a record that's there already makes one of the record's two
+// frames dead, and the values and the vector it replaces, and every null it
+// gives is dead from the start (dead.go). Every process makes the same puts
+// on the same records, so they all count the same.
 func (s *Store) put(t *table, key string, fields []format.Field, vec []float32, dot float64) {
 	r := s.records[key]
 	if r == nil {
@@ -352,12 +357,18 @@ func (s *Store) put(t *table, key string, fields []format.Field, vec []float32, 
 		// A new record goes whole when its put is undone, so only a
 		// record that was there needs its fields and its slot kept.
 		s.changing(undo{op: undoRecord, record: r, fields: r.fields, n: r.slot})
+		if plant != "store/dead-frame-left-out" {
+			s.dead += frameSize(key)
+		}
 	}
 	set := make([]FieldValue, 0, len(fields))
 	for _, f := range fields {
 		p, ok := t.index[rules.Fold(f.Name)]
 		if !ok {
 			p = s.add(t, strings.Clone(f.Name))
+		}
+		if f.Value.IsNull() {
+			s.dead += fieldSize(f.Name, f.Value) // it only clears the field
 		}
 		if p == t.vec {
 			s.setVector(t, r, vec, dot) // vec is nil when the put sets the vector to null
@@ -366,14 +377,18 @@ func (s *Store) put(t *table, key string, fields []format.Field, vec []float32, 
 		set = append(set, FieldValue{Index: p, Value: f.Value})
 	}
 	slices.SortFunc(set, func(a, b FieldValue) int { return cmp.Compare(a.Index, b.Index) })
-	r.fields = merge(r.fields, set)
+	var replaced int64
+	r.fields, replaced = merge(t, r.fields, set)
+	s.dead += replaced
 }
 
-// merge returns a record's fields after a put: old's, with each place the
-// put sets taking its value, and the places it sets to null left out.
-// Both lists are in order of place.
-func merge(old, set []FieldValue) []FieldValue {
+// merge returns a record's fields after a put into t: old's, with each place
+// the put sets taking its value, and the places it sets to null left out.
+// Both lists are in order of place. It returns too what the values the put
+// replaces take in the file, which are dead from then on (dead.go).
+func merge(t *table, old, set []FieldValue) ([]FieldValue, int64) {
 	out := make([]FieldValue, 0, len(old)+len(set))
+	var replaced int64
 	i, j := 0, 0
 	for i < len(old) || j < len(set) {
 		if j == len(set) || i < len(old) && old[i].Index < set[j].Index {
@@ -382,6 +397,7 @@ func merge(old, set []FieldValue) []FieldValue {
 			continue
 		}
 		if i < len(old) && old[i].Index == set[j].Index {
+			replaced += fieldSize(t.fields[old[i].Index], old[i].Value)
 			i++
 		}
 		if !set[j].Value.IsNull() || plant == "store/nulls-kept" {
@@ -390,11 +406,14 @@ func merge(old, set []FieldValue) []FieldValue {
 		j++
 	}
 	if len(out) == 0 {
-		return nil
+		return nil, replaced
 	}
-	return out
+	return out, replaced
 }
 
+// delete deletes the record with this key, which must exist. The delete, the
+// record and its links are dead from then on, counted once remove has taken
+// the copy's lock (dead.go).
 func (s *Store) delete(key string) error {
 	if _, err := rules.TableOf(key); err != nil {
 		return err
@@ -403,7 +422,12 @@ func (s *Store) delete(key string) error {
 	if r == nil {
 		return fmt.Errorf("%w: %s", errs.ErrNotFound, key)
 	}
+	dead := deleteSize(key) + r.size()
+	if plant != "store/dead-delete-links-left-out" {
+		dead += linksSize(r, nil)
+	}
 	s.remove(r)
+	s.dead += dead
 	return nil
 }
 
@@ -457,8 +481,14 @@ func (s *Store) drop(name string) error {
 	// its records keep everything they hold, links among themselves
 	// included, so undoing the drop is putting them back in the maps and
 	// putting back the other ends of their links.
+	//
+	// The drop, the table's create, and each record with its links are
+	// dead from then on (dead.go). A record's own lists stay as they are
+	// while the records after it go, so each is counted as it's reached.
+	dead := dropSize(name) + createSize(name)
 	if plant != "store/drop-keeps-records" {
 		for r := range t.keys.records {
+			dead += r.size() + linksSize(r, t)
 			s.cut(r, t)
 			s.unhash(r)
 		}
@@ -466,6 +496,7 @@ func (s *Store) drop(name string) error {
 	s.changing(undo{op: undoHadTable, table: t})
 	delete(s.tables, name)
 	s.epoch++
+	s.dead += dead
 	return nil
 }
 

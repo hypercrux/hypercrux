@@ -158,10 +158,10 @@ func TestCompactReadsOnFirst(t *testing.T) {
 }
 
 // TestUpdateCompactsWhenDue: a record written over again and again, 100 KB
-// at a time, is compacted once the file has grown a megabyte past its last
-// compaction, and twice its size, by the Update whose commit took it there,
-// before it returns. The file stays near its live data, and a reopen holds
-// the last value. With a small MinGrowth, a compaction comes after the
+// at a time, is compacted once its puts since the last compaction have made
+// a megabyte dead, and half the file, by the Update whose commit took it
+// there, before it returns. The file stays near its live data, and a reopen
+// holds the last value. With a small MinGrowth, a compaction comes after the
 // first commits that make one due, and not before.
 func TestUpdateCompactsWhenDue(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.hcx")
@@ -192,7 +192,7 @@ func TestUpdateCompactsWhenDue(t *testing.T) {
 		ok(t, sdb.Put("docs:1", hc.Fields{"text": strings.Repeat("y", 300)}))
 		if header(t, fsys.OS{}, small).Gen == 2 {
 			if i < 3 {
-				t.Errorf("a compaction came after commit %d, before the file had grown 1,000 bytes", i)
+				t.Errorf("a compaction came after commit %d, before 1,000 bytes were dead", i)
 			}
 			break
 		}
@@ -203,7 +203,8 @@ func TestUpdateCompactsWhenDue(t *testing.T) {
 }
 
 // TestAFailedCompactionFailsNoUpdate: when the compaction after a commit
-// fails before its switch, here at making NAME.compact, Update returns nil,
+// fails before its switch, here at making NAME.compact once three commits
+// reach the limit on commits the DB is opened with, Update returns nil,
 // since its commit is in the file, which a reopen reads back. The database
 // carries on in its old file, and Check reports the compaction's error until
 // a compaction works: Compact, here, which takes it away.
@@ -211,7 +212,7 @@ func TestAFailedCompactionFailsNoUpdate(t *testing.T) {
 	const path = "/db/test.hcx"
 	d := fault.New(0)
 	ok(t, d.Mkdir("/db"))
-	db, err := hc.OpenWith(d.FS(), path, logfile.Options{Wait: time.Second, MinGrowth: 1000})
+	db, err := hc.OpenWith(d.FS(), path, logfile.Options{Wait: time.Second, MaxCommits: 3})
 	ok(t, err)
 	defer db.Close()
 	d.Add(fault.Rule{Op: fault.Create, Path: path + ".compact", N: 1})
@@ -246,15 +247,17 @@ func TestAFailedCompactionFailsNoUpdate(t *testing.T) {
 }
 
 // TestAStuckCompactionFailsNoUpdate: when the folder's sync fails after the
-// compaction's rename, the Update whose commit set it off returns nil, and
-// the next write fails with ErrStuck, as Check reports. The stuck DB keeps
-// the write lock until it's closed. Every commit Update reported survives a
-// power cut after that, whichever file the cut leaves at the path.
+// rename of the compaction that three commits set off, at the limit on
+// commits the DB is opened with, the Update whose commit set it off returns
+// nil, and the next write fails with ErrStuck, as Check reports. The stuck
+// DB keeps the write lock until it's closed. Every commit Update reported
+// survives a power cut after that, whichever file the cut leaves at the
+// path.
 func TestAStuckCompactionFailsNoUpdate(t *testing.T) {
 	const path = "/db/test.hcx"
 	d := fault.New(1)
 	ok(t, d.Mkdir("/db"))
-	db, err := hc.OpenWith(d.FS(), path, logfile.Options{Wait: 100 * time.Millisecond, MinGrowth: 1000})
+	db, err := hc.OpenWith(d.FS(), path, logfile.Options{Wait: 100 * time.Millisecond, MaxCommits: 3})
 	ok(t, err)
 	d.Add(fault.Rule{Op: fault.SyncDir, N: 1})
 	n := 0
@@ -297,14 +300,15 @@ func TestAStuckCompactionFailsNoUpdate(t *testing.T) {
 }
 
 // TestAPanicInACompactionFailsNoUpdate: when ranging over the snapshot
-// panics in the compaction after a commit, Update returns nil, since its
-// commit is in the file, and Check reports the panic as the compaction's
-// error. NAME.compact is gone, and the database carries on in its old file.
-// Compact itself lets the panic carry on to its caller.
+// panics in the compaction after a commit, which the DB's limit of three
+// commits sets off, Update returns nil, since its commit is in the file, and
+// Check reports the panic as the compaction's error. NAME.compact is gone,
+// and the database carries on in its old file. Compact itself lets the panic
+// carry on to its caller.
 func TestAPanicInACompactionFailsNoUpdate(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.hcx")
-	db, err := hc.OpenWith(fsys.OS{}, path, logfile.Options{MinGrowth: 1000})
+	db, err := hc.OpenWith(fsys.OS{}, path, logfile.Options{MaxCommits: 3})
 	ok(t, err)
 	defer db.Close()
 	restore := hc.UseSnapshot(func(r store.Reader) iter.Seq[format.Change] {

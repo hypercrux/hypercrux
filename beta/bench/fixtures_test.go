@@ -42,10 +42,10 @@ type built struct {
 
 // fixture returns the file build makes on engine e, building it the first
 // time it's asked for. On the Beta the file is then compacted with Compact,
-// since BETA.md's target for opening is for a compacted file. The commits
-// that build it set off compactions of their own too, each time the file
-// doubles past a megabyte (task G5), so Compact rewrites the data once more,
-// and the file holds the live data alone, in batches of about a megabyte.
+// since BETA.md's target for opening is for a compacted file, and the file
+// holds the live data alone, in batches of about a megabyte. The commits
+// that build it only add records, which makes nothing dead, so they set off
+// no compaction of their own (task C1).
 func fixture(b *testing.B, e engine, name string, build func(d db) error) built {
 	b.Helper()
 	fixtureOnce.Do(func() {
