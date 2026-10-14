@@ -370,9 +370,11 @@ well, which rewrites its data about once more in all:
    norm, as FORMAT.md's "Vector blocks" describes.
 3. It syncs the new file.
 4. It checks that the file at the path is still the one it compacted, so a
-   backup moved into place meanwhile is never replaced. Then it renames the
-   new file to the database's path and syncs the directory. This rename is
-   the switch: before it, the database is generation N; after it, N+1.
+   backup moved into place while it ran is left in place. A move that lands
+   between that check and the rename is replaced all the same, and the
+   restore is lost without an error. Then it renames the new file to the
+   database's path and syncs the directory. This rename is the switch:
+   before it, the database is generation N; after it, N+1.
 5. It moves over to the new file and releases both files' locks and then the
    mutex. A writer that was waiting on the old file gets that lock, sees
    that the path names a different file, and starts again there.
@@ -525,6 +527,11 @@ functions.
 - Local file systems only. Network file systems such as NFS and SMB, and
   folders shared into containers through a virtual machine, don't keep the
   locks honest.
+- The file system has to keep a file's data in step with its size through a
+  power cut, as ext4 does by default (data=ordered), and XFS and btrfs do.
+  ext4 mounted with data=writeback can show a file's old blocks at its end
+  after a power cut, and those can hold a batch cut back after a failed
+  commit, which the next check would take back in.
 - A database is opened by its real path, with symbolic links resolved and a
   relative path made absolute, and a new one by its folder's real path and
   its name. Only a regular file with one name is opened: a file with more
@@ -539,11 +546,12 @@ functions.
   using the database and copy the backup in, or copy it beside the database
   and move it into place with `mv`. Running processes notice the new file
   and reload. A commit that races the move is lost along with everything
-  after the backup, and the file's owner and the directory sync are up to
-  whoever moves it. Don't copy anything over a live database. A copy that
-  catches the end of the log while it's cut and written again, after a
-  failed commit or a crash, can hold half of each version, which reads as
-  damage; copying again gives a good copy.
+  after the backup. A compaction that races it can undo the restore, by
+  renaming the old data over the backup. The file's owner and the directory
+  sync are up to whoever moves it. Don't copy anything over a live database.
+  A copy that catches the end of the log while it's cut and written again,
+  after a failed commit or a crash, can hold half of each version, which
+  reads as damage; copying again gives a good copy.
 
 ## Targets
 

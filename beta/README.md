@@ -77,6 +77,8 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   the test that checks them against FORMAT.md, and the codec, which reads
   and writes headers, batches and markers as pure functions. A batch of
   vector blocks alone can be read without a copy (`DecodeBatchInPlace`).
+  Decoding a batch makes its arrays once, the size a first walk of its
+  syntax counts.
 - `internal/fsys/`: the file calls, `File` and `FS`, which the crash tests'
   fault layers wrap, and the real ones, `OS`, through Go's `syscall`
   package.
