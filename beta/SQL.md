@@ -444,11 +444,12 @@ statement by the same rule. They follow IN's rules under "Values".
 
 `Nearest(table, q, k, where, args...)` takes in `where` a condition on the
 table's records, as a WHERE over the table would take it, with its `?` marks
-filled from `args`. A `where` that holds only spaces keeps every record with a
-vector. 0.x runs the filter inside a SELECT, so its errors are of kind
+filled from `args`. A `where` that holds only spaces keeps every record with
+a vector. 0.x runs the filter inside a SELECT, so its errors are of kind
 "error", and the Beta's are too. A `where` with a NUL byte in it is
 incomplete input, as in 0.x, which puts it in parentheses at the end of a
-query.
+query, and so is one that ends inside a comment, such as `n = 1 -- c` or
+`n = 1 /* c`, whose comment takes in that closing parenthesis.
 
 `Nearest` makes 0.x's checks first, in 0.x's order: the table's name, the
 query vector and k, then the table, which must exist, then its vector size,

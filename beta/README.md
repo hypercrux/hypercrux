@@ -2,10 +2,11 @@
 
 The Beta is a new engine for HyperCrux, written in Go, with SQL, key-value,
 graph and vector built into the engine itself. The plan is
-[BETA.md](../BETA.md). The work lives here, beside 0.x,
-which stays as it is. Everything in this folder builds only on Linux. On
-macOS and Windows its packages are empty, so 0.x's builds and CI there carry
-on unchanged.
+[BETA.md](../BETA.md). The work lives here, beside 0.x, which stays as it
+is. Everything in this folder runs only on Linux. On macOS and Windows its
+packages are empty, apart from the command, which builds there and says it
+runs on Linux only, so 0.x's builds and CI there carry on unchanged,
+`go build ./...` among them.
 
 Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 
@@ -42,22 +43,23 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
   0.x with one thing each done wrong, which it has to catch.
 - `FORMAT.md`: the Beta's file format, byte by byte, with the rules for
   reading, checking and writing the log.
-- `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It has
-  0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
+- `hypercrux/`: the Beta's Go package, beside 0.x's until the release. It
+  has 0.x's API. `Open`, `Close`, `Update`, `Get`, `Put`, `Delete`, `Scan`,
   `Drop`, `Link`, `Unlink`, `Neighbours`, `Walk`, `Nearest` and `TableOf`
   work through the file, and so do `Export` and `Import`, in 0.x's export
   format, byte for byte as 0.x writes it. `Check` checks the copy in memory
-  and reads the file again for damage, and gives the file's size and the
-  copy's, and Export and Import refuse a database it finds problems in.
-  `Query`, `QueryRow`, `Exec`, `SQL()` and `Nearest` with a filter run the
-  Beta's SQL through its database/sql driver, and `SQL().Begin` returns an
-  error. Each read through a `DB` follows what other processes commit, and
-  reloads the file after a compaction or a backup moved into place. `Compact`
-  rewrites the file with only the live data, a commit is followed by a
-  compaction once the commits since the last have made half the file dead,
-  and a megabyte, or once 100,000 commits follow it, and `Check` reports one
-  that failed. Its tests drive the crash-point driver
-  through it, on the fault layer, and time opening a compacted file.
+  and reads the file again for damage, or for another file copied over it in
+  place, and gives the file's size and the copy's, and Export and Import
+  refuse a database it finds problems in. `Query`, `QueryRow`, `Exec`,
+  `SQL()` and `Nearest` with a filter run the Beta's SQL through its
+  database/sql driver, and `SQL().Begin` returns an error. Each read through
+  a `DB` follows what other processes commit, and reloads the file after a
+  compaction or a backup moved into place. `Compact` rewrites the file with
+  only the live data, a commit is followed by a compaction once the commits
+  since the last have made half the file dead, and a megabyte, or once
+  100,000 commits follow it, and `Check` reports one that failed. Its tests
+  drive the crash-point driver through it, on the fault layer, and time
+  opening a compacted file.
 - `internal/errs/`: the error values every layer returns, each of one kind
   in the differential harness's terms.
 - `internal/crash/`: the crash-point driver. It runs a workload of commits
@@ -195,8 +197,9 @@ Two workflows run on every push to main and every pull request, and a third
 runs by hand.
 
 - `test` runs 0.x's tests and the Beta's on ubuntu and macOS, with the race
-  detector on Linux. On macOS the Beta's packages are empty. Releases of
-  0.x wait for this workflow.
+  detector on Linux. On macOS the Beta's packages are empty, apart from the
+  command's message that it runs on Linux only. Releases of 0.x wait for
+  this workflow.
 - `beta` runs the Beta's own jobs, which no release waits for until the
   Beta's first, in task R4:
   - `rules`: `scripts/check-beta.sh`.
@@ -242,7 +245,9 @@ for a task that plants a bug.
   which 0.x can hold, and refuses a table of more than 1,999 fields as
   invalid, where 0.x gives SQLite's own error. In its own process, an
   `Update`'s first change waits for an export under way to end, as it waits
-  for any read, where 0.x's writers carry on through an export.
+  for any read, where 0.x's writers carry on through an export. The writer
+  `Export` writes to mustn't call the database, since a read from inside it
+  can wait for such an `Update`, which waits for the export.
 - **A write that fails** changes nothing, even inside an `Update` that goes
   on to commit. 0.x keeps the new fields a failed `Put` named. So a later
   `Put` that names such a field in another case spells it its own way in

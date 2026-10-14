@@ -4,8 +4,9 @@
 #
 # Checks the rules for beta/: every Go file builds only on Linux apart from
 # one untagged doc.go per package, so on macOS and Windows the packages are
-# empty and 0.x's builds there don't change; the code is gofmt'd; the
-# engine builds without cgo; and the task board agrees with BETA.md.
+# empty, apart from the command's main in its doc.go, and 0.x's builds there
+# don't change; the code is gofmt'd; the engine builds without cgo; and the
+# task board agrees with BETA.md.
 #
 #   sh scripts/check-beta.sh
 set -eu

@@ -585,8 +585,9 @@ None has been measured.
 ## The work, task by task
 
 The Beta lives in a `beta/` folder in this repository, beside 0.x, which
-stays as it is. The folder builds only on Linux, so 0.x's macOS and Windows
-builds and its CI carry on unchanged.
+stays as it is. The folder runs only on Linux. Elsewhere its packages build
+empty, apart from a command that says so, so 0.x's macOS and Windows builds
+and its CI carry on unchanged.
 
 The work is 48 tasks of two to five hours, plus one that runs only if a
 target needs it (V2), and one the owner added after the review's first part
