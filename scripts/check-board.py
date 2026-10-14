@@ -4,8 +4,8 @@
 #
 # Checks the Beta's task board against BETA.md's task table: the same tasks,
 # the same hours, and every task after the tasks it needs. Hours in
-# parentheses, such as V2's and C1's, are on top of the plan's estimate, so
-# the total leaves them out.
+# parentheses, such as V2's, C1's and L1's, are on top of the plan's
+# estimate, so the total leaves them out.
 #
 #   python3 scripts/check-board.py
 import os
@@ -56,5 +56,6 @@ for t, hours in rows:
 for p in problems:
     print(p)
 total = sum(h for t, h in rows if t not in extras)
-print(f"{len(rows)} tasks, {total} hours without {' and '.join(extras)}, {len(problems)} problems")
+left_out = ", ".join(extras[:-1]) + " and " + extras[-1] if len(extras) > 1 else "".join(extras)
+print(f"{len(rows)} tasks, {total} hours without {left_out}, {len(problems)} problems")
 sys.exit(1 if problems else 0)

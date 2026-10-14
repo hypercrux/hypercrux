@@ -568,8 +568,9 @@ functions.
 Measured the same way as 0.1's: on a two-core cloud machine, middle of three
 runs, recorded by `scripts/record-tests.sh`. Cloud machines vary from one
 run to the next, so 0.1's benchmarks run again alongside the Beta's and the
-two are compared from the same run. These are goals with a stated basis.
-None has been measured.
+two are compared from the same run. These are goals with a stated basis, set
+before any was measured. The recorded runs in `test/results/beta-bench.txt`
+measure them now.
 
 | Operation | 0.1 recorded | Beta target | Basis |
 |---|---|---|---|
@@ -582,6 +583,11 @@ None has been measured.
 | Put one record, committed | 0.35 ms | no slower than 0.1 | One sync per commit |
 | Open a compacted database of 100,000 records with 384-value vectors | not recorded | 250 ms | Reading about 160 MB from the page cache into fresh memory, checking its checksums with the processor's CRC32C instruction, computing the vectors' norms and building 100,000 records. Other processes take about as long to reload after a compaction |
 
+On 14 October 2026, after the review, the owner accepted for the Beta the
+targets it still misses: the batched put, by just over twice, and the open,
+the filtered search and the walks, by less. R4 records them beside their
+targets, with where their time goes, from R2.md.
+
 ## The work, task by task
 
 The Beta lives in a `beta/` folder in this repository, beside 0.x, which
@@ -590,10 +596,11 @@ empty, apart from a command that says so, so 0.x's macOS and Windows builds
 and its CI carry on unchanged.
 
 The work is 48 tasks of two to five hours, plus one that runs only if a
-target needs it (V2), and one the owner added after the review's first part
-(C1). Each fits in one working session and closes with its own automatic
-test, which becomes a CI job on amd64 and arm64. Hours are hours of Claude's
-working time, and a working day is about 8 of them for each agent.
+target needs it (V2), and two the owner added after the review's two parts
+(C1 and L1). Each fits in one working session and closes with its own
+automatic test, which becomes a CI job on amd64 and arm64. Hours are hours
+of Claude's working time, and a working day is about 8 of them for each
+agent.
 
 Three thin slices run the whole stack early. G1 puts and gets a record
 through the file from Go, G2 adds every handle but SQL and is the first
@@ -639,6 +646,7 @@ first, alongside the spec.
 | V1 | Vector arrays and `Nearest`: arrays without pointers, float64 norms, free slots, the size set by the first vector and reset by `Drop`, top k with ties broken by key, a filter hook | S2, A5 | The model test passes and results match a brute-force search | 4 |
 | V2 | Vector blocks, only if the open target is missed: compaction writes each table's vectors as one block, read on opening without parsing | V1, F8, S3 | A compaction round trip keeps every vector's bits and the open target is met | (2) |
 | C1 | Compaction by dead bytes, which the owner chose after R2's first part: a compaction comes once the batches since the last have made half the file dead, and a megabyte, or once 100,000 commits follow the compacted part, counted alike by every process | F8, G5, S3 | Every process takes the same choice from the same file, a database that only grows is compacted only at the limit on commits, and the crash suites and the many-process harness pass with the new rule | (2) |
+| L1 | 0.x's limit on text and bytes, which the owner chose after R2's second part: a text or bytes value of more than 1,000,000,000 bytes is refused as 0.x refuses it, wherever one comes in | S1, S3, G4, G6, Q6 | Put, SQL's writes and arguments and Import refuse a value one byte over the limit with 0.x's error and take one at the limit, a batch holding a longer value is damage, and the specs say so | (1) |
 | Q1 | Values and functions: SQLite's comparison rules for untyped values, arithmetic, the listed text and number functions, `LIKE`, `BETWEEN`, `IN`, `IS NULL` | P3, P5 | A4's expression answers match exactly | 4 |
 | Q2 | Dates: `date` and `datetime` on `'now'`, plus or minus days, months and years | P3, P5 | A4's date cases, month ends included, match exactly | 2 |
 | Q3 | Parser: the whole subset, with the walk forms, the one-record subquery, `INSERT`, `UPDATE`, `DELETE` and parameters | P5 | Every corpus statement parses or is refused as marked, and a fuzz of the parser runs clean | 5 |
@@ -656,7 +664,7 @@ first, alongside the spec.
 | R1 | Long runs: hours of fuzzing and crash runs on both architectures, every planted bug tried | I1, G5, G7, Q6 | Every job runs green for its full length, and every planted bug is caught | 3 |
 | R2 | Independent review: a review agent's findings, each fixed with a test or answered | I1, G5, G6, G7, Q6 | None is open | 5 |
 | R3 | Docs and site: `FORMAT.md` for the Beta, the README, notes on moving from 0.x, posts | G5 | A script checks the links and runs the examples | 3 |
-| R4 | Release run: static Linux builds for amd64 and arm64 with smoke tests, a last overnight run, tests and benchmarks recorded beside 0.1's | R1, R2, R3, T5, C1 | A dry run passes and the results are written; then raising the version publishes the release | 2 |
+| R4 | Release run: static Linux builds for amd64 and arm64 with smoke tests, a last overnight run, tests and benchmarks recorded beside 0.1's | R1, R2, R3, T5, C1, L1 | A dry run passes and the results are written; then raising the version publishes the release | 2 |
 
 How the work is run:
 
@@ -692,8 +700,8 @@ from the same run, and a review agent does the final review, as one did for
 
 The work comes to 133 hours in all, 16 of them for the five early tasks, and
 all of it starts with the go-ahead. V2, which runs only if a target needs
-it, and C1, which the owner added on 14 October 2026, come on top, at 2
-hours each.
+it, and C1 and L1, which the owner added on 14 October 2026, come on top, at
+2 hours each for V2 and C1 and 1 for L1.
 
 The longest chain of tasks that must run one after another goes from the
 file format and the interfaces through records, transactions, change lists,
@@ -861,6 +869,14 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   question, and C1.md). After C1 the owner kept the limit fixed whatever the
   database's size, so a large database taking small commits is rewritten
   once in every 100,000 (C1.md's notes for R2).
+- On 14 October 2026, after the review's second part, the owner chose to
+  hold text and bytes to 0.x's limit of 1,000,000,000 bytes, as a task of
+  its own, L1, before R3, so an export moves between the engines either way.
+  FORMAT.md's u32 stays, so no byte of the format changes (R2.md, part 2's
+  first question).
+- The same day the owner accepted for the Beta the targets it still misses,
+  which R4 records with their reasons (R2.md, part 2's second question, and
+  "Targets").
 - The Beta's Go package is `beta/hypercrux`, package `hypercrux`, beside
   0.x's until the release, so a program moves across by changing its import
   path (P3).
