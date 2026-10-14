@@ -17,7 +17,10 @@ even before the release, so a build of the Beta refuses a file from another
 build whose format differs. A change that an older build reports as damage
 keeps the version. The vector block is one: it's a change of a kind a build
 from before it doesn't know, so that build refuses a file that holds one,
-and reads every other file as before. Either way, no build misreads a file.
+and reads every other file as before. The limit on text and bytes goes the
+other way: a build since the limit came in reports a value of more than
+1,000,000,000 bytes as damage, which only an earlier build could write, and
+none of those was released. Either way, no build misreads a file.
 
 ## The layout
 
@@ -221,6 +224,8 @@ has to be valid there:
     case. It holds a vector or null, and no other field holds a vector. A
     table's first vector sets its vector size, if that's 0, and every vector
     after it must have that many values.
+  - Text and bytes hold at most 1,000,000,000 bytes each, though their
+    length can say more (see Names and limits).
   - A table holds at most 65,535 fields, the most a create change can
     carry, so HyperCrux refuses a put that would add one more.
 - **Delete a record.** The record exists. It goes, with every link to or
@@ -274,10 +279,13 @@ Keys and names follow 0.x's rules, which the Beta keeps:
 | Link type | UTF-8 that doesn't start with a zero byte | 1 to 200 code points |
 
 The format's own widths set the other limits. A table has at most 65,535
-fields, and a put sets at most 65,535. A text or bytes value holds at most
-4,294,967,295 bytes, and a vector block at most 4,294,967,295 vectors.
-HyperCrux's own limits can be lower: a put can't take a table past 1,999
-fields, which is 0.x's limit.
+fields, and a put sets at most 65,535. A text or bytes value's length can
+say up to 4,294,967,295 bytes, and a vector block holds at most
+4,294,967,295 vectors. HyperCrux's own limits are lower, and both are 0.x's,
+from SQLite. A put can't take a table past 1,999 fields, though a batch in
+the file can take it to 65,535, so that limit can rise without a change to
+the format. A text or bytes value holds at most 1,000,000,000 bytes, in a
+batch in the file too, so a put of a longer one is damage.
 
 ## Compaction
 

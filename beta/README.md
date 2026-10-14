@@ -128,13 +128,15 @@ Where the work stands, and what comes next: [tasks/README.md](tasks/README.md).
 - `internal/query/`: SQL. So far the operator iterator, `Rows`, the parser,
   with the tree it gives and the printer that gives a tree back as SQL, and
   the evaluator, which works out expressions and conditions as SQLite does,
-  with `Arg` for arguments and the dates on 'now' with SQLite's arithmetic.
-  The operators read the store through `store.Reader` and hand rows on
-  through `Rows`, with the aggregates, and the planner plans a SELECT over
-  the store and runs it in one call, `Query`. The writes run an INSERT,
-  UPDATE or DELETE inside a transaction in one call, `Exec`.
+  with `Arg` for arguments and `Bind`, which holds them to SQLite's limit on
+  length, and the dates on 'now' with SQLite's arithmetic. The operators
+  read the store through `store.Reader` and hand rows on through `Rows`,
+  with the aggregates, and the planner plans a SELECT over the store and
+  runs it in one call, `Query`. The writes run an INSERT, UPDATE or DELETE
+  inside a transaction in one call, `Exec`.
 - `internal/rules/`: 0.x's rules for keys, table and field names, link
-  types, vectors and stored values, with 0.x's errors and messages. The
+  types, vectors and stored values, with 0.x's errors and messages, and
+  SQLite's limit on text and bytes, `MaxLength`, which `Length` checks. The
   store and `FromGo` check with it, and the public package can share it.
 - `internal/store/`: the in-memory copy, with its read API, `Reader`. It
   holds the records with their fields, each table's field list, each table's
@@ -248,7 +250,15 @@ for a task that plants a bug.
   for any read, where 0.x's writers carry on through an export. The writer
   `Export` writes to mustn't call the database, since a read from inside it
   can wait for such an `Update`, which waits for the export.
+- **Values:** text and bytes hold at most 1,000,000,000 bytes, SQLite's
+  limit, refused with SQLite's error, "string or blob too big", as in 0.x.
+  0.x's SQLite holds each whole record to that limit too, its key and every
+  field in SQLite's own form, so 0.x's `Put`, SQL writes and import refuse a
+  value a few bytes short of the limit, 999,999,987 bytes at most for
+  `docs:1` with one field, and a record whose values add up to more. The
+  Beta takes those, and an export holding one doesn't import into 0.x.
 - **A write that fails** changes nothing, even inside an `Update` that goes
-  on to commit. 0.x keeps the new fields a failed `Put` named. So a later
-  `Put` that names such a field in another case spells it its own way in
-  the Beta, and the failed `Put`'s way in 0.x, which `Get` and `Scan` show.
+  on to commit. 0.x keeps the new fields a failed `Put` named, and the table
+  when the `Put` made it. So a later `Put` that names such a field in
+  another case spells it its own way in the Beta, and the failed `Put`'s way
+  in 0.x, which `Get` and `Scan` show.

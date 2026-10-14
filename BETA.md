@@ -135,8 +135,9 @@ files for as long as anyone uses it.
 ### Records
 
 A record is a key and its fields. The key is `table:id`, as in 0.x. A field
-holds null, a whole number, a real number, text or bytes. Two kinds of field
-carry the other handles:
+holds null, a whole number, a real number, text or bytes. Text and bytes
+hold at most 1,000,000,000 bytes, as in 0.x, which has the limit from
+SQLite. Two kinds of field carry the other handles:
 
 - **The vector**, in the field `vec`, as in 0.x: up to 65,536 float32
   values, the same size across a table. The table's first vector sets the

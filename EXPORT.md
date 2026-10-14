@@ -127,7 +127,11 @@ Import refuses:
 - anything else `Put` or `Link` would refuse.
 
 The Beta's import also refuses a table that has a vector size and no field
-`vec`, since a table in the Beta can't have one.
+`vec`, since a table in the Beta can't have one. Both refuse a text or bytes
+value of more than 1,000,000,000 bytes, SQLite's limit, naming the line and
+the record's key. 0.x's SQLite holds each whole record it stores to that
+limit too, so 0.x's import also refuses a record whose values come within a
+few bytes of it, or add up to more, which the Beta's import takes.
 
 ## Writing an export yourself
 

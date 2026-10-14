@@ -53,10 +53,15 @@ through `Update`, and tables and fields come from `Put`. `Compact` does
 `VACUUM`'s job.
 
 The Beta keeps SQLite's limits: 2,000 result columns, ORDER BY terms and
-fields in a SET, 1,000 arguments to a function, 32,766 `?` marks, and
-expressions 1,000 tall, as SQLite counts them through subqueries. It refuses
-expressions nested more than 250 deep, well inside SQLite's own parser
-limit.
+fields in a SET, 1,000 arguments to a function, 32,766 `?` marks,
+expressions 1,000 tall, as SQLite counts them through subqueries, and
+statements of 1,000,000,000 bytes. A longer statement is "statement too
+long", of kind "error", before any of it is read, NUL bytes and all. When
+its last byte is a NUL, only the bytes before its first NUL count, as SQLite
+reads it as a C string then, and more than 1,000,000,000 of those is "string
+or blob too big". A literal can't be longer than its statement, so none is
+longer than a value can be. The Beta refuses expressions nested more than
+250 deep, well inside SQLite's own parser limit.
 
 `Exec` runs any statement, and drops a SELECT's rows. `Query` and `QueryRow`
 run any statement too, and a write gives them no columns and no rows, as in
@@ -449,7 +454,11 @@ a vector. 0.x runs the filter inside a SELECT, so its errors are of kind
 "error", and the Beta's are too. A `where` with a NUL byte in it is
 incomplete input, as in 0.x, which puts it in parentheses at the end of a
 query, and so is one that ends inside a comment, such as `n = 1 -- c` or
-`n = 1 /* c`, whose comment takes in that closing parenthesis.
+`n = 1 /* c`, whose comment takes in that closing parenthesis. A `where`
+that makes 0.x's query,
+`SELECT key, vec FROM "table" WHERE vec IS NOT NULL AND (where)`, longer
+than 1,000,000,000 bytes is "statement too long", before any of it is read,
+as SQLite refuses that query.
 
 `Nearest` makes 0.x's checks first, in 0.x's order: the table's name, the
 query vector and k, then the table, which must exist, then its vector size,
@@ -459,9 +468,11 @@ Then each of `args` becomes a value as a statement's argument does, and one
 that database/sql can't take is refused in database/sql's words, as in 0.x,
 with a filter or without one. Without one, `args` aren't used. With one,
 they fill its `?` marks, exactly one for each, and an argument with a name
-is an error. When the filter's terms that use no field rule every record
-out, the search gives an empty list, as 0.x's query gives no rows. 'now' is
-read once for each call.
+is an error. Once the filter is planned, an argument of text or bytes longer
+than 1,000,000,000 bytes is refused as a statement's is, before any term is
+worked out, so `0 AND n = ?` refuses one too. When the filter's terms that
+use no field rule every record out, the search gives an empty list, as 0.x's
+query gives no rows. 'now' is read once for each call.
 
 ## Walks
 
@@ -631,6 +642,10 @@ which SQLite calls blobs. A vector reads as bytes.
 - Text in SQL may hold any bytes, even ones that aren't valid UTF-8, such as
   `CAST(x'ff' AS TEXT)` or an argument. Only text that's stored must be
   valid.
+- Text and bytes hold at most 1,000,000,000 bytes, SQLite's limit.
+  Concatenation, `replace()` and `walk()` refuse to make a longer value,
+  with SQLite's error, "string or blob too big", of kind "error", and a
+  longer argument is refused the same way, as "Arguments" says.
 - A real may be infinite, and -0 keeps its sign.
 - A real is never NaN. SQLite turns NaN into NULL wherever it comes from,
   so `1e999 - 1e999` is NULL.
@@ -655,6 +670,14 @@ Named types and pointers go through database/sql's usual conversion, and
 other types are an error. A statement takes exactly as many arguments as it
 has `?` marks. An argument with a name, from `sql.Named`, is an error, since
 the subset has `?` marks only.
+
+An argument of text or bytes longer than 1,000,000,000 bytes is refused with
+SQLite's error, "string or blob too big", of kind "error", once the
+statement has parsed and the arguments match its marks, and before anything
+runs, as go-sqlite3's bind refuses it, whether the statement would use it or
+not. 0.x binds once SQLite has found the statement's names, so where a name
+isn't there too, 0.x gives that error and the Beta this one, both of kind
+"error".
 
 ### Results
 
@@ -1029,6 +1052,8 @@ the engine's two errors. SQL never gives "not found".
 | LIMIT or OFFSET that isn't a whole number | error | `datatype mismatch` |
 | Fewer arguments than `?` marks, or more | error | `not enough args to execute query: want N got M`, and 0.x ignores extra arguments |
 | `abs()` of the smallest integer, or `sum()` past 64 bits | error | `integer overflow` |
+| A statement of more than 1,000,000,000 bytes, or a `where` that makes `Nearest`'s query that long | error | `statement too long` |
+| Text or bytes of more than 1,000,000,000 bytes: an argument, or a value concatenation, `replace()` or `walk()` would make | error | `string or blob too big` |
 | An ESCAPE that isn't one character, or a LIKE pattern over 50,000 bytes | error | `ESCAPE expression must be a single character`, `LIKE or GLOB pattern too complex` |
 | `distance()`, `vector()` or `walk()` refusing their arguments, in a SELECT | error | `hypercrux: ...` |
 | The same in an INSERT, UPDATE or DELETE | invalid | `hypercrux: invalid: ...` |
@@ -1119,11 +1144,18 @@ On purpose, and outside the corpus:
 - Rows without ORDER BY come in key order, where 0.x's order depends on
   SQLite's plan.
 - A `Put` that fails inside an `Update` that goes on to commit leaves the
-  table as it was. 0.x keeps the new fields the `Put` named, since it adds
-  them before it checks the vector's size, so `SELECT *` can show a column
-  there that the Beta's table hasn't got. So a later `Put` that names such a
-  field in another case spells it its own way in the Beta, and the failed
-  `Put`'s way in 0.x, which `Get` and `Scan` show.
+  table as it was. 0.x keeps the new fields the `Put` named, and the table
+  when the `Put` made it, since it adds them before it checks the vector's
+  size, and before SQLite refuses a value longer than 1,000,000,000 bytes,
+  so `SELECT *` can show a column there, or a table, that the Beta hasn't
+  got. So a later `Put` that names such a field in another case spells it
+  its own way in the Beta, and the failed `Put`'s way in 0.x, which `Get`
+  and `Scan` show.
+- 0.x's SQLite holds each record it stores to 1,000,000,000 bytes as well,
+  its key and every field in SQLite's own form, so an INSERT or UPDATE of a
+  value within a few bytes of that, or of values that add up to more, fails
+  there with "string or blob too big". The Beta holds each value to the
+  limit, and takes such a row.
 - `walk()` with fewer than 2 arguments or more than 4 is a wrong number of
   arguments, of kind error, found before anything runs. 0.x finds it as
   `walk()` runs, so in a write it's invalid there, and a statement that
