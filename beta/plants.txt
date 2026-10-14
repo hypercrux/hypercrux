@@ -236,3 +236,5 @@ logfile/block-appended ./beta/internal/logfile
 logfile/blocks-always-in-place ./beta/internal/logfile
 hypercrux/compaction-without-blocks ./beta/hypercrux
 crash/seeds-overridden ./beta/internal/crash
+format/changes-grown ./beta/internal/format
+format/block-count-trusted ./beta/internal/format

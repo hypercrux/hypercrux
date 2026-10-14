@@ -372,10 +372,21 @@ type decoder struct {
 	vecs   []Vector
 }
 
-// decodeChanges reads s, a batch's changes, one after another.
+// decodeChanges reads s, a batch's changes, one after another. The list of
+// changes, and the arrays of fields, names and vectors behind them, are made
+// once, the size countChanges finds, where growing them an append at a time
+// took a batch of 100,000 small puts four times as long, with five times the
+// arrays' size in allocations, as copy after copy was thrown away (V2.md's
+// note for R2).
 func decodeChanges(s string, seq uint64) ([]Change, error) {
 	d := &decoder{s: s, seq: seq}
 	var changes []Change
+	if n := countChanges(s); n.ok && plant != "format/changes-grown" {
+		changes = make([]Change, 0, n.changes)
+		d.fields = make([]Field, 0, n.fields)
+		d.names = make([]string, 0, n.names)
+		d.vecs = make([]Vector, 0, n.vecs)
+	}
 	for d.off < len(d.s) {
 		d.n++
 		at := d.off
@@ -421,6 +432,138 @@ func decodeChanges(s string, seq uint64) ([]Change, error) {
 		}
 	}
 	return changes, nil
+}
+
+// counts is how many changes a batch's changes hold, and how many fields,
+// field names and vectors among them, as countChanges finds them.
+type counts struct {
+	changes, fields, names, vecs int
+	ok                           bool // the syntax held to the end
+}
+
+// countChanges walks s, a batch's changes, by their syntax alone, and
+// counts them, so decodeChanges can make its arrays the size they end, in
+// place of growing them an append at a time. It checks no rule and allocates
+// nothing. When the syntax breaks, ok is false, and decodeChanges reads the
+// changes without the counts, to find the damage.
+func countChanges(s string) counts {
+	var n counts
+	off := 0
+	u16 := func() (int, bool) {
+		if len(s)-off < 2 {
+			return 0, false
+		}
+		v := int(s[off]) | int(s[off+1])<<8
+		off += 2
+		return v, true
+	}
+	u32 := func() (uint64, bool) {
+		if len(s)-off < 4 {
+			return 0, false
+		}
+		v := uint64(s[off]) | uint64(s[off+1])<<8 | uint64(s[off+2])<<16 | uint64(s[off+3])<<24
+		off += 4
+		return v, true
+	}
+	skip := func(k uint64) bool {
+		if uint64(len(s)-off) < k {
+			return false
+		}
+		off += int(k)
+		return true
+	}
+	str := func() bool {
+		k, ok := u16()
+		return ok && skip(uint64(k))
+	}
+	for off < len(s) {
+		kind := s[off]
+		off++
+		n.changes++
+		switch kind {
+		case 'T':
+			if !str() || !skip(4) {
+				return n
+			}
+			k, ok := u16()
+			if !ok {
+				return n
+			}
+			for range k {
+				if !str() {
+					return n
+				}
+			}
+			n.names += k
+		case 'P':
+			if !str() {
+				return n
+			}
+			fields, ok := u16()
+			if !ok {
+				return n
+			}
+			for range fields {
+				if !str() || off >= len(s) {
+					return n
+				}
+				kind := s[off]
+				off++
+				switch kind {
+				case 'n':
+				case 'i', 'r':
+					ok = skip(8)
+				case 't', 'b':
+					var l uint64
+					l, ok = u32()
+					ok = ok && skip(l)
+				case 'v':
+					var l uint64
+					l, ok = u32()
+					ok = ok && skip(4*l)
+				default:
+					ok = false
+				}
+				if !ok {
+					return n
+				}
+			}
+			n.fields += fields
+		case 'D', 'X':
+			if !str() {
+				return n
+			}
+		case 'L', 'U':
+			if !str() || !str() || !str() {
+				return n
+			}
+		case 'V':
+			if !str() {
+				return n
+			}
+			size, ok := u32()
+			if !ok || size < 1 || size > maxVecDims {
+				return n
+			}
+			count, ok := u32()
+			if !ok || count > uint64(len(s)-off)/(2+4*size) {
+				return n
+			}
+			for range count {
+				if !str() {
+					return n
+				}
+			}
+			if !skip(count * 4 * size) {
+				return n
+			}
+			n.vecs += int(count)
+		default:
+			return n
+		}
+	}
+	n.ok = true
+	return n
 }
 
 // fail records the first error, at the offset at in the changes.
@@ -542,11 +685,20 @@ func (d *decoder) block(at int) Change {
 		d.fail(at, "%s", c.problem())
 		return c
 	}
+	each := 4 * uint64(c.Size)
+	if left := uint64(len(d.s) - d.off); d.damage == nil && uint64(count)*(2+each) > left && plant != "format/block-count-trusted" {
+		// Each vector takes its key's length and its values at least, so a
+		// count that can't fit is damage before a key is read. Otherwise the
+		// keys of a block of 4,294,967,295 vectors, each read as the empty
+		// string from the zeros of a batch that counts, would take 32 bytes
+		// of memory for every 2 bytes of the batch, before the read failed.
+		d.fail(at, "a vector block of %d vectors of %d values, which take %d bytes at least, where %d are left before the checksum", count, c.Size, uint64(count)*(2+each), left)
+		return c
+	}
 	start := len(d.vecs)
 	for i := uint32(0); i < count && d.damage == nil; i++ {
 		d.vecs = append(d.vecs, Vector{Key: d.str()})
 	}
-	each := 4 * uint64(c.Size)
 	values := d.take(uint64(count) * each)
 	if d.damage == nil {
 		for i := range d.vecs[start:] {
