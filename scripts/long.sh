@@ -7,9 +7,9 @@
 # given:
 #
 #   sh scripts/long.sh fuzz 70m 1/2   # the first half of the fuzz targets, 70 minutes each
-#   sh scripts/long.sh crash 1280     # the crash suites, 1,280 seeds a point
+#   sh scripts/long.sh crash 3840     # the crash suites, 3,840 seeds a point
 #   sh scripts/long.sh procs 42m      # each many-process run for 42 minutes
-#   sh scripts/long.sh diff 320000    # 320,000 random sequences on 0.x and the Beta
+#   sh scripts/long.sh diff 800000    # 800,000 random sequences on 0.x and the Beta
 #   sh scripts/long.sh planted 2/2    # the second half of the planted bugs
 #
 # Short lengths check a job in a few minutes: fuzz 10s, crash 1, which

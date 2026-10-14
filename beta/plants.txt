@@ -103,6 +103,7 @@ query/aggregate-in-where ./beta/internal/query
 query/record-key-takes-or ./beta/internal/query
 query/is-not-printed-bare ./beta/internal/query
 query/slash-star-comment ./beta/internal/query
+query/space-name-printed-bare ./beta/internal/query
 logfile/compact-rename-before-sync ./beta/internal/logfile
 logfile/compact-no-folder-sync ./beta/internal/logfile
 logfile/compact-folder-sync-ignored ./beta/internal/logfile

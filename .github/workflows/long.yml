@@ -19,13 +19,13 @@ on:
         default: "70m"
       crash_seeds:
         description: "HYPERCRUX_CRASH_SEEDS: the seeds each crash point runs with, where a test asks for fewer"
-        default: "1280"
+        default: "3840"
       procs_time:
         description: "HYPERCRUX_PROCS_TIME: how long each many-process run goes on; the job makes five"
         default: "42m"
       diff_sequences:
         description: "HYPERCRUX_DIFF_SEQUENCES: the random sequences run on 0.x and on the Beta"
-        default: "320000"
+        default: "800000"
       minutes:
         description: "Each job's limit in minutes, 360 at most; its tests are stopped 20 minutes before it"
         default: "270"

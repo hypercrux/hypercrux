@@ -29,7 +29,7 @@ func (s *Delete) String() string { return (&printer{}).statement(s) }
 
 func (e *Literal) String() string { return e.Text }
 func (e *Param) String() string   { return "?" }
-func (e *Column) String() string  { return (&printer{}).expr(e) }
+func (e *Column) String() string  { return columnText((&printer{}).expr(e)) }
 func (e *Call) String() string    { return (&printer{}).expr(e) }
 func (e *Cast) String() string    { return (&printer{}).expr(e) }
 func (e *Unary) String() string   { return (&printer{}).expr(e) }
@@ -39,6 +39,22 @@ func (e *Like) String() string    { return (&printer{}).expr(e) }
 func (e *In) String() string      { return (&printer{}).expr(e) }
 func (e *Record) String() string  { return (&printer{}).expr(e) }
 func (w *Walk) String() string    { return (&printer{}).walk(w) }
+
+// columnText gives a column printed on its own, s, so that it parses back as
+// the same column wherever it goes. SQLite, and the lexer here, read every
+// byte from 0x80 up as part of a name, so a bare name can be made only of
+// characters that strings.TrimSpace removes, such as U+00A0 or U+3000.
+// Alone, such a name prints as text that a condition takes for white space,
+// which is no condition at all, as in 0.x (ParseCondition). In parentheses,
+// which the parser drops, it's the same column. Quoting the name would
+// change it: SQLite reads a quoted name that isn't a column as text. R1's
+// long fuzzing found the case.
+func columnText(s string) string {
+	if strings.TrimSpace(s) == "" && plant != "query/space-name-printed-bare" {
+		return "(" + s + ")"
+	}
+	return s
+}
 
 // String gives the name as it was written: bare, or in double quotes.
 func (id Ident) String() string {

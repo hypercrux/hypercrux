@@ -793,6 +793,42 @@ func TestConditions(t *testing.T) {
 	}
 }
 
+// TestConditionsOfSpaceNames: SQLite reads every byte from 0x80 up as part
+// of a name, so a name can be made only of characters strings.TrimSpace
+// removes. Alone, such text is no condition, as in 0.x, and a column of
+// that name prints in parentheses, so its text parses back as the same
+// column (columnText). R1's long fuzzing found " --" and "　--",
+// which testdata/fuzz/FuzzParse keeps.
+func TestConditionsOfSpaceNames(t *testing.T) {
+	for _, c := range []string{"\u0085", " ", " ", " ", " ", " ", " ", " ", " ", "　", " 　"} {
+		if e, n, err := ParseCondition(c); e != nil || n != 0 || err != nil {
+			t.Errorf("%q alone gives %s, %d, %v, where no condition is wanted", c, dumpExpr(e), n, err)
+		}
+		for _, q := range []string{c + "--", c + "/**/", "(" + c + ")"} {
+			e, _, err := ParseCondition(q)
+			col, ok := e.(*Column)
+			if err != nil || !ok || col.Name.Name != c || col.Name.Quoted {
+				t.Errorf("%q gives %s, %v, where the bare column %q is wanted", q, dumpExpr(e), err, c)
+				continue
+			}
+			out := e.String()
+			if out != "("+c+")" {
+				t.Errorf("%q prints as %q, where %q is wanted", q, out, "("+c+")")
+			}
+			again, _, err := ParseCondition(out)
+			if err != nil || dumpExpr(again) != dumpExpr(e) {
+				t.Errorf("%q prints as %q, which gives %s, %v", q, out, dumpExpr(again), err)
+			}
+		}
+	}
+	// Anywhere else the name prints bare, since the text around it isn't
+	// white space.
+	e, _, err := ParseCondition("  = 1")
+	if err != nil || e.String() != "  = 1" {
+		t.Errorf("\"\\u00a0 = 1\" gives %v, %v", e, err)
+	}
+}
+
 // TestTheTreeIsWhatTheTestsSay checks the Call, Source and Ident helpers
 // the later tasks use.
 func TestTheTreeIsWhatTheTestsSay(t *testing.T) {

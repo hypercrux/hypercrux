@@ -176,7 +176,7 @@ sh scripts/check-beta.sh     # the rules for this folder, and the board against 
 sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
 sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
 HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds, or a test's own if it asks for more
-sh scripts/long.sh crash 1280   # a long run's job, as the long workflow runs it (tasks/R1.md)
+sh scripts/long.sh crash 3840   # a long run's job, as the long workflow runs it (tasks/R1.md)
 HYPERCRUX_PROCS_TIME=10m go test ./beta/internal/procs   # many processes for 10 minutes a run
 sh scripts/record-beta-bench.sh   # both engines' benchmarks; needs the machine to itself
 go build -o hypercrux ./beta/cmd/hypercrux   # the Beta's command
