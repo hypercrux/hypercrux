@@ -9,10 +9,11 @@ copy of the data in memory, so a search compares vectors straight from
 memory and a key goes straight to its record. The plan, with the reasons
 for each choice, is [BETA.md](../BETA.md).
 
-The Beta hasn't been released yet, so its version is `0.0.0-beta`, and its
-release is the last task of its plan. It lives here, in `beta/`, beside
-0.x, which stays as it is at the repository's root and keeps getting fixes.
-Where the work stands: [tasks/README.md](tasks/README.md).
+The Beta's first release is 0.3.0-beta.1, a pre-release. 0.x stays the
+stable line, and the repository's latest release. The Beta lives here, in
+`beta/`, beside 0.x, which stays as it is at the repository's root and keeps
+getting fixes. How the Beta was built, task by task:
+[tasks/README.md](tasks/README.md).
 
 Everything in this folder runs only on Linux, on x86 and ARM. On macOS and
 Windows its packages are empty, apart from the command, which builds there
@@ -21,6 +22,27 @@ unchanged, `go build ./...` among them.
 
 Coming from 0.x? [MOVING.md](MOVING.md) has every difference, with what to
 do about each, and how to move a database across with an export.
+
+## Get it
+
+The release's page,
+[v0.3.0-beta.1](https://github.com/hypercrux/hypercrux/releases/tag/v0.3.0-beta.1),
+has the command ready-built for Linux, a static binary in
+`hypercrux-beta_linux_amd64.tar.gz` for x86-64 and in
+`hypercrux-beta_linux_arm64.tar.gz` for ARM64, with SHA256SUMS. Each
+archive holds `hypercrux`, its licence files and this README. Put the binary
+on your PATH under a name of your own if 0.x's `hypercrux` is there already.
+
+From a Go program, fetch the release by its version, since a plain
+`go get` of the module stays on 0.x's latest release:
+
+```sh
+go get github.com/hypercrux/hypercrux/beta/hypercrux@v0.3.0-beta.1
+```
+
+and import `github.com/hypercrux/hypercrux/beta/hypercrux`. The package is
+called `hypercrux`, as 0.x's is, so a program moves from one to the other
+by its import path.
 
 ## Build it
 
@@ -34,19 +56,9 @@ go build -o hypercrux ./beta/cmd/hypercrux
 ./hypercrux version
 ```
 
-The last line prints `hypercrux 0.0.0-beta, file format 1`. Put the binary
-on your PATH under a name of your own if 0.x's `hypercrux` is there already.
-
-From a Go program, fetch the module at main, since its latest release,
-0.2.0, holds 0.x alone:
-
-```sh
-go get github.com/hypercrux/hypercrux@main
-```
-
-and import `github.com/hypercrux/hypercrux/beta/hypercrux`. The package is
-called `hypercrux`, as 0.x's is, so a program moves from one to the other
-by its import path.
+At the release, the last line prints
+`hypercrux 0.3.0-beta.1, file format 1`. The release's tag,
+`v0.3.0-beta.1`, holds its code, and main the code since.
 
 ## Try the command
 

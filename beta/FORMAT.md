@@ -16,16 +16,18 @@ and its export format, which the Beta reads and writes too, is in
 for it, are in [BETA.md](../BETA.md). [README.md](README.md) says how to
 build and use the Beta.
 
-The Beta hasn't been released, and this format can still change before it
-is. A change that an older build could misread raises the format version,
-even before the release, so a build of the Beta refuses a file from another
-build whose format differs. A change that an older build reports as damage
-keeps the version. The vector block is one: it's a change of a kind a build
-from before it doesn't know, so that build refuses a file that holds one,
-and reads every other file as before. The limit on text and bytes goes the
-other way: a build since the limit came in reports a value of more than
-1,000,000,000 bytes as damage, which only an earlier build could write, and
-none of those was released. Either way, no build misreads a file.
+The released format is version 1, the format of the Beta's first release,
+[0.3.0-beta.1](https://github.com/hypercrux/hypercrux/releases/tag/v0.3.0-beta.1).
+Every change to it from here raises the version, even one an older build
+would report as damage, so a build refuses a file of a format version it
+doesn't know, with an error that says so. Version 1 took in two such
+changes before the release, while no build was out. One is the vector
+block, a change of a kind a build from before it doesn't know, so that
+build refuses a file that holds one, and reads every other file as before.
+The other is the limit on text and bytes: a build since then reports a
+value of more than 1,000,000,000 bytes as damage, which only an earlier
+build could write. None of those earlier builds was released, and no build
+misreads a file.
 
 ## The layout
 

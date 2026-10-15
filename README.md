@@ -375,9 +375,14 @@ its release on 15 October 2026, both engines on one machine, a search of
 100,000 vectors of 384 values took 58.7 ms on the Beta and 294 ms on 0.x
 ([test/results/beta-bench.txt](test/results/beta-bench.txt)). The copy costs
 a slower open and memory in every process, and the Beta runs on Linux only.
-It hasn't been released yet.
+Its first release, 0.3.0-beta.1, is a pre-release: the command is on
+[the release's page](https://github.com/hypercrux/hypercrux/releases/tag/v0.3.0-beta.1),
+in `hypercrux-beta_linux_amd64.tar.gz` and `hypercrux-beta_linux_arm64.tar.gz`,
+and a Go program gets the package with
+`go get github.com/hypercrux/hypercrux/beta/hypercrux@v0.3.0-beta.1`. 0.x
+stays the stable line, and the latest release.
 
-[beta/README.md](beta/README.md) says how to build and use it, and
+[beta/README.md](beta/README.md) says how to get it, build it and use it, and
 [beta/MOVING.md](beta/MOVING.md) how to move a program and its data across
 from 0.x, with every difference and what to do about it. The rest of this
 README is 0.x's manual.

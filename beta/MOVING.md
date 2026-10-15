@@ -1,9 +1,14 @@
 # Moving from HyperCrux 0.x to the Beta
 
 HyperCrux 0.x is the line of releases on SQLite, 0.1 and 0.2, whose code is
-at the root of this repository. The Beta is the new engine in this folder,
-written in Go without SQLite, and it hasn't been released yet.
-[README.md](README.md) says how to build it.
+at the root of this repository, and the stable line. The Beta is the new
+engine in this folder, written in Go without SQLite, and its first release
+is 0.3.0-beta.1, a pre-release for Linux: the command is on
+[the release's page](https://github.com/hypercrux/hypercrux/releases/tag/v0.3.0-beta.1),
+in `hypercrux-beta_linux_amd64.tar.gz` and
+`hypercrux-beta_linux_arm64.tar.gz`, and [The import path](#the-import-path)
+below gives the Go import. [README.md](README.md) says how to get it or
+build it.
 
 A program that sticks to 0.x's Go API and to the Beta's SQL moves over with
 little change: a new import path, and its data through an export. The rest
@@ -123,9 +128,10 @@ import "github.com/hypercrux/hypercrux/beta/hypercrux"
 ```
 
 The package is still called `hypercrux`, so nothing else in the code has to
-change for that. Until the Beta's release, fetch the module at main, with
-`go get github.com/hypercrux/hypercrux@main`, since the release 0.2.0 holds
-0.x alone. The Beta needs no cgo and no C compiler.
+change for that. Fetch the Beta's release by its version, with
+`go get github.com/hypercrux/hypercrux/beta/hypercrux@v0.3.0-beta.1`. It's a
+pre-release, so a plain `go get github.com/hypercrux/hypercrux` stays on
+0.x's latest release. The Beta needs no cgo and no C compiler.
 
 ### What's gone
 
@@ -153,8 +159,8 @@ change for that. Until the Beta's release, fetch the module at main, with
   `CompactionError`, what went wrong in the last compaction through this
   `DB`, or `""`. A failed compaction leaves the database whole, so it isn't
   one of the `Problems`, and `OK` doesn't count it.
-- **`Version`** is `0.0.0-beta` until the release, and `FormatVersion` is
-  the Beta's format's, 1.
+- **`Version`** is the Beta's own, `0.3.0-beta.1` at its first release, and
+  `FormatVersion` is the Beta's format's, 1.
 
 ### Errors
 
@@ -344,7 +350,7 @@ reason):
 - **`compact`** is new. It rewrites the file with only the live data and
   prints `compacted FILE from N bytes to M bytes`. *What to do:* use it in
   place of `VACUUM` through `sql`.
-- **`version`** prints `hypercrux 0.0.0-beta, file format 1`, with no
+- **`version`** prints `hypercrux 0.3.0-beta.1, file format 1`, with no
   SQLite version. *What to do:* parse only the first two words, if a script
   reads it.
 - **`check`** prints 0.x's line, `ok: ...` or the problems, and then a line

@@ -66,6 +66,7 @@ REPO_DOCS = [
 SITE_DOCS = [
     "content/posts/how-the-hypercrux-beta-was-tested.md",
     "content/posts/moving-from-hypercrux-0x-to-the-beta.md",
+    "content/posts/hypercrux-0-3-0-beta-1.md",
 ]
 
 MARKER = re.compile(r"^<!--\s*(run|run 0\.x|output)\s*-->\s*$")

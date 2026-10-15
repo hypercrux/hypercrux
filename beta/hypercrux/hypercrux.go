@@ -22,21 +22,21 @@ import (
 )
 
 // Version is the version of the package and of the hypercrux command. The
-// Beta hasn't been released, so it's 0.0.0-beta, a pre-release version that
-// sorts before every release.
+// Beta's releases are pre-releases of the module, X.Y.Z-beta.N, which Go and
+// GitHub order after every 0.x release, and 0.3.0-beta.1 is the first.
 //
 // The release workflow reads this Version for the Beta, as it reads the one
-// in the hypercrux.go at the root of the repository for 0.x. 0.0.0-beta
-// means unreleased, and releases nothing. Raising it on main to a version of
-// the form X.Y.Z-beta.N with no tag yet releases the Beta, as a pre-release,
+// in the hypercrux.go at the root of the repository for 0.x. Raising it on
+// main to a version with no tag yet releases the Beta, as a pre-release,
 // once the test and beta workflows have both passed on that commit
-// (RELEASING.md).
-const Version = "0.0.0-beta"
+// (RELEASING.md). 0.0.0-beta would mean unreleased, and release nothing.
+const Version = "0.3.0-beta.1"
 
 // FormatVersion is the version of the file format that beta/FORMAT.md
 // describes. Opening a file of another format version fails with an error
-// that wraps ErrFormatVersion. Until the Beta's release every change to the
-// format raises the version, so a build also refuses an older build's files.
+// that wraps ErrFormatVersion. From the Beta's first release on, every change
+// to the format raises the version, so a build refuses a file of a format
+// version it doesn't know.
 const FormatVersion = 1
 
 // The error values. ErrNotFound and ErrInvalid are 0.x's, with 0.x's texts.
