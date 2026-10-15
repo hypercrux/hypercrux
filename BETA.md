@@ -1,14 +1,15 @@
 # HyperCrux Beta: a plan for a new engine in Go
 
-**Status: under way.** The go-ahead came on 7 October 2026. The work is in
-[beta/](beta/), one task at a time, and
-[beta/tasks/README.md](beta/tasks/README.md) shows where it stands.
-HyperCrux 0.x stays what it is, a Go library and command on SQLite, and
-keeps getting fixes. This document describes a new engine for HyperCrux,
-written in Go, with SQL, key-value, graph and vector built into the engine
-itself, and what it would take to build. Every 0.1 measurement below comes
-from [test/results](test/results). The Beta figures are targets, to be
-measured the same way before anyone quotes them.
+**Status: released.** The go-ahead came on 7 October 2026, and the Beta's
+first release, 0.3.0-beta.1, a pre-release, went out on 15 October 2026. The
+work is in [beta/](beta/), and [beta/tasks/README.md](beta/tasks/README.md)
+records it task by task. HyperCrux 0.x stays what it is, a Go library and
+command on SQLite, and keeps getting fixes. This document describes a new
+engine for HyperCrux, written in Go, with SQL, key-value, graph and vector
+built into the engine itself, and what it would take to build. Every 0.1
+measurement below comes from [test/results](test/results). The Beta figures
+are targets, set before any was measured, and "Targets" says how the
+release's run measured against them.
 
 ## What the Beta is for
 
@@ -933,3 +934,10 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   The Beta stays in `beta/`, beside 0.x, which stays the stable line, and
   RELEASING.md's rule that every release is a full release still holds for
   0.x.
+- R4 settled the Beta's release on 15 October 2026: the release workflow
+  publishes it as a pre-release once the `test` and `beta` workflows have
+  both passed on a commit that raises its `Version`, with static builds for
+  Linux on amd64 and arm64, each checked on its own machine, and a dry run
+  by hand that publishes nothing (R4.md, RELEASING.md). 0.3.0-beta.1 went
+  out that day, after the dry run and a last overnight run of twelve jobs
+  had passed.
