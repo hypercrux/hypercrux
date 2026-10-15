@@ -875,6 +875,10 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   its own, L1, before R3, so an export moves between the engines either way.
   FORMAT.md's u32 stays, so no byte of the format changes (R2.md, part 2's
   first question).
+- On 15 October 2026, after L1, the owner kept the limit on each value.
+  0.x's SQLite also holds a whole record to 1,000,000,000 bytes, so a record
+  whose values come within a few bytes of that, or add up to more, goes into
+  the Beta and not into 0.x (L1.md).
 - The same day the owner accepted for the Beta the targets it still misses,
   which R4 records with their reasons (R2.md, part 2's second question, and
   "Targets").
