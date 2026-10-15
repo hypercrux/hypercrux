@@ -23,12 +23,14 @@ import (
 
 // Version is the version of the package and of the hypercrux command. The
 // Beta hasn't been released, so it's 0.0.0-beta, a pre-release version that
-// sorts before every release. Task R4 sets the version the Beta is released
-// as.
+// sorts before every release.
 //
-// The release workflow reads only the Version in the hypercrux.go at the
-// root of the repository, which is 0.x's. So nothing in beta/ can set off a
-// release, and raising this one releases nothing.
+// The release workflow reads this Version for the Beta, as it reads the one
+// in the hypercrux.go at the root of the repository for 0.x. 0.0.0-beta
+// means unreleased, and releases nothing. Raising it on main to a version of
+// the form X.Y.Z-beta.N with no tag yet releases the Beta, as a pre-release,
+// once the test and beta workflows have both passed on that commit
+// (RELEASING.md).
 const Version = "0.0.0-beta"
 
 // FormatVersion is the version of the file format that beta/FORMAT.md

@@ -29,8 +29,12 @@
 #     means unreleased and releases nothing, and any other form fails the
 #     plan. The version only goes up: above the newest tag of the form
 #     vX.Y.Z-beta.N, with its X.Y.Z above the newest 0.x tag, vX.Y.Z, so Go
-#     and GitHub order it after every 0.x release. Either workflow's run
-#     can be the second to pass, a re-run that turns one green among them.
+#     and GitHub order it after every 0.x release. Its X.Y.Z has to be above
+#     0.x's Version in hypercrux.go at the same commit too, so that a push
+#     that raises both can't release the Beta's ahead of a 0.x release that
+#     Go orders after it; a 0.x Version that 0.x's plan refuses is left to
+#     that plan. Either workflow's run can be the second to pass, a re-run
+#     that turns one green among them.
 #   - A release published by hand, or a run by hand with a tag, builds the
 #     Beta's files when the tag has -beta. in it, and then it has to be of
 #     the form vX.Y.Z-beta.N.
@@ -44,8 +48,9 @@
 # finished and its commit), RELEASE_TAG (a release published by hand),
 # INPUT_TAG and INPUT_DRY_RUN (a run by hand's inputs), SHA (the commit the
 # run is on), GITHUB_REPOSITORY and GITHUB_OUTPUT; and the engine's Version
-# in the checkout. It asks git for main's head and the tags, and gh for the
-# other workflow's runs, only when it needs them.
+# in the checkout, and for the Beta 0.x's too. It asks git for main's head
+# and the tags, and gh for the other workflow's runs, only when it needs
+# them.
 #
 # Its outputs, for the workflow: 0.x's tag, ref and new (true for a new
 # release), as the 0.x jobs had them before; the Beta's tag, ref, version
@@ -100,7 +105,7 @@ class Event:
     so that nothing is asked of git or GitHub that the plan doesn't need."""
 
     def __init__(self, event, run_workflow="", run_sha="", release_tag="", input_tag="", dry_run="", sha="",
-                 repo="", version=None, main_head=None, tags=None, runs=None):
+                 repo="", version=None, zerox_version=None, main_head=None, tags=None, runs=None):
         self.event = event
         self.run_workflow = run_workflow
         self.run_sha = run_sha
@@ -110,6 +115,7 @@ class Event:
         self.sha = sha
         self.repo = repo
         self.version = version  # the engine's Version, or None when its file has none
+        self.zerox_version = zerox_version  # for the Beta's plan, 0.x's Version at the same commit
         self.main_head = main_head
         self.tags = tags
         self.runs = runs  # runs(workflow) gives that workflow's runs on run_sha
@@ -149,8 +155,9 @@ def check_beta_version(version, what):
                       "X.Y.Z-beta.N, such as 0.3.0-beta.1, with numbers that don't start with 0 and N from 1")
 
 
-def check_beta_order(version, tags):
-    """The Beta's versions only go up, and after every 0.x release."""
+def check_beta_order(version, tags, zerox_version):
+    """The Beta's versions only go up, and after every 0.x release, the one
+    that 0.x's Version at the same commit releases included."""
     v = beta_parts(version)
     top = newest(tags, beta_parts)
     if top and v <= top:
@@ -160,6 +167,11 @@ def check_beta_order(version, tags):
     if top and v[:3] <= top:
         raise Refusal(f"v{version}'s X.Y.Z isn't above v{dotted(top)}, the newest release of 0.x, so Go and "
                       "GitHub would order it before that release; raise X.Y.Z above it")
+    zerox = zerox_parts(zerox_version or "")
+    if zerox and v[:3] <= zerox:
+        raise Refusal(f"v{version}'s X.Y.Z isn't above {zerox_version}, 0.x's Version in hypercrux.go at the same "
+                      "commit, so once 0.x's release of it is out, Go and GitHub would order the Beta's before it; "
+                      "raise X.Y.Z above it")
 
 
 def passed(runs, sha, repo):
@@ -240,7 +252,7 @@ def after_workflow(engine, ev):
     tag = "v" + ev.version
     if tag in tags:
         return Plan("none", f"{tag} is out already")
-    check_beta_order(ev.version, tags)
+    check_beta_order(ev.version, tags, ev.zerox_version)
     other = "beta" if finished == "test" else "test"
     ok, why = passed(ev.runs(other), ev.run_sha, ev.repo)
     if not ok:
@@ -266,7 +278,7 @@ def dry_run(engine, ev):
     tag = "v" + version
     if tag in tags:
         raise Refusal(f"{tag} is out already, so there's no release of it to rehearse")
-    check_beta_order(version, tags)
+    check_beta_order(version, tags, ev.zerox_version)
     how = "as it is" if ev.version == version else f"with Version set to {version} in place of {ev.version}"
     return Plan("dry-run", f"a dry run of {tag} from {short(ev.sha)}, {how}: it builds and checks the Beta's "
                            "binaries and writes the checksums and the notes, and tags and publishes nothing",
@@ -321,7 +333,8 @@ def runs_of(repo, sha):
 def read_version(engine):
     path = os.path.join(ROOT, VERSION_FILE[engine])
     try:
-        found = VERSION_LINE.findall(open(path, encoding="utf-8").read())
+        with open(path, encoding="utf-8") as f:
+            found = VERSION_LINE.findall(f.read())
     except OSError:
         return None
     return found[0] if len(found) == 1 else None
@@ -344,7 +357,8 @@ def main():
     ev = Event(env.get("EVENT", ""), run_workflow=env.get("RUN_WORKFLOW", ""), run_sha=env.get("RUN_SHA", ""),
                release_tag=env.get("RELEASE_TAG", ""), input_tag=env.get("INPUT_TAG", ""),
                dry_run=env.get("INPUT_DRY_RUN", ""), sha=env.get("SHA", ""), repo=repo,
-               version=read_version(engine), main_head=main_head, tags=tags,
+               version=read_version(engine), zerox_version=read_version(ZEROX) if engine == BETA else None,
+               main_head=main_head, tags=tags,
                runs=runs_of(repo, env.get("RUN_SHA", "")))
     try:
         plan = decide(engine, ev)

@@ -36,7 +36,10 @@ starts when a `test` or `beta` run finishes, and the push alone doesn't
 start it. Two plan jobs decide, one for each engine, both with
 [scripts/release-plan.py](scripts/release-plan.py), whose opening comment
 has every rule and whose cases are
-[scripts/release-plan-test.py](scripts/release-plan-test.py).
+[scripts/release-plan-test.py](scripts/release-plan-test.py). A late or
+repeated `test` or `beta` run of a commit from before that script came in
+releases nothing, as `main` has moved on from that commit: each plan says
+so in a notice, and the run stays green.
 
 0.x's jobs are as they were before the Beta's release:
 
@@ -71,7 +74,15 @@ The Beta's jobs (task R4):
   any other form fails the plan, saying why. So does a version that isn't
   above the newest `vX.Y.Z-beta.N` tag, or whose X.Y.Z isn't above the newest
   0.x tag, `vX.Y.Z`, since Go and GitHub have to order it after every 0.x
-  release.
+  release, or isn't above 0.x's `Version` in `hypercrux.go` at the same
+  commit, so a push that raises both can't release the Beta's ahead of a 0.x
+  release that Go orders after it.
+- **beta-prerelease.** Runs only for a release published by hand, or one
+  built again by hand. Straight after the plan, whatever the builds then do,
+  it makes that release a pre-release if it isn't one, with `gh release edit
+  --prerelease --latest=false` (`contents: write`, as `beta-release` has),
+  and says which in a notice. A full release of the Beta could stay the latest, and
+  the site's links to the latest release would lose 0.x's files.
 - **beta-linux.** Builds `./beta/cmd/hypercrux` with
   `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w'`, linux/amd64 on
   `ubuntu-latest` and linux/arm64 on `ubuntu-24.04-arm`, and checks each
@@ -83,8 +94,11 @@ The Beta's jobs (task R4):
 - **beta-release.** Runs only after both builds and checks passed. Writes
   SHA256SUMS and the notes with `scripts/beta-release.sh`, then creates the
   tag and the release in one step with `gh release create --target <commit>
-  --prerelease --latest=false`, with `contents: write` on this job only and a
-  `concurrency` group per tag, as 0.x's has.
+  --prerelease --latest=false`, with `contents: write`, which only it and
+  `beta-prerelease` have among the Beta's jobs, and a `concurrency` group per
+  tag, as 0.x's has. For a release published by hand
+  or built again, it attaches the files to that release, and writes the
+  notes if the release has none.
 - **beta-dry-run.** A dry run's last job, in place of beta-release: below.
 
 0.x's notes come from the table in its release job's "Checksums and notes"
@@ -172,8 +186,10 @@ gh api repos/hypercrux/hypercrux/check-runs/<job id>/annotations \
   --jq '.[] | "\(.annotation_level) \(.title): \(.message)"'
 ```
 
-The dry run passes when every job is green. `plan` says 0.x has nothing to
-do, and `beta-plan` that it's a dry run of the tag from the commit. Each
+The dry run passes when the jobs that run are green: `plan`, `beta-plan`,
+both `beta-linux` jobs and `beta-dry-run`. 0.x's jobs, `beta-prerelease` and
+`beta-release` are skipped. `plan` says 0.x has nothing to do, and
+`beta-plan` that it's a dry run of the tag from the commit. Each
 `beta-linux` job says the version it set, its binary's `file` line, which has
 to say "statically linked" and x86-64 or ARM aarch64, its `hypercrux version`
 line, which names the version, that `scripts/smoke.sh` passed, and what its
@@ -227,21 +243,26 @@ If the release run failed: read its log
 and push. Don't change the version unless the fix needs it; the tag was never
 made, so the same version goes out on the next green run. A run that failed
 for a reason outside the repository, such as a call to GitHub's API, can run
-again as it was, with
-`gh api -X POST repos/hypercrux/hypercrux/actions/runs/<id>/rerun-failed-jobs`;
-its plan checks again that `main` is still at the commit.
+again whole, with
+`gh api -X POST repos/hypercrux/hypercrux/actions/runs/<id>/rerun`. That runs
+the plans again, which check again that `main` is still at the commit and
+that the other workflow passed. Running the failed jobs alone again
+(`rerun-failed-jobs`) keeps the plans' first answer.
 
 ## Other ways in
 
 - **A release published by hand** on GitHub still works. The workflow builds
   the binaries for that tag and attaches them: the Beta's for a tag with
   `-beta.` in it, which has to be `vX.Y.Z-beta.N`, and 0.x's for any other.
-  A release of the Beta published by hand is made a pre-release, so it can't
-  take the latest release from 0.x.
+  A release of the Beta published by hand as a full release becomes a
+  pre-release straight after the plan, by `beta-prerelease`, whatever its
+  builds then do, so it keeps the latest release from 0.x only until that
+  job has run.
 - **Rebuilding an existing tag:** run the `release` workflow by hand
   (Actions, release, Run workflow) with the tag, such as `v0.1.0` or
   `v0.3.0-beta.1`. It rebuilds that tag's engine and replaces the files on
-  that release. The Beta's builds run the tag's own scripts.
+  that release. The Beta's builds run the tag's own scripts, and
+  `beta-prerelease` makes sure a Beta release is a pre-release.
 - **A dry run of the Beta's release,** above.
 - Releases made by the workflow don't start the workflow again, because
   events from `GITHUB_TOKEN` don't trigger other runs. No loop.
@@ -254,7 +275,8 @@ its plan checks again that `main` is still at the commit.
   release of the Beta is a pre-release, "HyperCrux vX.Y.Z-beta.N", so the
   latest release stays 0.x's.
 - Versions only go up. The plan refuses a version below the newest tag of its
-  engine, and a Beta version whose X.Y.Z isn't above the newest 0.x tag.
+  engine, and a Beta version whose X.Y.Z isn't above the newest 0.x tag, or
+  above 0.x's `Version` at the same commit.
 - The CI workflows keep the names `test` and `beta`, because `release.yml`
   listens for `workflows: [test, beta]`. Renaming one means renaming it there.
 - `workflow_run` only fires for workflow files on the default branch, so

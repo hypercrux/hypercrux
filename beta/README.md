@@ -272,10 +272,11 @@ Beta still misses one of the plan's targets, the target is beside its time:
 
 Cloud machines vary from one run to the next, so both engines ran in this
 one run, and they're compared within it. This run's machine, with two cores
-of an Intel Xeon at 2.10 GHz, was slower at reading memory than the machines of the earlier
-recorded runs: the search of 100,000 vectors took 29 ms in the run after L1,
-and on this machine that morning the earlier code took about as long as
-this run's, so the code isn't the cause ([tasks/R4.md](tasks/R4.md)).
+of an Intel Xeon at 2.10 GHz, was slower at reading memory than the machines
+of the earlier recorded runs: the search of 100,000 vectors took 29 ms in
+the run after L1, and on this machine that morning the earlier code took
+about as long as this run's, so the code isn't the cause
+([tasks/R4.md](tasks/R4.md)).
 
 The speed comes from the copy in memory, and so do the costs:
 
@@ -647,14 +648,14 @@ for a task that plants a bug.
 Releases publish themselves, and nobody publishes one by hand.
 [RELEASING.md](../RELEASING.md) has the whole procedure. A release of the
 Beta goes out when `Version` in `hypercrux/hypercrux.go` goes up on main to
-the form `X.Y.Z-beta.N`, above the last one, and the `test` and `beta`
-workflows have both passed on that commit. The release workflow then builds
-the command in `cmd/hypercrux/` without cgo for Linux on amd64 and arm64,
-each on its own architecture's machine, checks each binary with `file`,
-`hypercrux version` and `scripts/smoke.sh`, tags the commit `vX.Y.Z-beta.N`
-and publishes the two archives with SHA256SUMS as a pre-release, so the
-repository's latest release stays 0.x's. `0.0.0-beta` means unreleased, and
-releases nothing.
+the form `X.Y.Z-beta.N`, above the last one, with its X.Y.Z above 0.x's
+version, and the `test` and `beta` workflows have both passed on that
+commit. The release workflow then builds the command in `cmd/hypercrux/`
+without cgo for Linux on amd64 and arm64, each on its own architecture's
+machine, checks each binary with `file`, `hypercrux version` and
+`scripts/smoke.sh`, tags the commit `vX.Y.Z-beta.N` and publishes the two
+archives with SHA256SUMS as a pre-release, so the repository's latest
+release stays 0.x's. `0.0.0-beta` means unreleased, and releases nothing.
 
 `scripts/release-plan.py` decides whether a run releases, and
 `scripts/release-plan-test.py` runs its cases. `scripts/beta-release.sh` has

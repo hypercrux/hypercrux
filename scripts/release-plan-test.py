@@ -5,9 +5,10 @@
 # The cases of the release workflow's plan, scripts/release-plan.py (task
 # R4), for 0.x and for the Beta: a new version, one out already, one below
 # the newest tag, a malformed one, 0.0.0-beta, a commit main has moved on
-# from, the other workflow not passed yet, the paths by hand and the dry
-# run. The last cases run the script itself, as the workflow does, with git
-# and gh made up on PATH, and read what it writes to GITHUB_OUTPUT.
+# from, the other workflow not passed yet, a push that raises both
+# versions, the paths by hand and the dry run. The last cases run the
+# script itself, as the workflow does, with git and gh made up on PATH, and
+# read what it writes to GITHUB_OUTPUT.
 #
 #   python3 scripts/release-plan-test.py      # add -v to name each case
 import importlib.util
@@ -180,6 +181,22 @@ class BetaAfterTheTests(Case):
         a = after("test", "0.3.0-beta.1", tags=TAGS + ["v0.3.0"], runs=self.passed_beta)
         self.refuses("beta", a, "X.Y.Z isn't above v0.3.0, the newest release of 0.x")
 
+    def test_one_not_above_0xs_version_at_the_same_commit_fails(self):
+        # A push that raises both: 0.x's 0.3.0 goes out with it, and Go
+        # orders 0.3.0-beta.2 below it, whichever workflow finishes first.
+        for zerox in ("0.3.0", "0.4.0"):
+            with self.subTest(zerox=zerox):
+                a = after("beta", "0.3.0-beta.2", zerox_version=zerox, tags=TAGS + ["v0.3.0-beta.1"],
+                          runs=self.passed_test)
+                self.refuses("beta", a, f"v0.3.0-beta.2's X.Y.Z isn't above {zerox}, 0.x's Version in "
+                             "hypercrux.go at the same commit")
+        # Below it, out already, or one that 0.x's plan refuses: no bar.
+        for zerox in ("0.2.1", "0.2.0", "0.3", None):
+            with self.subTest(zerox=zerox):
+                a = after("beta", "0.3.0-beta.2", zerox_version=zerox, tags=TAGS + ["v0.3.0-beta.1"],
+                          runs=self.passed_test)
+                self.decides("beta", a, "release", "v0.3.0-beta.2", SHA, "0.3.0-beta.2")
+
     def test_a_malformed_one_fails(self):
         for v in ("0.3.0-beta", "0.3.0-beta.0", "0.3.0-beta.01", "0.3-beta.1", "v0.3.0-beta.1", "0.3.0-rc.1",
                   "0.3.0", "0.03.0-beta.1", "0.3.0-beta.1 ", ""):
@@ -208,6 +225,8 @@ class BetaAfterTheTests(Case):
             "cancelled": ([run(41, conclusion="cancelled")], "ended with cancelled"),
             "another commit's": ([run(41, sha=NEWER)], "has no run yet"),
             "a pull request's": ([run(41, event="pull_request", branch="beta-r4")], "has no run yet"),
+            "a push to another branch": ([run(41, branch="beta-r4")], "has no run yet"),
+            "an event other than a push": ([run(41, event="workflow_dispatch")], "has no run yet"),
             "another repository's": ([run(41, repo="someone/hypercrux")], "has no run yet"),
             "a newer run still going": ([run(41), run(52, status="in_progress", conclusion=None)],
                                         "its run 52 is in_progress"),
@@ -262,14 +281,16 @@ class DryRun(Case):
         self.decides("beta", a, "dry-run", "v0.3.0-beta.1", SHA, "0.3.0-beta.1", "as it is")
 
     def test_a_dry_run_keeps_the_releases_rules(self):
-        def dry(v, tags=TAGS):
-            return Asked("workflow_dispatch", dry_run=v, sha=SHA, version="0.0.0-beta", tags=tags)
+        def dry(v, tags=TAGS, zerox="0.2.0"):
+            return Asked("workflow_dispatch", dry_run=v, sha=SHA, version="0.0.0-beta", zerox_version=zerox,
+                         tags=tags)
         self.refuses("beta", dry("0.3.0-beta.1", TAGS + ["v0.3.0-beta.1"]), "v0.3.0-beta.1 is out already")
         self.refuses("beta", dry("0.3.0-beta.1", TAGS + ["v0.3.0-beta.2"]), "isn't above the newest release")
         self.refuses("beta", dry("0.2.0-beta.1"), "isn't above v0.2.0, the newest release of 0.x")
         self.refuses("beta", dry("0.3.0"), "the dry run's version, '0.3.0', is neither")
         self.refuses("beta", dry("0.0.0-beta"), "0.0.0-beta means unreleased")
         self.refuses("beta", dry("0.3.0-beta.1\nmode=release"), "isn't a tag")
+        self.refuses("beta", dry("0.3.0-beta.1", zerox="0.3.0"), "isn't above 0.3.0, 0.x's Version in hypercrux.go")
 
     def test_a_run_by_hand_takes_one_of_the_two(self):
         both = Asked("workflow_dispatch", input_tag="v0.2.0", dry_run="0.3.0-beta.1", sha=SHA)
@@ -277,6 +298,18 @@ class DryRun(Case):
         for engine in ("0.x", "beta"):
             self.refuses(engine, both, "and this one has both")
             self.refuses(engine, neither, "needs a tag to build again")
+
+
+class BothPlans(Case):
+    def test_a_workflow_no_release_waits_for_releases_nothing(self):
+        for engine, version in (("0.x", "0.2.1"), ("beta", "0.3.0-beta.1")):
+            a = after("nightly", version, runs={"beta": [run(41)], "test": [run(40)]})
+            self.decides(engine, a, "none", why="the workflow that finished, 'nightly', is one no release waits for")
+            self.assertEqual(a.asked, [])
+
+    def test_an_empty_release_tag_fails(self):
+        for engine in ("0.x", "beta"):
+            self.refuses(engine, Asked("release", release_tag=""), "the tag '' isn't a tag")
 
 
 FAKE_GIT = """#!/bin/sh
@@ -330,8 +363,10 @@ class TheScript(unittest.TestCase):
     def plan(self, engine, **env):
         r = subprocess.run([sys.executable, self.script, engine], env=dict(self.env, **env), capture_output=True,
                            text=True)
-        out = open(self.out).read() if os.path.exists(self.out) else ""
+        out = ""
         if os.path.exists(self.out):
+            with open(self.out) as f:
+                out = f.read()
             os.remove(self.out)
         return r, out
 
@@ -348,8 +383,9 @@ class TheScript(unittest.TestCase):
         r, out = self.plan("beta", EVENT="workflow_run", RUN_WORKFLOW="test", RUN_SHA=SHA)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(out, f"tag=v0.3.0-beta.1\nref={SHA}\nversion=0.3.0-beta.1\nmode=release\n")
-        self.assertEqual(open(self.calls).read(),
-                         f"api repos/{REPO}/actions/workflows/beta.yml/runs?head_sha={SHA}&event=push&per_page=100\n")
+        with open(self.calls) as f:
+            self.assertEqual(f.read(), f"api repos/{REPO}/actions/workflows/beta.yml/runs?head_sha={SHA}"
+                                       "&event=push&per_page=100\n")
 
     def test_the_betas_0_0_0_beta_asks_nothing_of_github(self):
         r, out = self.plan("beta", EVENT="workflow_run", RUN_WORKFLOW="beta", RUN_SHA=SHA)
@@ -363,6 +399,14 @@ class TheScript(unittest.TestCase):
         self.assertEqual(out, f"tag=v0.3.0-beta.1\nref={SHA}\nversion=0.3.0-beta.1\nmode=dry-run\n")
         r, out = self.plan("0.x", EVENT="workflow_dispatch", INPUT_DRY_RUN="0.3.0-beta.1")
         self.assertEqual((r.returncode, out), (0, ""), r.stderr)
+
+    def test_the_beta_waits_for_0xs_version_at_the_same_commit(self):
+        self.versions("0.3.0", "0.3.0-beta.1")
+        r, out = self.plan("beta", EVENT="workflow_run", RUN_WORKFLOW="test", RUN_SHA=SHA)
+        self.assertEqual((r.returncode, out), (1, ""))
+        self.assertIn("v0.3.0-beta.1's X.Y.Z isn't above 0.3.0, 0.x's Version in hypercrux.go at the same commit",
+                      r.stdout)
+        self.assertFalse(os.path.exists(self.calls))
 
     def test_a_plan_that_fails_says_why(self):
         self.versions("0.2.0", "0.3.0-rc.1")

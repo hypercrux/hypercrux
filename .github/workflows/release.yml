@@ -66,7 +66,14 @@ jobs:
           INPUT_TAG: ${{ inputs.tag }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           SHA: ${{ github.sha }}
-        run: python3 scripts/release-plan.py 0.x
+        # A late or repeated run of a commit from before the plan script
+        # releases nothing, as main has moved on from it, and stays green.
+        run: |
+          if [ ! -f scripts/release-plan.py ]; then
+            echo "::notice title=0.x release plan::$(git rev-parse --short HEAD) predates scripts/release-plan.py, so this run releases nothing"
+            exit 0
+          fi
+          python3 scripts/release-plan.py 0.x
 
   linux:
     needs: plan
@@ -291,7 +298,36 @@ jobs:
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/release-plan.py beta
+        run: |
+          if [ ! -f scripts/release-plan.py ]; then
+            echo "::notice title=Beta release plan::$(git rev-parse --short HEAD) predates scripts/release-plan.py, so this run releases nothing"
+            exit 0
+          fi
+          python3 scripts/release-plan.py beta
+
+  # A release of the Beta published by hand, or one built again by hand, is
+  # a pre-release straight after the plan, whatever its builds then do. As a
+  # full release it could stay the latest, and the site's download links,
+  # which follow the latest, would lose 0.x's files.
+  beta-prerelease:
+    needs: beta-plan
+    if: needs.beta-plan.outputs.mode == 'attach'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.beta-plan.outputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Make the release a pre-release, if it isn't one
+        run: |
+          prerelease=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)
+          if [ "$prerelease" = true ]; then
+            echo "::notice title=Beta pre-release::$TAG is a pre-release already"
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false
+            echo "::notice title=Beta pre-release::$TAG was a full release, and is a pre-release now, so the latest release stays 0.x's"
+          fi
 
   # The Beta's binaries, each built and checked on its own architecture's
   # machine. A dry run builds the version it rehearses, set in this job's
@@ -374,7 +410,8 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$REF" \
             --title "HyperCrux $TAG" --notes-file ../notes.md --prerelease --latest=false \
             hypercrux-beta_linux_amd64.tar.gz hypercrux-beta_linux_arm64.tar.gz SHA256SUMS
-      - name: Attach the binaries to an existing release, and keep it a pre-release
+      # beta-prerelease has made it a pre-release already.
+      - name: Attach the binaries to an existing release
         if: env.MODE == 'attach'
         run: |
           cd dist
@@ -383,11 +420,6 @@ jobs:
           body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
           if [ -z "$body" ]; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file ../notes.md
-          fi
-          # A full release of the Beta could become the latest, whose files the
-          # site's download page links to, and those are 0.x's.
-          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" != true ]; then
-            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false
           fi
 
   # A dry run of the Beta's release ends here, with the checksums and the
