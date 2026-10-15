@@ -254,20 +254,28 @@ committed.
 
 ## How fast, and what it costs
 
-From the run recorded on 14 October 2026, both engines on one two-core
-cloud machine, the middle of three runs each
-([test/results/beta-bench.txt](../test/results/beta-bench.txt)):
+From the run recorded for the release on 15 October 2026, both engines on
+one two-core cloud machine, the middle of three runs each
+([test/results/beta-bench.txt](../test/results/beta-bench.txt)). Where the
+Beta still misses one of the plan's targets, the target is beside its time:
 
 | Operation | 0.x | The Beta |
 |---|---|---|
-| Nearest 10 among 100,000 vectors of 384 values | 312 ms | 29 ms |
-| The same, a tenth passing a filter | 95.3 ms | 14.1 ms |
-| Nearest 10 among 10,000 vectors of 1,536 values | 104 ms | 11.8 ms |
-| Get a record by key | 15 µs | 2.31 µs |
-| Walk one and three links out, 100,000 records with 5 links each | 32.2 µs and 416 µs | 3.4 µs and 52 µs |
-| Put records with 384-value vectors, 1,000 a transaction | 41.9 µs a record | 9.28 µs a record |
-| Put one record, committed | 300 µs | 275 µs |
-| Open 100,000 records with 384-value vectors | 0.44 ms | 356 ms |
+| Nearest 10 among 100,000 vectors of 384 values | 294 ms | 58.7 ms |
+| The same, a tenth passing a filter | 90.4 ms | 9.26 ms |
+| Nearest 10 among 10,000 vectors of 1,536 values | 93.6 ms | 10.5 ms |
+| Get a record by key | 11.2 µs | 1.8 µs |
+| Walk one and three links out, 100,000 records with 5 links each | 24.8 µs and 345 µs | 3.03 µs and 43.9 µs, against targets of 3 µs and 40 µs |
+| Put records with 384-value vectors, 1,000 a transaction | 34.9 µs a record | 16.1 µs a record, against a target of 5 µs |
+| Put one record, committed | 262 µs | 210 µs |
+| Open 100,000 records with 384-value vectors | 0.43 ms | 323 ms, against a target of 250 ms |
+
+Cloud machines vary from one run to the next, so both engines ran in this
+one run, and they're compared within it. This run's machine, with two cores
+of an Intel Xeon at 2.10 GHz, was slower at reading memory than the machines of the earlier
+recorded runs: the search of 100,000 vectors took 29 ms in the run after L1,
+and on this machine that morning the earlier code took about as long as
+this run's, so the code isn't the cause ([tasks/R4.md](tasks/R4.md)).
 
 The speed comes from the copy in memory, and so do the costs:
 
@@ -285,11 +293,17 @@ The speed comes from the copy in memory, and so do the costs:
   dead, and a megabyte at least, or once 100,000 commits follow it, so a
   database that only grows is rewritten once in 100,000 commits.
 
-Four of the plan's speed targets are still missed in that run: the batched
-put, at 9.28 µs against a target of 5, the open, at 356 ms against 250, the
-filtered search, at 14.1 ms against 12, and the walks, at 3.4 µs and 52 µs
-against 3 and 40. The owner accepted them for the Beta on 14 October 2026,
-and [tasks/R2.md](tasks/R2.md) says where their time goes.
+Three of the plan's speed targets are still missed in that run, each beside
+its time above: the walks, the batched put and the open. The filtered
+search, which missed its target in the runs before, met it in this one. The
+owner accepted the misses for the Beta on 14 October 2026, and
+[tasks/R2.md](tasks/R2.md) says where their time goes. Two fifths of a walk
+one link out is the `stat` each read makes to see other processes' commits,
+and nearly half of a walk three links out sorts each round's records by key,
+as 0.x orders them. About 3 µs of each batched put is the sync of its batch.
+The open applies the vector blocks, about half of that in filling their
+fresh memory, builds each record through the general put, and decodes the
+batches.
 
 ## What the Beta leaves out
 
@@ -567,8 +581,21 @@ HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point fro
 sh scripts/long.sh crash 3840   # a long run's job, as the long workflow runs it (tasks/R1.md)
 HYPERCRUX_PROCS_TIME=10m go test ./beta/internal/procs   # many processes for 10 minutes a run
 sh scripts/record-beta-bench.sh   # both engines' benchmarks; needs the machine to itself
+sh scripts/record-beta-tests.sh   # the Beta's tests, the race detector, fuzzing and planted bugs, into test/results/
+python3 scripts/record-long.py RUN_ID   # a long run's jobs and notices, from GitHub, into test/results/beta-long.txt
+python3 scripts/release-plan-test.py   # the release workflow's plan, case by case
 go build -o hypercrux ./beta/cmd/hypercrux   # the Beta's command
 ```
+
+`scripts/record-beta-tests.sh` records the Beta's tests as
+`scripts/record-tests.sh` records 0.1's, each to a file of its own in
+`test/results/`: `beta-tests.txt`, every test in `beta/`, verbose;
+`beta-race.txt`, the same with the race detector in short mode;
+`beta-fuzz.txt`, each fuzz target for a minute; and `beta-planted.txt`, every
+planted bug. With a folder and `quick` it checks itself in a minute or two.
+`scripts/record-long.py` writes a long run's commit and times, and each job's
+result, times and notices, to `test/results/beta-long.txt`, since the
+notices are what a cloud session can read of a run.
 
 `scripts/check-docs.py` checks the links in the Beta's docs and runs every
 example they mark to run, on the Beta's package and command, and on 0.x's
@@ -584,15 +611,15 @@ comment says how a doc marks an example and its output.
 
 ### CI
 
-Two workflows run on every push to main and every pull request, and a third
-runs by hand.
+Two workflows run on every push to main and every pull request, a third
+runs by hand, and the release workflow follows the first two on main.
 
 - `test` runs 0.x's tests and the Beta's on ubuntu and macOS, with the race
   detector on Linux. On macOS the Beta's packages are empty, apart from the
   command's message that it runs on Linux only. Releases of 0.x wait for
-  this workflow.
-- `beta` runs the Beta's own jobs, which no release waits for until the
-  Beta's first, in task R4:
+  this workflow, and the Beta's for it and `beta`.
+- `beta` runs the Beta's own jobs, which the Beta's releases wait for (task
+  R4), and 0.x's don't:
   - `rules`: `scripts/check-beta.sh`.
   - `arm64`: the Beta's tests on ARM Linux, with the race detector.
   - `fuzz`: every fuzz target for 30 seconds. An input that fails is kept
@@ -607,11 +634,34 @@ runs by hand.
   seeds, the many-process harness, the differential harness and every
   planted bug. [tasks/R1.md](tasks/R1.md) says how to start a run and read
   it.
+- `release` publishes a release when a version goes up on main, as the next
+  section says.
 
 Each push job takes a few minutes; the fuzz job grows by 30 seconds with
 each new target. A long run takes about three and a half hours.
 [tasks/P1.md](tasks/P1.md) has the reasons for the push jobs, and the steps
 for a task that plants a bug.
+
+### Releases
+
+Releases publish themselves, and nobody publishes one by hand.
+[RELEASING.md](../RELEASING.md) has the whole procedure. A release of the
+Beta goes out when `Version` in `hypercrux/hypercrux.go` goes up on main to
+the form `X.Y.Z-beta.N`, above the last one, and the `test` and `beta`
+workflows have both passed on that commit. The release workflow then builds
+the command in `cmd/hypercrux/` without cgo for Linux on amd64 and arm64,
+each on its own architecture's machine, checks each binary with `file`,
+`hypercrux version` and `scripts/smoke.sh`, tags the commit `vX.Y.Z-beta.N`
+and publishes the two archives with SHA256SUMS as a pre-release, so the
+repository's latest release stays 0.x's. `0.0.0-beta` means unreleased, and
+releases nothing.
+
+`scripts/release-plan.py` decides whether a run releases, and
+`scripts/release-plan-test.py` runs its cases. `scripts/beta-release.sh` has
+the checks, the archives, the checksums and the notes. A dry run, started by
+hand with the version it rehearses, builds and checks the binaries and
+writes the checksums and the notes, and publishes nothing; RELEASING.md says
+how to start one and read it.
 
 ### Planted bugs
 

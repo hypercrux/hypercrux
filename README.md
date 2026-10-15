@@ -370,9 +370,9 @@ runs the tests. The release binaries are built by
 The Beta is a new engine for HyperCrux, in [beta/](beta/). It keeps the four
 handles on one record, with 0.x's Go API and its command, and it's written in
 Go with no SQLite and no C. Its data lives in one append-only file on disk,
-with a copy in memory in each process that opens it. In the run recorded on
-14 October 2026, both engines on one machine, a search of 100,000 vectors of
-384 values took 29 ms on the Beta and 312 ms on 0.x
+with a copy in memory in each process that opens it. In the run recorded for
+its release on 15 October 2026, both engines on one machine, a search of
+100,000 vectors of 384 values took 58.7 ms on the Beta and 294 ms on 0.x
 ([test/results/beta-bench.txt](test/results/beta-bench.txt)). The copy costs
 a slower open and memory in every process, and the Beta runs on Linux only.
 It hasn't been released yet.

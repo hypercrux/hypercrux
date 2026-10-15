@@ -1,19 +1,26 @@
 name: release
 
 # Builds the hypercrux binaries, checks each one, and publishes them with a
-# release.
+# release, for 0.x and for the Beta.
 #
 # Releases go out on their own. When the tests pass on a push to main and the
-# version in hypercrux.go has no tag yet, this workflow builds and checks the
-# binaries from that commit, then tags it and publishes the release with the
-# binaries attached. Nothing goes public unless every build and check passes.
+# version in hypercrux.go has no tag yet, this workflow builds and checks
+# 0.x's binaries from that commit, then tags it and publishes the release
+# with the binaries attached. The Beta's go out the same way (task R4), from
+# the version in beta/hypercrux/hypercrux.go, once the test and beta
+# workflows have both passed on the commit, and as a pre-release, so the
+# repository's latest release stays 0.x's. Nothing goes public unless every
+# build and check passes. scripts/release-plan.py has the plan's rules, and
+# RELEASING.md the whole procedure.
 #
 # It also attaches binaries to a release someone publishes by hand, and it
-# can be run by hand to rebuild the binaries of an existing tag.
+# can be run by hand to rebuild the binaries of an existing tag, or to make
+# a dry run of the Beta's release, which builds and checks its binaries and
+# writes the checksums and the notes, and publishes nothing.
 
 on:
   workflow_run:
-    workflows: [test]
+    workflows: [test, beta]
     types: [completed]
     branches: [main]
   release:
@@ -21,13 +28,19 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to build, such as v0.1.0"
-        required: true
+        description: "Release tag to build again, such as v0.1.0 or v0.3.0-beta.1"
+        required: false
+        default: ""
+      dry_run:
+        description: "Or, for a dry run of the Beta's release, the version to rehearse, such as 0.3.0-beta.1: builds and checks its binaries from this branch, and publishes nothing"
+        required: false
+        default: ""
 
 permissions:
   contents: read
 
 jobs:
+  # 0.x's plan: after the test workflow alone, as before the Beta's release.
   plan:
     # After the tests, only for a push to main in this repository that passed.
     if: >-
@@ -47,44 +60,13 @@ jobs:
       - id: plan
         env:
           EVENT: ${{ github.event_name }}
+          RUN_WORKFLOW: ${{ github.event.workflow_run.name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
-        run: |
-          case "$EVENT" in
-          workflow_run)
-            # Only the commit main is at now; if main has moved on, the run
-            # after the next push decides.
-            head=$(git ls-remote origin refs/heads/main | cut -f1)
-            if [ "$head" != "$RUN_SHA" ]; then
-              echo "No release: main has moved on from $RUN_SHA to $head."
-              exit 0
-            fi
-            version=$(sed -n 's/^const Version = "\([0-9]*\.[0-9]*\.[0-9]*\)"$/\1/p' hypercrux.go)
-            if [ -z "$version" ]; then
-              echo "hypercrux.go has no Version of the form X.Y.Z" >&2
-              exit 1
-            fi
-            tags=$(git ls-remote --tags --refs origin) || { echo "Couldn't read the repository's tags" >&2; exit 1; }
-            if grep -q "refs/tags/v$version\$" <<< "$tags"; then
-              echo "No release: v$version is out already."
-              exit 0
-            fi
-            newest=$({ grep -o 'refs/tags/v[0-9]*\.[0-9]*\.[0-9]*$' <<< "$tags" || true; } | sed 's|refs/tags/v||' | sort -V | tail -n 1)
-            if [ -n "$newest" ] && [ "$(printf '%s\n%s\n' "$newest" "$version" | sort -V | tail -n 1)" != "$version" ]; then
-              echo "v$version is older than the newest release, v$newest; raise the version above it" >&2
-              exit 1
-            fi
-            echo "Releasing v$version from $RUN_SHA."
-            { echo "tag=v$version"; echo "ref=$RUN_SHA"; echo "new=true"; } >> "$GITHUB_OUTPUT"
-            ;;
-          release)
-            { echo "tag=$RELEASE_TAG"; echo "ref=$RELEASE_TAG"; } >> "$GITHUB_OUTPUT"
-            ;;
-          workflow_dispatch)
-            { echo "tag=$INPUT_TAG"; echo "ref=$INPUT_TAG"; } >> "$GITHUB_OUTPUT"
-            ;;
-          esac
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          SHA: ${{ github.sha }}
+        run: python3 scripts/release-plan.py 0.x
 
   linux:
     needs: plan
@@ -232,8 +214,10 @@ jobs:
       NEW: ${{ needs.plan.outputs.new }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # 0.x's archives alone, since the Beta's can be in the same run.
       - uses: actions/download-artifact@v8
         with:
+          pattern: hypercrux_*
           path: dist
           merge-multiple: true
       - name: Checksums and notes
@@ -275,3 +259,163 @@ jobs:
           if [ -z "$body" ]; then
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file ../notes.md
           fi
+
+  # The Beta's plan (task R4): after the test and the beta workflows have
+  # both passed on the commit, so it reads the other workflow's runs.
+  beta-plan:
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      ref: ${{ steps.plan.outputs.ref }}
+      version: ${{ steps.plan.outputs.version }}
+      mode: ${{ steps.plan.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_WORKFLOW: ${{ github.event.workflow_run.name }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-plan.py beta
+
+  # The Beta's binaries, each built and checked on its own architecture's
+  # machine. A dry run builds the version it rehearses, set in this job's
+  # checkout alone. Each check's result is a notice, which the REST API
+  # shows where a cloud session can't read the log.
+  beta-linux:
+    needs: beta-plan
+    if: needs.beta-plan.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      VERSION: ${{ needs.beta-plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.beta-plan.outputs.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - name: Set the version a dry run rehearses
+        if: needs.beta-plan.outputs.mode == 'dry-run'
+        run: sh scripts/beta-release.sh stamp "$VERSION"
+      - name: Build a static binary
+        env:
+          CGO_ENABLED: "0"
+        run: go build -trimpath -ldflags '-s -w' -o hypercrux ./beta/cmd/hypercrux
+      - name: Check it is static, names the version and passes the smoke test
+        run: sh scripts/beta-release.sh check ./hypercrux "$ARCH" "$VERSION"
+      - name: Package
+        run: sh scripts/beta-release.sh package ./hypercrux "$ARCH"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hypercrux-beta_linux_${{ matrix.arch }}
+          path: hypercrux-beta_linux_${{ matrix.arch }}.tar.gz
+
+  beta-release:
+    needs: [beta-plan, beta-linux]
+    if: needs.beta-plan.outputs.mode == 'release' || needs.beta-plan.outputs.mode == 'attach'
+    # Two runs for the same tag take turns; the second finds it published.
+    concurrency:
+      group: release-${{ needs.beta-plan.outputs.tag }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.beta-plan.outputs.tag }}
+      REF: ${{ needs.beta-plan.outputs.ref }}
+      MODE: ${{ needs.beta-plan.outputs.mode }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.beta-plan.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hypercrux-beta_linux_*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes
+        run: |
+          sh scripts/beta-release.sh sums dist
+          sh scripts/beta-release.sh notes "$TAG" notes.md "$MODE" "$REF"
+      - name: Tag the commit and publish the pre-release, binaries attached
+        if: env.MODE == 'release'
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "$TAG is out already."
+            exit 0
+          fi
+          cd dist
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$REF" \
+            --title "HyperCrux $TAG" --notes-file ../notes.md --prerelease --latest=false \
+            hypercrux-beta_linux_amd64.tar.gz hypercrux-beta_linux_arm64.tar.gz SHA256SUMS
+      - name: Attach the binaries to an existing release, and keep it a pre-release
+        if: env.MODE == 'attach'
+        run: |
+          cd dist
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            hypercrux-beta_linux_amd64.tar.gz hypercrux-beta_linux_arm64.tar.gz SHA256SUMS
+          body=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body)
+          if [ -z "$body" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file ../notes.md
+          fi
+          # A full release of the Beta could become the latest, whose files the
+          # site's download page links to, and those are 0.x's.
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease)" != true ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease --latest=false
+          fi
+
+  # A dry run of the Beta's release ends here, with the checksums and the
+  # notes kept beside the binaries as the run's artifacts. This job has the
+  # workflow's permissions, contents: read, so it can't tag or publish.
+  beta-dry-run:
+    needs: [beta-plan, beta-linux]
+    if: needs.beta-plan.outputs.mode == 'dry-run'
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.beta-plan.outputs.tag }}
+      REF: ${{ needs.beta-plan.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.beta-plan.outputs.ref }}
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: hypercrux-beta_linux_*
+          path: dist
+          merge-multiple: true
+      - name: Checksums and notes, as the release would have them
+        run: |
+          sh scripts/beta-release.sh sums dist
+          sh scripts/beta-release.sh notes "$TAG" dist/notes.md dry-run "$REF"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hypercrux-beta_dry-run
+          path: |
+            dist/SHA256SUMS
+            dist/notes.md
