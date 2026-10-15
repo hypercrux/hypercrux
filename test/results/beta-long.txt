@@ -1,0 +1,124 @@
+# The long workflow's runs (task R1): each job on amd64 and arm64, with its result and times and the notices it wrote, which say what it ran and at what length. Read from GitHub's REST API
+# recorded 2026-10-15 11:40 UTC from run 38690939241, at commit 9096d53
+# GitHub's runners: ubuntu-latest for amd64 and ubuntu-24.04-arm for arm64
+# command: python3 scripts/record-long.py 38690939241
+
+Run 38690939241 of the long workflow, https://github.com/hypercrux/hypercrux/actions/runs/38690939241
+  commit 9096d53d611f73d77d0a7268b5b5561848cdbfa5, on main
+  started by workflow_dispatch, attempt 1
+  started 2026-10-15 06:11:22 UTC, ended 2026-10-15 11:34:29 UTC, after 5 h 23 min 7 s
+  result: success, 12 jobs, 12 passed
+
+  Job               Architecture  Result   Started   Ended     Took
+  fuzz-1 on amd64   amd64         success  06:11:25  11:26:49  5 h 15 min 24 s
+  fuzz-1 on arm64   arm64         success  06:11:28  11:26:58  5 h 15 min 30 s
+  fuzz-2 on amd64   amd64         success  06:11:25  11:27:37  5 h 16 min 12 s
+  fuzz-2 on arm64   arm64         success  06:11:27  11:27:31  5 h 16 min 4 s
+  crash on amd64    amd64         success  06:11:25  11:34:29  5 h 23 min 4 s
+  crash on arm64    arm64         success  06:11:27  10:12:10  4 h 0 min 43 s
+  procs on amd64    amd64         success  06:11:25  11:27:17  5 h 15 min 52 s
+  procs on arm64    arm64         success  06:11:27  11:27:18  5 h 15 min 51 s
+  diff on amd64     amd64         success  06:11:25  08:13:26  2 h 2 min 1 s
+  diff on arm64     arm64         success  06:11:27  08:55:06  2 h 43 min 39 s
+  planted on amd64  amd64         success  06:11:25  06:36:16  24 min 51 s
+  planted on arm64  arm64         success  06:11:27  06:35:09  23 min 42 s
+
+fuzz-1 on amd64, on ubuntu-latest: success, 2026-10-15 06:11:25 to 11:26:49 UTC, 5 h 15 min 24 s
+  notice, long fuzz:
+    fuzz, shard 1/2, 105m a target on amd64, in 18909s
+    == FuzzDecodeBatch in github.com/hypercrux/hypercrux/beta/internal/format, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/format	6300.036s
+      fuzz: elapsed: 1h45m0s, execs: 343680392 (0/sec), new interesting: 557 (total: 581)
+    == FuzzDecodeMarker in github.com/hypercrux/hypercrux/beta/internal/format, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/format	6300.049s
+      fuzz: elapsed: 1h45m0s, execs: 235037553 (0/sec), new interesting: 80 (total: 89)
+    == FuzzReader in github.com/hypercrux/hypercrux/internal/export, for 105m
+    ok  	github.com/hypercrux/hypercrux/internal/export	6300.113s
+      fuzz: elapsed: 1h45m0s, execs: 553764797 (0/sec), new interesting: 520 (total: 538)
+
+fuzz-1 on arm64, on ubuntu-24.04-arm: success, 2026-10-15 06:11:28 to 11:26:58 UTC, 5 h 15 min 30 s
+  notice, long fuzz:
+    fuzz, shard 1/2, 105m a target on arm64, in 18911s
+    == FuzzDecodeBatch in github.com/hypercrux/hypercrux/beta/internal/format, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/format	6300.111s
+      fuzz: elapsed: 1h45m0s, execs: 420414203 (0/sec), new interesting: 528 (total: 552)
+    == FuzzDecodeMarker in github.com/hypercrux/hypercrux/beta/internal/format, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/format	6300.053s
+      fuzz: elapsed: 1h45m0s, execs: 327618478 (0/sec), new interesting: 83 (total: 92)
+    == FuzzReader in github.com/hypercrux/hypercrux/internal/export, for 105m
+    ok  	github.com/hypercrux/hypercrux/internal/export	6300.122s
+      fuzz: elapsed: 1h45m0s, execs: 522126796 (0/sec), new interesting: 543 (total: 562)
+
+fuzz-2 on amd64, on ubuntu-latest: success, 2026-10-15 06:11:25 to 11:27:37 UTC, 5 h 16 min 12 s
+  notice, long fuzz:
+    fuzz, shard 2/2, 105m a target on amd64, in 18956s
+    == FuzzDecodeHeader in github.com/hypercrux/hypercrux/beta/internal/format, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/format	6300.074s
+      fuzz: elapsed: 1h45m0s, execs: 249963778 (0/sec), new interesting: 21 (total: 26)
+    == FuzzParse in github.com/hypercrux/hypercrux/beta/internal/query, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/query	6300.148s
+      fuzz: elapsed: 1h45m0s, execs: 146311744 (0/sec), new interesting: 1338 (total: 5246)
+    == FuzzLine in github.com/hypercrux/hypercrux/internal/export, for 105m
+    ok  	github.com/hypercrux/hypercrux/internal/export	6300.097s
+      fuzz: elapsed: 1h45m0s, execs: 278464125 (0/sec), new interesting: 724 (total: 730)
+
+fuzz-2 on arm64, on ubuntu-24.04-arm: success, 2026-10-15 06:11:27 to 11:27:31 UTC, 5 h 16 min 4 s
+  notice, long fuzz:
+    fuzz, shard 2/2, 105m a target on arm64, in 18951s
+    == FuzzDecodeHeader in github.com/hypercrux/hypercrux/beta/internal/format, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/format	6300.118s
+      fuzz: elapsed: 1h45m0s, execs: 556059290 (0/sec), new interesting: 23 (total: 28)
+    == FuzzParse in github.com/hypercrux/hypercrux/beta/internal/query, for 105m
+    ok  	github.com/hypercrux/hypercrux/beta/internal/query	6300.206s
+      fuzz: elapsed: 1h45m0s, execs: 325364155 (0/sec), new interesting: 1430 (total: 5338)
+    == FuzzLine in github.com/hypercrux/hypercrux/internal/export, for 105m
+    ok  	github.com/hypercrux/hypercrux/internal/export	6300.138s
+      fuzz: elapsed: 1h45m0s, execs: 683483682 (0/sec), new interesting: 748 (total: 754)
+
+crash on amd64, on ubuntu-latest: success, 2026-10-15 06:11:25 to 11:34:29 UTC, 5 h 23 min 4 s
+  notice, long crash:
+    crash, HYPERCRUX_CRASH_SEEDS=4800 on amd64, in 19363s
+    ok  	github.com/hypercrux/hypercrux/beta/internal/crash	770.014s
+        compact_test.go:1394: 100000 records, 159.3 MB live: the compaction took 224ms, 710 MB/s; of that, 49ms writing (247 writes) and 108ms in the sync, 0s for the folder's
+    ok  	github.com/hypercrux/hypercrux/beta/internal/logfile	3435.863s
+    ok  	github.com/hypercrux/hypercrux/beta/hypercrux	19304.884s
+
+crash on arm64, on ubuntu-24.04-arm: success, 2026-10-15 06:11:27 to 10:12:10 UTC, 4 h 0 min 43 s
+  notice, long crash:
+    crash, HYPERCRUX_CRASH_SEEDS=4800 on arm64, in 14427s
+    ok  	github.com/hypercrux/hypercrux/beta/internal/crash	461.841s
+        compact_test.go:1394: 100000 records, 159.3 MB live: the compaction took 679ms, 235 MB/s; of that, 78ms writing (247 writes) and 553ms in the sync, 2ms for the folder's
+    ok  	github.com/hypercrux/hypercrux/beta/internal/logfile	2302.001s
+    ok  	github.com/hypercrux/hypercrux/beta/hypercrux	14422.786s
+
+procs on amd64, on ubuntu-latest: success, 2026-10-15 06:11:25 to 11:27:17 UTC, 5 h 15 min 52 s
+  notice, long procs:
+    procs, HYPERCRUX_PROCS_TIME=63m on amd64, in 18936s
+    ok  	github.com/hypercrux/hypercrux/beta/internal/procs	18932.731s
+
+procs on arm64, on ubuntu-24.04-arm: success, 2026-10-15 06:11:27 to 11:27:18 UTC, 5 h 15 min 51 s
+  notice, long procs:
+    procs, HYPERCRUX_PROCS_TIME=63m on arm64, in 18937s
+    ok  	github.com/hypercrux/hypercrux/beta/internal/procs	18935.826s
+
+diff on amd64, on ubuntu-latest: success, 2026-10-15 06:11:25 to 08:13:26 UTC, 2 h 2 min 1 s
+  notice, long diff:
+    diff, HYPERCRUX_DIFF_SEQUENCES=1000000 on amd64, in 7303s
+    ok  	github.com/hypercrux/hypercrux/beta/difftest	7273.866s
+
+diff on arm64, on ubuntu-24.04-arm: success, 2026-10-15 06:11:27 to 08:55:06 UTC, 2 h 43 min 39 s
+  notice, long diff:
+    diff, HYPERCRUX_DIFF_SEQUENCES=1000000 on arm64, in 9801s
+    ok  	github.com/hypercrux/hypercrux/beta/difftest	9798.460s
+
+planted on amd64, on ubuntu-latest: success, 2026-10-15 06:11:25 to 06:36:16 UTC, 24 min 51 s
+  notice, long planted:
+    planted, shard 1/1 on amd64, in 1475s
+  notice, planted:
+    261 of 261 planted bugs caught, in 1347s
+
+planted on arm64, on ubuntu-24.04-arm: success, 2026-10-15 06:11:27 to 06:35:09 UTC, 23 min 42 s
+  notice, long planted:
+    planted, shard 1/1 on arm64, in 1406s
+  notice, planted:
+    261 of 261 planted bugs caught, in 1339s
