@@ -1,0 +1,162 @@
+# Each fuzz target for a minute: the Beta's decoders of batches, headers and markers and its SQL parser, then the export format's line parser and reader, which both engines use
+# recorded 2026-10-15 08:09 UTC with go1.24.7 linux/amd64, SQLite 3.53.4, at commit 20ce7b4
+# Linux 6.18.44-fc-v114, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs
+# command: sh scripts/fuzz.sh 60s
+
+== FuzzDecodeBatch in github.com/hypercrux/hypercrux/beta/internal/format, for 60s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/508 completed
+fuzz: elapsed: 1s, gathering baseline coverage: 508/508 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 55549 (18511/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 6s, execs: 147570 (30677/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 9s, execs: 226840 (26428/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 12s, execs: 304197 (25781/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 15s, execs: 379283 (25027/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 18s, execs: 464817 (28513/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 21s, execs: 540089 (25090/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 24s, execs: 604786 (21570/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 27s, execs: 678657 (24624/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 30s, execs: 761524 (27619/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 33s, execs: 838599 (25666/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 36s, execs: 923695 (28399/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 39s, execs: 1008369 (28216/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 42s, execs: 1092306 (27986/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 45s, execs: 1187807 (31825/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 48s, execs: 1274859 (29020/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 51s, execs: 1361936 (29030/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 54s, execs: 1447462 (28504/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 57s, execs: 1525221 (25923/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 1m0s, execs: 1606301 (27013/sec), new interesting: 0 (total: 508)
+fuzz: elapsed: 1m0s, execs: 1606301 (0/sec), new interesting: 0 (total: 508)
+PASS
+ok  	github.com/hypercrux/hypercrux/beta/internal/format	60.160s
+== FuzzDecodeHeader in github.com/hypercrux/hypercrux/beta/internal/format, for 60s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/23 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 23/23 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 102490 (34154/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 6s, execs: 189723 (29053/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 9s, execs: 282253 (30874/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 12s, execs: 392613 (36781/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 15s, execs: 520628 (42676/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 18s, execs: 628581 (35985/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 21s, execs: 745037 (38810/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 24s, execs: 840268 (31746/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 27s, execs: 941333 (33686/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 30s, execs: 1046606 (35098/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 33s, execs: 1147658 (33683/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 36s, execs: 1264522 (38931/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 39s, execs: 1360802 (32107/sec), new interesting: 1 (total: 24)
+fuzz: elapsed: 42s, execs: 1462048 (33752/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 45s, execs: 1572220 (36728/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 48s, execs: 1685951 (37904/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 51s, execs: 1790285 (34779/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 54s, execs: 1884732 (31480/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 57s, execs: 1987172 (34146/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 1m0s, execs: 2101283 (38040/sec), new interesting: 2 (total: 25)
+fuzz: elapsed: 1m0s, execs: 2101283 (0/sec), new interesting: 2 (total: 25)
+PASS
+ok  	github.com/hypercrux/hypercrux/beta/internal/format	60.048s
+== FuzzDecodeMarker in github.com/hypercrux/hypercrux/beta/internal/format, for 60s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/66 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 66/66 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 57844 (19271/sec), new interesting: 0 (total: 66)
+fuzz: elapsed: 6s, execs: 124489 (22222/sec), new interesting: 3 (total: 69)
+fuzz: elapsed: 9s, execs: 186028 (20511/sec), new interesting: 5 (total: 71)
+fuzz: elapsed: 12s, execs: 247658 (20550/sec), new interesting: 8 (total: 74)
+fuzz: elapsed: 15s, execs: 314404 (22242/sec), new interesting: 10 (total: 76)
+fuzz: elapsed: 18s, execs: 374151 (19922/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 21s, execs: 446258 (23992/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 24s, execs: 508360 (20728/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 27s, execs: 573507 (21727/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 30s, execs: 637207 (21227/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 33s, execs: 702462 (21757/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 36s, execs: 761455 (19662/sec), new interesting: 12 (total: 78)
+fuzz: elapsed: 39s, execs: 827097 (21880/sec), new interesting: 13 (total: 79)
+fuzz: elapsed: 42s, execs: 878828 (17248/sec), new interesting: 13 (total: 79)
+fuzz: elapsed: 45s, execs: 948842 (23331/sec), new interesting: 15 (total: 81)
+fuzz: elapsed: 48s, execs: 1008457 (19874/sec), new interesting: 15 (total: 81)
+fuzz: elapsed: 51s, execs: 1084037 (25192/sec), new interesting: 17 (total: 83)
+fuzz: elapsed: 54s, execs: 1127085 (14346/sec), new interesting: 17 (total: 83)
+fuzz: elapsed: 57s, execs: 1201905 (24950/sec), new interesting: 18 (total: 84)
+fuzz: elapsed: 1m0s, execs: 1262486 (20192/sec), new interesting: 18 (total: 84)
+fuzz: elapsed: 1m0s, execs: 1262486 (0/sec), new interesting: 18 (total: 84)
+PASS
+ok  	github.com/hypercrux/hypercrux/beta/internal/format	60.255s
+== FuzzParse in github.com/hypercrux/hypercrux/beta/internal/query, for 60s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/4753 completed
+fuzz: elapsed: 3s, gathering baseline coverage: 1421/4753 completed
+fuzz: elapsed: 6s, gathering baseline coverage: 2956/4753 completed
+fuzz: elapsed: 9s, gathering baseline coverage: 4530/4753 completed
+fuzz: elapsed: 10s, gathering baseline coverage: 4753/4753 completed, now fuzzing with 2 workers
+fuzz: elapsed: 12s, execs: 47410 (14294/sec), new interesting: 1 (total: 4754)
+fuzz: elapsed: 15s, execs: 86830 (13139/sec), new interesting: 2 (total: 4755)
+fuzz: elapsed: 18s, execs: 143613 (18928/sec), new interesting: 3 (total: 4756)
+fuzz: elapsed: 21s, execs: 211775 (22723/sec), new interesting: 4 (total: 4757)
+fuzz: elapsed: 24s, execs: 274313 (20845/sec), new interesting: 4 (total: 4757)
+fuzz: elapsed: 27s, execs: 328868 (18185/sec), new interesting: 4 (total: 4757)
+fuzz: elapsed: 30s, execs: 385981 (19036/sec), new interesting: 5 (total: 4758)
+fuzz: elapsed: 33s, execs: 438854 (17627/sec), new interesting: 5 (total: 4758)
+fuzz: elapsed: 36s, execs: 486270 (15807/sec), new interesting: 6 (total: 4759)
+fuzz: elapsed: 39s, execs: 546673 (20133/sec), new interesting: 7 (total: 4760)
+fuzz: elapsed: 42s, execs: 596906 (16743/sec), new interesting: 7 (total: 4760)
+fuzz: elapsed: 45s, execs: 653676 (18924/sec), new interesting: 8 (total: 4761)
+fuzz: elapsed: 48s, execs: 706966 (17762/sec), new interesting: 9 (total: 4762)
+fuzz: elapsed: 51s, execs: 760404 (17816/sec), new interesting: 10 (total: 4763)
+fuzz: elapsed: 54s, execs: 833755 (24418/sec), new interesting: 12 (total: 4765)
+fuzz: elapsed: 57s, execs: 899517 (21949/sec), new interesting: 13 (total: 4766)
+fuzz: elapsed: 1m0s, execs: 956723 (19067/sec), new interesting: 14 (total: 4767)
+fuzz: elapsed: 1m0s, execs: 956723 (0/sec), new interesting: 14 (total: 4767)
+PASS
+ok  	github.com/hypercrux/hypercrux/beta/internal/query	60.238s
+== FuzzReader in github.com/hypercrux/hypercrux/internal/export, for 60s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/122 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 122/122 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 81273 (27060/sec), new interesting: 0 (total: 122)
+fuzz: elapsed: 6s, execs: 118500 (12421/sec), new interesting: 2 (total: 124)
+fuzz: elapsed: 9s, execs: 167522 (16326/sec), new interesting: 4 (total: 126)
+fuzz: elapsed: 12s, execs: 281222 (37933/sec), new interesting: 8 (total: 130)
+fuzz: elapsed: 15s, execs: 347008 (21931/sec), new interesting: 11 (total: 133)
+fuzz: elapsed: 18s, execs: 397465 (16817/sec), new interesting: 14 (total: 136)
+fuzz: elapsed: 21s, execs: 452630 (18392/sec), new interesting: 17 (total: 139)
+fuzz: elapsed: 24s, execs: 478818 (8729/sec), new interesting: 19 (total: 141)
+fuzz: elapsed: 27s, execs: 489326 (3503/sec), new interesting: 21 (total: 143)
+fuzz: elapsed: 30s, execs: 575098 (28591/sec), new interesting: 21 (total: 143)
+fuzz: elapsed: 33s, execs: 651125 (25340/sec), new interesting: 25 (total: 147)
+fuzz: elapsed: 36s, execs: 721161 (23345/sec), new interesting: 29 (total: 151)
+fuzz: elapsed: 39s, execs: 826189 (35011/sec), new interesting: 29 (total: 151)
+fuzz: elapsed: 42s, execs: 890867 (21551/sec), new interesting: 32 (total: 154)
+fuzz: elapsed: 45s, execs: 928313 (12484/sec), new interesting: 33 (total: 155)
+fuzz: elapsed: 48s, execs: 1004043 (25229/sec), new interesting: 35 (total: 157)
+fuzz: elapsed: 51s, execs: 1108615 (34881/sec), new interesting: 35 (total: 157)
+fuzz: elapsed: 54s, execs: 1195037 (28808/sec), new interesting: 35 (total: 157)
+fuzz: elapsed: 57s, execs: 1266176 (23713/sec), new interesting: 36 (total: 158)
+fuzz: elapsed: 1m0s, execs: 1360914 (31546/sec), new interesting: 37 (total: 159)
+fuzz: elapsed: 1m1s, execs: 1360914 (0/sec), new interesting: 37 (total: 159)
+PASS
+ok  	github.com/hypercrux/hypercrux/internal/export	60.711s
+== FuzzLine in github.com/hypercrux/hypercrux/internal/export, for 60s
+fuzz: elapsed: 0s, gathering baseline coverage: 0/283 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 283/283 completed, now fuzzing with 2 workers
+fuzz: elapsed: 3s, execs: 127206 (42400/sec), new interesting: 1 (total: 284)
+fuzz: elapsed: 6s, execs: 287702 (53484/sec), new interesting: 3 (total: 286)
+fuzz: elapsed: 9s, execs: 436604 (49633/sec), new interesting: 3 (total: 286)
+fuzz: elapsed: 12s, execs: 606526 (56649/sec), new interesting: 4 (total: 287)
+fuzz: elapsed: 15s, execs: 767785 (53752/sec), new interesting: 7 (total: 290)
+fuzz: elapsed: 18s, execs: 914716 (48984/sec), new interesting: 7 (total: 290)
+fuzz: elapsed: 21s, execs: 1066264 (50508/sec), new interesting: 9 (total: 292)
+fuzz: elapsed: 24s, execs: 1197153 (43632/sec), new interesting: 9 (total: 292)
+fuzz: elapsed: 27s, execs: 1342961 (48599/sec), new interesting: 9 (total: 292)
+fuzz: elapsed: 30s, execs: 1485099 (47388/sec), new interesting: 15 (total: 298)
+fuzz: elapsed: 33s, execs: 1635427 (50105/sec), new interesting: 15 (total: 298)
+fuzz: elapsed: 36s, execs: 1773004 (45852/sec), new interesting: 15 (total: 298)
+fuzz: elapsed: 39s, execs: 1885452 (37488/sec), new interesting: 18 (total: 301)
+fuzz: elapsed: 42s, execs: 2031784 (48780/sec), new interesting: 18 (total: 301)
+fuzz: elapsed: 45s, execs: 2137590 (35270/sec), new interesting: 19 (total: 302)
+fuzz: elapsed: 48s, execs: 2272054 (44821/sec), new interesting: 20 (total: 303)
+fuzz: elapsed: 51s, execs: 2445292 (57748/sec), new interesting: 21 (total: 304)
+fuzz: elapsed: 54s, execs: 2619369 (58018/sec), new interesting: 21 (total: 304)
+fuzz: elapsed: 57s, execs: 2790848 (57168/sec), new interesting: 22 (total: 305)
+fuzz: elapsed: 1m0s, execs: 2942099 (50412/sec), new interesting: 24 (total: 307)
+fuzz: elapsed: 1m0s, execs: 2942099 (0/sec), new interesting: 24 (total: 307)
+PASS
+ok  	github.com/hypercrux/hypercrux/internal/export	60.098s
+ran 6 fuzz targets

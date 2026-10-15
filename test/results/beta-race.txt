@@ -1,0 +1,26 @@
+# Every test in beta/ with the race detector (short mode: 20 killed writers instead of 200, 300 random sequences instead of 2,000)
+# recorded 2026-10-15 08:07 UTC with go1.24.7 linux/amd64, SQLite 3.53.4, at commit 20ce7b4
+# Linux 6.18.44-fc-v114, Intel(R) Xeon(R) Processor @ 2.10GHz, 2 CPUs
+# command: go test -race -count=1 -short ./beta/...
+
+ok  	github.com/hypercrux/hypercrux/beta/bench	1.032s
+ok  	github.com/hypercrux/hypercrux/beta/cmd/hypercrux	1.075s
+?   	github.com/hypercrux/hypercrux/beta/conformance	[no test files]
+ok  	github.com/hypercrux/hypercrux/beta/conformance/betax	12.589s
+ok  	github.com/hypercrux/hypercrux/beta/conformance/cmdtest	3.890s
+ok  	github.com/hypercrux/hypercrux/beta/conformance/zerox	8.634s
+ok  	github.com/hypercrux/hypercrux/beta/difftest	34.879s
+ok  	github.com/hypercrux/hypercrux/beta/hypercrux	42.134s
+ok  	github.com/hypercrux/hypercrux/beta/internal/crash	1.851s
+ok  	github.com/hypercrux/hypercrux/beta/internal/errs	1.013s
+ok  	github.com/hypercrux/hypercrux/beta/internal/fault	5.777s
+ok  	github.com/hypercrux/hypercrux/beta/internal/format	7.103s
+ok  	github.com/hypercrux/hypercrux/beta/internal/fsys	1.022s
+ok  	github.com/hypercrux/hypercrux/beta/internal/logfile	36.995s
+ok  	github.com/hypercrux/hypercrux/beta/internal/procs	14.321s
+ok  	github.com/hypercrux/hypercrux/beta/internal/query	20.008s
+ok  	github.com/hypercrux/hypercrux/beta/internal/rules	1.448s
+ok  	github.com/hypercrux/hypercrux/beta/internal/store	17.115s
+ok  	github.com/hypercrux/hypercrux/beta/internal/value	1.853s
+ok  	github.com/hypercrux/hypercrux/beta/internal/vecmath	1.636s
+ok  	github.com/hypercrux/hypercrux/beta/sqlcorpus	3.405s
