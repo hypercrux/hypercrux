@@ -896,3 +896,16 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   EXPORT.md stay 0.x's and the shared export format's.
   `scripts/check-docs.py` checks their links and runs their examples
   (R3.md).
+- On 15 October 2026 the owner said to carry on with R4, the release run,
+  and left the Beta's version to the coordinator, which chose 0.3.0-beta.1,
+  published as a pre-release. Go versions the whole module by its tags, 0.x
+  and the Beta together, so the Beta's tag is a version of the module, above
+  0.2.0. As a pre-release it never becomes the latest release: GitHub's
+  latest stays 0.x's, whose files the site's download page links to, and
+  `go get` keeps a 0.x program on 0.x unless it names the Beta's version.
+  It's 0.3 because 0.x's fixes come as 0.2.x, below it, and a beta of 1.0
+  would promise more than an engine that runs on Linux alone and takes a
+  subset of SQL. Later releases of the Beta go up as 0.3.0-beta.2 and on.
+  The Beta stays in `beta/`, beside 0.x, which stays the stable line, and
+  RELEASING.md's rule that every release is a full release still holds for
+  0.x.
