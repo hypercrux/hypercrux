@@ -25,6 +25,7 @@ Version 0.2.0 · Apache License 2.0 · [hypercrux.com](https://hypercrux.com)
 - [What HyperCrux promises, and what it doesn't](#what-hypercrux-promises-and-what-it-doesnt)
 - [How it was tested](#how-it-was-tested)
 - [Build it yourself](#build-it-yourself)
+- [The Beta, a new engine in Go](#the-beta-a-new-engine-in-go)
 - [The name](#the-name)
 - [License](#license)
 
@@ -363,6 +364,23 @@ go install github.com/hypercrux/hypercrux/cmd/hypercrux@latest
 From a clone, `go build ./cmd/hypercrux` builds the binary and `go test ./...`
 runs the tests. The release binaries are built by
 [the release workflow](.github/workflows/release.yml) on GitHub.
+
+## The Beta, a new engine in Go
+
+The Beta is a new engine for HyperCrux, in [beta/](beta/). It keeps the four
+handles on one record, with 0.x's Go API and its command, and it's written in
+Go with no SQLite and no C. Its data lives in one append-only file on disk,
+with a copy in memory in each process that opens it. In the run recorded on
+14 October 2026, both engines on one machine, a search of 100,000 vectors of
+384 values took 29 ms on the Beta and 312 ms on 0.x
+([test/results/beta-bench.txt](test/results/beta-bench.txt)). The copy costs
+a slower open and memory in every process, and the Beta runs on Linux only.
+It hasn't been released yet.
+
+[beta/README.md](beta/README.md) says how to build and use it, and
+[beta/MOVING.md](beta/MOVING.md) how to move a program and its data across
+from 0.x, with every difference and what to do about it. The rest of this
+README is 0.x's manual.
 
 ## The name
 

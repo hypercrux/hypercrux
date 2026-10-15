@@ -1,9 +1,11 @@
 # The Beta's SQL
 
-This document sets out the Beta's SQL: which statements it takes, and the
-answers they give. Task P5 wrote it on 7 October 2026, from BETA.md's
-"Queries and SQL" and from 0.x's answers. The tasks that build the SQL work
-from it: Q1 to Q6, G3 and G4.
+This document is the reference for the Beta's SQL: which statements it
+takes, and the answers they give. Task P5 wrote it on 7 October 2026, from
+BETA.md's "Queries and SQL" and from 0.x's answers. The tasks that built the
+SQL, Q1 to Q6, G3 and G4, worked from it, and the tasks after them kept it
+in step with the code. [README.md](README.md) says how to try the Beta's
+SQL, and [MOVING.md](MOVING.md) what to do about each difference from 0.x.
 
 ## The rule behind it
 

@@ -6,10 +6,15 @@ database reads the whole log into memory, so the file holds only what can't
 be worked out again: the records with their fields and links, and each
 table's field order and vector size.
 
-This document describes every byte, so a program can read a Beta file with
-nothing else. 0.x keeps its databases in SQLite, as [FORMAT.md](../FORMAT.md)
-describes, and its export format is in [EXPORT.md](../EXPORT.md). The design
-behind this format, and the reasons for it, are in [BETA.md](../BETA.md).
+This document is the Beta's FORMAT.md. It describes every byte, and every
+rule a program keeps while it writes the file, from the write lock and its
+waits to compaction and the file systems a database can live on. So a
+program can read and write a Beta file with nothing else. 0.x keeps its
+databases in SQLite, as the [FORMAT.md](../FORMAT.md) at the root describes,
+and its export format, which the Beta reads and writes too, is in
+[EXPORT.md](../EXPORT.md). The design behind this format, and the reasons
+for it, are in [BETA.md](../BETA.md). [README.md](README.md) says how to
+build and use the Beta.
 
 The Beta hasn't been released, and this format can still change before it
 is. A change that an older build could misread raises the format version,
@@ -290,9 +295,42 @@ batch in the file too, so a put of a longer one is damage.
 ## Compaction
 
 Compaction writes a new file holding only the live data, and then renames
-it over the database. BETA.md describes the steps. The new file has a header
-with the next generation and its last four fields set, then the compacted
-part: ordinary batches, each with its marker, holding
+it over the database. Only the holder of the write lock compacts, and it
+holds the lock until the new file has taken the path, so the old file never
+changes again, and a copy taken at any moment holds the one file or the
+other. Compacting is also how deleted data leaves the disk, the job
+`VACUUM` does in 0.x.
+
+### When HyperCrux compacts
+
+HyperCrux compacts at the end of a commit, still holding the write lock,
+once the commits since the last compaction have made half the file dead,
+and a megabyte at least, or once 100,000 commits follow the compacted part.
+`Compact()` in Go and `hypercrux compact` compact on demand.
+
+Dead bytes are the changes in the file that no longer reach the state,
+which a compaction leaves out: a put's old values, a deleted record with its
+links, a dropped table with its records, and a removed link with the change
+that removed it. Each process counts them in its copy as it applies the
+changes, and counts the commits from the sequence numbers, so every
+HyperCrux process takes the same choice from the same file, and a
+compaction starts both counts from nothing. A batch's head, its checksum and
+its marker never count, so a database that only grows is compacted only at
+the limit on commits. [tasks/C1.md](tasks/C1.md) sets out what each change
+makes dead, byte by byte.
+
+That rule is HyperCrux's own, and the format doesn't need it. A writer may
+compact whenever it holds the write lock, or never, and every reader takes
+a compacted file the same way, by the rules below. When a compaction fails
+before its rename, HyperCrux holds off until the file has grown as much
+again as it had since its last compaction, and each process keeps that
+hold-off to itself.
+
+### What a compacted file holds
+
+The new file has a header with the next generation and its last four fields
+set, then the compacted part: ordinary batches, each with its marker,
+holding
 
 - every table, in byte order of its name, as a create change with its vector
   size and its whole field list, then a put for each of its records, in byte
@@ -318,6 +356,64 @@ the end, so it can write the header last.
 Nobody can read the new file before the rename, and the file is synced
 once before it, so the compacted part's markers need no sync of their own
 either.
+
+### The steps
+
+The holder of the write lock compacts in five steps:
+
+1. It creates `NAME.compact` beside the database, where NAME is the
+   database's file name, with the database's permissions and, where it's
+   allowed to, its owner and group, and takes `flock` on it before it writes
+   anything, so the new file is locked before anyone can see what's in it.
+   The creation fails if a file of that name is there already; the writer
+   then removes it if it can lock it, as below, and creates it again.
+2. It writes the current state into it, as the section above describes,
+   and the header last, once it knows where the compacted part ends. Each
+   table's create change carries its vector size and its fields in order,
+   so empty tables and vector sizes come through.
+3. It syncs the new file.
+4. It checks that the file at the path is still the one it locked, by
+   device and inode number, so a backup moved into place while it ran is
+   left in place, and that the database still keeps the rules for the file:
+   one name, at a path whose last element hasn't become a symbolic link. A
+   move that lands between that check and the rename is replaced all the
+   same, and the restore is lost without an error. Then it renames the new
+   file to the database's path and syncs the folder. This rename is the
+   switch: before it, the database is generation N; after it, N+1.
+5. It moves over to the new file, whose lock it holds now as the write
+   lock, and closes the old one, which lets go of the old file's lock. It
+   lets go of the new file's lock as it would at the end of a commit. A
+   writer that was waiting for the old file's lock gets it, finds that the
+   path names another file, and starts again there.
+
+If creating, writing or syncing the new file fails, because the disk is
+full for example, or the check or the rename fails, the writer removes
+`NAME.compact` and carries on with the old file, which is still whole. A
+commit made under the same lock before the compaction has succeeded either
+way. If the folder's sync after the rename fails, nobody can tell which file
+a power cut would leave at the path, so the writer keeps the write lock and
+writes nothing more until it closes the database, as after a failed commit
+it can't cut back (see Writing). Each writer syncs the folder once before
+its first commit into a file whose name it didn't make last itself, so a
+commit never relies on a rename that a power cut could take back, whoever
+made the rename and however its folder sync went.
+
+A crash before the rename leaves the old file whole, and a leftover
+`NAME.compact`. A crash after it leaves the new file whole.
+
+### `NAME.compact`
+
+- Only the holder of the write lock creates `NAME.compact`, and it holds
+  `flock` on it for as long as the compaction runs.
+- The next holder of the write lock removes a leftover one, once it has
+  checked that the file it locked is still the one at the path, and only
+  when it can take `flock` on `NAME.compact` itself, since one that's
+  locked is a compaction under way. Nobody else ever removes it.
+- A writer waiting for the write lock looks for `NAME.compact` between its
+  tries, and while one is there and locked, it keeps waiting past its usual
+  10 seconds, as "The write lock and its waits" says.
+
+### Reading a compacted file
 
 A reader applies the compacted part like any other batches. A put in it
 can carry its record's vector in place of a vector block, and a reader
@@ -379,11 +475,21 @@ marker. The log ends at the first batch that isn't marked, or at the end of
 the file. Whatever comes after the last marked batch is a commit under way,
 the remains of one a crash cut short, or damage.
 
-- **Opening** applies every marked batch in order. A batch that counts but
-  whose changes are malformed or break the rules is damage, and opening
-  fails. Then opening looks past the end of the log, as below, so damage in
-  the middle of a file is never taken for its end.
-- **A reader that keeps the database open** reads on from where it
+- **Opening** applies every marked batch in order, checking each checksum
+  on the way. A batch that counts but whose changes are malformed or break
+  the rules is damage, and opening fails. Then opening looks past the end of
+  the log, as below, so damage in the middle of a file is never taken for
+  its end. Only then does it try the write lock, without waiting. If it
+  gets the lock, it checks the end of the log, as the next section says.
+  If not, whoever holds the lock checks before it appends anything.
+- **A reader that keeps the database open** makes one `stat` call on the
+  database's path before each read. When the path names another file than
+  the one it has open, by device and inode number, a compaction or a backup
+  moved into place has replaced it, and the reader reads the new file from
+  its start, as on opening, having dropped what it held of the old one.
+  Linux keeps a replaced file alive for as long as someone has it open, so
+  a read already under way finishes on the old file. Otherwise, when the
+  file is longer than the point it has applied, it reads on from where it
   stopped. For each batch it reads the first 28 bytes, then checks for a
   whole marker at the batch's end before reading the rest, so it never reads
   a commit still being written. It applies each batch that's complete and
@@ -400,13 +506,14 @@ the remains of one a crash cut short, or damage.
   A file shorter than the point it has applied is damage too, or a copy
   over the live database.
 
-**Looking past the end of the log.** A reader searches from the end of the
-log to the end of the file for the marker magic number, at every offset. A
-whole marker found there whose sequence number is at least the next one the
-log expects shows that a commit was made past the end of the log, so the
-file is damaged. The rule about the sequence number keeps an older copy of
-this database, stored as a value inside a torn batch, from passing for a
-commit.
+### Looking past the end of the log
+
+A reader searches from the end of the log to the end of the file for the
+marker magic number, at every offset. A whole marker found there whose
+sequence number is at least the next one the log expects shows that a commit
+was made past the end of the log, so the file is damaged. The rule about the
+sequence number keeps an older copy of this database, stored as a value
+inside a torn batch, from passing for a commit.
 
 In a compacted file, a log that ends before the compacted part does is
 damage too, since a compacted file is whole before anyone can see it.
@@ -484,20 +591,57 @@ a damage error, and `hypercrux check` names the batch.
 
 ## Writing
 
-One process writes at a time. A writer:
+One process writes at a time, and a program that writes a Beta file has to
+keep to all of this. Reading takes no lock.
 
-1. takes an exclusive `flock` on the database file, then checks that the
-   file it locked is still the one at the path, by device and inode number,
-   since a compaction or a backup moved into place may have replaced it,
-   and that the last marker it applied is still where it was. A replaced
-   file is read afresh before anything is written. A marker that has
-   changed, or a file shorter than the point the writer has applied, can't
-   come from HyperCrux, since nothing before a marker ever changes: the file
-   was copied over or damaged, and the writer reports damage;
-2. checks the end of the log, as above;
-3. appends its batch, having synced the folder first when this is its first
+### The write lock and its waits
+
+The write lock is an exclusive `flock` on the database file.
+
+- **Taking it.** HyperCrux first takes a mutex inside its process, so two
+  goroutines never write through one open file at once, then `flock`,
+  trying without waiting and pausing between tries, for up to 10 seconds
+  for the two together, as 0.x waits for SQLite's lock. When the wait runs
+  out, the commit fails before anything is written, with an error that
+  wraps `ErrLockTimeout`. A program of its own takes `flock` through a file
+  it opened itself, and lets one thread at a time write through it, since
+  every thread that shares an open file shares its lock.
+- **While a compaction runs,** writers wait it out, the one whose commit
+  set it off included. Between its tries, a waiting writer looks for
+  `NAME.compact`, and while one is there and locked, it keeps waiting past
+  the 10 seconds, until 10 seconds after it last found it locked. So a
+  writer has time to get the lock as a compaction lets go, and one stuck
+  after its rename holds writers up no longer than a stuck commit does.
+- **Holding it,** the writer checks that the file it locked is still the
+  one at the path, by device and inode number. If a compaction or a backup
+  moved into place has replaced it, the writer lets go, reads the new file
+  from its start, and starts again on it.
+- **Letting go** goes in the reverse order: `flock` first, then the mutex.
+- **No child process holds it.** Go opens every file with `O_CLOEXEC` and
+  can't fork without exec, so no child process can end up holding the
+  lock. A program in another language needs the same care, since a child
+  that keeps the open file keeps its lock.
+
+### A commit
+
+A writer:
+
+1. takes the write lock, as above, and checks that the last marker it
+   applied is still where it was. A replaced file is read afresh before
+   anything is written. A marker that has changed, or a file shorter than
+   the point the writer has applied, can't come from HyperCrux, since
+   nothing before a marker ever changes: the file was copied over or
+   damaged, and the writer reports damage;
+2. checks the end of the log, as above, which reads on to its end, so the
+   writer applies every batch it hasn't applied yet and makes its changes
+   against the latest state;
+3. checks each change against that state, as Changes describes, and writes
+   nothing if one breaks a rule;
+4. appends its batch, having synced the folder first when this is its first
    commit into a file whose name it didn't make last itself, syncs the file,
    and appends the marker.
+
+### A commit that fails
 
 If appending, syncing or writing the marker fails, the writer cuts the file
 back to just after the last marker before it lets go of the lock. It writes
@@ -512,25 +656,37 @@ then deals with what's left as with what a crash leaves: it marks the
 failed batch when it counts, since the commit's outcome is unknown, and
 cuts it otherwise.
 
+So an error from a commit means the commit isn't in the file, unless the
+writer is stuck that way, when its outcome is unknown. Once its commit is
+in the file, HyperCrux's `Update` returns nil, even when letting go of the
+lock fails after it, so a caller never makes a commit twice; the lock then
+goes at the handle's next commit, or when it closes. A power cut can still
+land between a failed sync and the cut, but then no caller is left to see
+the error.
+
 A writer works from the database's real path, with every symbolic link
 resolved, and writes to no file with more than one name, since a compaction
-replaces the file at one path only.
+replaces the file at one path only (see The rules for the file).
 
-**Creating a database.** A new database starts as a file holding only its
-header, written beside the database under a name of its own, the
-database's name with `.new-` and random letters added. The creator takes
-`flock` on it before writing, syncs it, then renames it to the database's
-path in a way that fails if a file has appeared there meanwhile (on Linux,
-`renameat2` with `RENAME_NOREPLACE`), syncs the directory, and only then
-lets go of the lock. Until the directory sync makes the rename last, nobody
-else can lock the new database, so nobody can commit to a file a power cut
-could still take away. A creator whose rename fails removes its own file and
-opens the database at the path instead. On a file system without that kind
-of rename, creating a database fails, since a plain rename could replace a
-database that appeared meanwhile. So a file at the path always has a whole
-header, or is empty, and only ever one name. A crash can leave a `.new-`
-file behind. The next holder of the write lock removes any it can lock, and
-leaves alone one it can't, which is a creation under way.
+### Creating a database
+
+A new database starts as a file holding only its header, written beside the
+database under a name of its own, the database's name with `.new-` and
+random letters added. The creator takes `flock` on it before writing, syncs
+it, then renames it to the database's path in a way that fails if a file has
+appeared there meanwhile (on Linux, `renameat2` with `RENAME_NOREPLACE`),
+syncs the directory, and only then lets go of the lock. Until the directory
+sync makes the rename last, nobody else can lock the new database, so nobody
+can commit to a file a power cut could still take away. A creator whose
+rename fails removes its own file and opens the database at the path
+instead. On a file system without that kind of rename, creating a database
+fails, since a plain rename could replace a database that appeared
+meanwhile. So a file at the path always has a whole header, or is empty, and
+only ever one name. A crash can leave a `.new-` file behind. The next holder
+of the write lock removes any it can lock, and leaves alone one it can't,
+which is a creation under way.
+
+### An empty file
 
 An empty file, made with `touch` for example, holds no database yet. A
 writer makes one of it while holding the write lock on the empty file, once
@@ -538,9 +694,6 @@ it has checked that the file is still the one at the path and still empty:
 it writes a new file in the same way, under the same lock rules, and renames
 it over the empty one. Anyone who had the empty file open notices the new
 one, as after a compaction.
-
-A program that writes a Beta file has to keep to all of this. Reading takes
-no lock.
 
 ## Copies
 
@@ -551,6 +704,61 @@ copy of the whole file can catch the end of the log while it's cut and
 written again, after a failed commit or by the check after a crash, and
 then hold the start of one batch and the end of another, which reads as
 damage. Copying again gives a good copy.
+
+### Backing up and restoring
+
+- **To back up,** copy the file somewhere else, while it's in use if need
+  be. Commits only add to the end of the file, and compaction swaps in a
+  finished file in one step, so a copy taken at any moment is a database up
+  to some commit, apart from the rare copy above that reads as damage.
+- **To restore,** stop the processes using the database and copy the
+  backup in, or copy it beside the database and move it into place with
+  `mv`, which renames it over the database. Running processes notice the
+  new file at their next read or commit, and read it from its start.
+- **What a restore can lose.** A commit that races the move is lost, along
+  with everything after the backup. A compaction that races it can undo the
+  restore, by renaming the old data over the backup, as step 4 of the
+  compaction says. The file's owner and the folder's sync are up to
+  whoever moves it.
+- **Never copy anything over a live database.** A process that has read
+  the file finds bytes it read changed under it, which it takes for damage.
+
+## The rules for the file
+
+A Beta database keeps its promises only on a file system and a drive that
+keep theirs. The Beta runs on Linux, and these rules are Linux's.
+
+- **Local file systems only.** Network file systems such as NFS and SMB,
+  and folders shared into containers through a virtual machine, don't keep
+  the locks honest.
+- **The file's data in step with its size.** The file system has to keep a
+  file's data in step with its size through a power cut, as ext4 does by
+  default (data=ordered), and XFS and btrfs do. ext4 mounted with
+  data=writeback can show a file's old blocks at its end after a power cut,
+  and those can hold a batch cut back after a failed commit, which the next
+  check would take back in.
+- **Syncs that reach the drive.** On Linux, a sync returns only once the
+  data is on the drive, and drives that honour cache flushes keep it
+  through a power cut. That one rule covers commits and compaction alike.
+- **The real path.** A database is opened by its real path, with symbolic
+  links resolved and a relative path made absolute, and a new one by its
+  folder's real path and its name.
+- **A regular file with one name.** A file with more than one hard link is
+  refused, because compaction can only replace the file at one path, and so
+  is anything else at the path, such as a folder or a FIFO, before anything
+  opens it. A symbolic link that leads to nothing is refused too, since a
+  new database renamed into place would replace the link. A file that
+  breaks these rules and takes the path later is refused at the reload, a
+  hard link made while the database is open stops its writes until it's
+  gone, and a path whose last element has become a symbolic link stops a
+  compaction before its rename.
+- **A torn end that won't read.** A drive can leave a sector that a power
+  cut tore failing its own check, so a read of it fails with an I/O error
+  until something writes it again. In the torn end of the log, that fails
+  every open and every check with the read's error. Nothing is cut and
+  nothing is lost, and the database can't open until the end is cut back by
+  hand: keep a copy of the file, then cut it to just past the last marker
+  that reads, with `truncate` for example.
 
 ## What isn't in the file
 
