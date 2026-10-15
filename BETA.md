@@ -587,9 +587,33 @@ measure them now.
 | Open a compacted database of 100,000 records with 384-value vectors | not recorded | 250 ms | Reading about 160 MB from the page cache into fresh memory, checking its checksums with the processor's CRC32C instruction, computing the vectors' norms and building 100,000 records. Other processes take about as long to reload after a compaction |
 
 On 14 October 2026, after the review, the owner accepted for the Beta the
-targets it still misses: the batched put, by about twice, and the open, the
-filtered search and the walks, by less. R4 records them beside their
-targets, with where their time goes, from R2.md.
+targets it still missed then: the batched put, the open, the filtered search
+and the walks (R2.md, part 2's second question). In the run recorded for the
+release, on 15 October 2026 at `9096d53`, three are still missed, each
+beside its time here, with where the time goes from R2.md's profiles:
+
+- **The batched put,** 16.1 µs against 5 µs. Writing and syncing each batch
+  of 1,000, about 1.6 MB, takes about 3 µs a put while the processor waits,
+  and the processor's time goes on the public package's conversion and check
+  of each vector, the store's put, and the batch and its write. Each vector
+  is checked three times and copied four times, and leaving out the repeats
+  would save about a tenth, which doesn't reach the target. Its three runs
+  took 12.9, 16.1 and 25.3 µs.
+- **The open,** 323 ms against 250 ms. Applying the vector blocks takes
+  about half of it, mostly zeroing the arrays' fresh memory and the dot
+  products that check each vector and give its norm, and the records'
+  general put path and decoding the batches take most of the rest, which
+  "Left out of the Beta" names.
+- **The walks,** 3.03 µs against 3 µs one link out, where two fifths of the
+  time is the `stat` each read makes to follow other processes, and 43.9 µs
+  against 40 µs three links out, where nearly half sorts each round's
+  records by key, as 0.x orders them.
+
+The filtered search, 9.26 ms against 12 ms, meets its target in this run,
+where it took 14.1 ms in the run after L1. The release run's machine was
+slower at reading memory than the earlier runs' (R4.md), which put the
+search of 100,000 vectors at 58.7 ms, within its 65 ms, against 29 ms after
+L1. 0.x ran on the same machine in the same run.
 
 ## The work, task by task
 

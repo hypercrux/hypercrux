@@ -3,7 +3,7 @@ name: beta
 # The Beta's own jobs, beside the test workflow's (task P1 in BETA.md).
 # Releases of 0.x wait for the test workflow only, which already runs the
 # Beta's tests on amd64 with the race detector; nothing here holds one up.
-# When the Beta itself is released (task R4), its release waits for these.
+# The Beta's releases wait for these and for the test workflow (task R4).
 
 on:
   push:

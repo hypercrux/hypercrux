@@ -81,8 +81,8 @@ The Beta's jobs (task R4):
   built again by hand. Straight after the plan, whatever the builds then do,
   it makes that release a pre-release if it isn't one, with `gh release edit
   --prerelease --latest=false` (`contents: write`, as `beta-release` has),
-  and says which in a notice. A full release of the Beta could stay the latest, and
-  the site's links to the latest release would lose 0.x's files.
+  and says which in a notice. A full release of the Beta could stay the
+  latest, and the site's links to the latest release would lose 0.x's files.
 - **beta-linux.** Builds `./beta/cmd/hypercrux` with
   `CGO_ENABLED=0 go build -trimpath -ldflags '-s -w'`, linux/amd64 on
   `ubuntu-latest` and linux/arm64 on `ubuntu-24.04-arm`, and checks each
@@ -96,9 +96,9 @@ The Beta's jobs (task R4):
   tag and the release in one step with `gh release create --target <commit>
   --prerelease --latest=false`, with `contents: write`, which only it and
   `beta-prerelease` have among the Beta's jobs, and a `concurrency` group per
-  tag, as 0.x's has. For a release published by hand
-  or built again, it attaches the files to that release, and writes the
-  notes if the release has none.
+  tag, as 0.x's has. For a release published by hand or built again, it
+  attaches the files to that release, and writes the notes if the release
+  has none.
 - **beta-dry-run.** A dry run's last job, in place of beta-release: below.
 
 0.x's notes come from the table in its release job's "Checksums and notes"
