@@ -29,6 +29,22 @@ jobs:
           go-version: "1.27.x"
       - run: sh scripts/check-beta.sh
 
+  # The docs' links and examples (task R3): the links in the Beta's docs
+  # to files and anchors here, and every example they mark to run, on
+  # the Beta's package and command and on 0.x's command, built in the
+  # job. 0.x's command needs cgo, and ubuntu-latest's C compiler builds
+  # it. The site's repository is private, so the site's posts about the
+  # Beta are checked with the site's path by whoever publishes them,
+  # before they go up.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.27.x"
+      - run: python3 scripts/check-docs.py
+
   # The Beta's tests on ARM Linux, with the race detector, including the
   # search loop's check for the same bits as on x86.
   arm64:

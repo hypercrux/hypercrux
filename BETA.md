@@ -530,8 +530,10 @@ functions.
 - The `hypercrux` command with the same verbs apart from `adopt`, plus
   `import`, `export` and `compact`. Other languages use it, as with 0.x, and
   each run opens the database afresh, reading the whole file.
-- `FORMAT.md` for the new format, as complete as 0.x's. Until the release
-  it's [beta/FORMAT.md](beta/FORMAT.md).
+- `FORMAT.md` for the new format, as complete as 0.x's:
+  [beta/FORMAT.md](beta/FORMAT.md), which holds every rule a program keeps
+  to read and write a Beta file, compaction's steps and the rules for the
+  file among them (R3).
 
 ### Rules for the file
 
@@ -585,8 +587,8 @@ measure them now.
 | Open a compacted database of 100,000 records with 384-value vectors | not recorded | 250 ms | Reading about 160 MB from the page cache into fresh memory, checking its checksums with the processor's CRC32C instruction, computing the vectors' norms and building 100,000 records. Other processes take about as long to reload after a compaction |
 
 On 14 October 2026, after the review, the owner accepted for the Beta the
-targets it still misses: the batched put, by just over twice, and the open,
-the filtered search and the walks, by less. R4 records them beside their
+targets it still misses: the batched put, by about twice, and the open, the
+filtered search and the walks, by less. R4 records them beside their
 targets, with where their time goes, from R2.md.
 
 ## The work, task by task
@@ -879,12 +881,18 @@ Everything 0.x tests, and more, on x86 and ARM Linux alike:
   0.x's SQLite also holds a whole record to 1,000,000,000 bytes, so a record
   whose values come within a few bytes of that, or add up to more, goes into
   the Beta and not into 0.x (L1.md).
-- The same day the owner accepted for the Beta the targets it still misses,
-  which R4 records with their reasons (R2.md, part 2's second question, and
-  "Targets").
+- On 14 October 2026, in the same answers that chose L1, the owner accepted
+  for the Beta the targets it still misses, which R4 records with their
+  reasons (R2.md, part 2's second question, and "Targets").
 - The Beta's Go package is `beta/hypercrux`, package `hypercrux`, beside
   0.x's until the release, so a program moves across by changing its import
   path (P3).
 - The SQL subset is set out in [beta/SQL.md](beta/SQL.md) (P5). It keeps
   0.x's function form of `walk()`, and the walk as a table has the columns
   `key` and `depth`.
+- R3 settled the Beta's docs on 15 October 2026: the format document stays
+  [beta/FORMAT.md](beta/FORMAT.md), beside beta/README.md, beta/SQL.md and
+  the notes on moving from 0.x, beta/MOVING.md, and the root's FORMAT.md and
+  EXPORT.md stay 0.x's and the shared export format's.
+  `scripts/check-docs.py` checks their links and runs their examples
+  (R3.md).

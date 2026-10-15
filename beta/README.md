@@ -599,6 +599,9 @@ runs by hand.
     as an artifact, to add to the package's `testdata/fuzz`.
   - `planted`: `scripts/planted.sh` in five shards side by side, each with
     every fifth bug in `plants.txt`.
+  - `docs`: `scripts/check-docs.py` with no argument, which checks the links
+    and runs the examples in the Beta's docs. The site's posts are checked
+    with the site's path before they go up.
 - `long` runs only when started by hand: six jobs on amd64 and six on
   arm64, side by side, with hours of fuzzing, the crash suites with many
   seeds, the many-process harness, the differential harness and every
