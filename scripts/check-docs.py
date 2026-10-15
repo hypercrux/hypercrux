@@ -2,11 +2,17 @@
 # Copyright HyperCrux.com 2026
 # SPDX-License-Identifier: Apache-2.0
 #
-# Checks the links and runs the examples in the Beta's docs and in the
-# site's posts about it (task R3). It takes the path of a clone of the site,
-# github.com/photozeitgeist/hypercrux.com, and needs Go and Hugo.
+# Checks the links and runs the examples in the Beta's docs (task R3), and
+# in the site's posts about the Beta as well when it's given the path of a
+# clone of the site, github.com/photozeitgeist/hypercrux.com. It needs Go,
+# and Hugo for the site.
 #
-#   python3 scripts/check-docs.py ../hypercrux.com
+#   python3 scripts/check-docs.py                   # this repository's docs
+#   python3 scripts/check-docs.py ../hypercrux.com  # and the site's posts too
+#
+# The site's repository is private, so where the site can't be checked out,
+# as in CI, it runs with no argument. Whoever publishes the posts runs it with
+# the site's path before they go up.
 #
 # Links. It checks three kinds, and lists the rest, which it leaves alone,
 # since a check here can't reach other websites:
@@ -14,7 +20,8 @@
 #     and to their headings' anchors, worked out as GitHub works them out;
 #   - links to the site's own pages and images, https://hypercrux.com/...,
 #     looked up in the site as `hugo --quiet -d DIR` builds it, in a folder
-#     outside both repositories, with the anchors in the page;
+#     outside both repositories, with the anchors in the page. Without the
+#     site, they're left alone and listed with the others;
 #   - links to GitHub's pages of this repository, .../blob/main/PATH and
 #     .../tree/main/PATH, by the file or folder they name, with the anchor.
 #
@@ -29,8 +36,8 @@
 #                     has to match it exactly.
 # The examples of one doc run in order in one new folder, so a block can use
 # the files the blocks before it made. Both commands are built here and now,
-# the Beta's with CGO_ENABLED=0. Every other code block is left alone, and
-# counted.
+# the Beta's with CGO_ENABLED=0 and 0.x's with cgo, which needs a C compiler.
+# Every other code block is left alone, and counted.
 import difflib
 import html
 import html.parser
@@ -311,6 +318,10 @@ def check_links(doc, paras, site, tally, left):
             if host in SITE_HOSTS:
                 if parts.scheme != "https":
                     problem(where, f"{url} should use https")
+                if site is None:
+                    left.append((where, url))  # the site wasn't given
+                    tally["site_left"] += 1
+                    continue
                 check_site_path(where, parts.path, anchor, site)
                 tally["site"] += 1
                 continue
@@ -478,29 +489,37 @@ def build_site(site, tmp):
 
 
 def main():
-    if len(sys.argv) != 2:
-        sys.exit("usage: python3 scripts/check-docs.py SITE, where SITE is a clone of the site's repository")
-    site_src = os.path.realpath(sys.argv[1])
-    if not os.path.isfile(os.path.join(site_src, "config.toml")):
-        sys.exit(f"{site_src} isn't the site: it has no config.toml")
-    for tool in ("go", "hugo"):
+    if len(sys.argv) > 2 or sys.argv[1:] in (["-h"], ["--help"]):
+        sys.exit("usage: python3 scripts/check-docs.py [SITE]\n"
+                 "SITE is the path of a clone of the site's repository. With it, the site's\n"
+                 "posts about the Beta are checked too. Without it, the docs' links to the\n"
+                 "site's pages are left alone, and listed.")
+    site_src = None
+    if len(sys.argv) == 2:
+        site_src = os.path.realpath(sys.argv[1])
+        if not os.path.isfile(os.path.join(site_src, "config.toml")):
+            sys.exit(f"{site_src} isn't the site: it has no config.toml")
+    for tool in ("go", "hugo") if site_src else ("go",):
         if not shutil.which(tool):
             sys.exit(f"{tool} isn't on PATH, and the check needs it")
     tmp = tempfile.mkdtemp(prefix="hypercrux-docs-")
-    for repo in (ROOT, site_src):
+    for repo in (ROOT, site_src) if site_src else (ROOT,):
         if os.path.commonpath([repo, tmp]) == repo:
-            sys.exit(f"the temporary folder {tmp} is inside {repo}; set TMPDIR to a folder outside both")
+            sys.exit(f"the temporary folder {tmp} is inside {repo}; set TMPDIR to a folder outside it")
     try:
-        site = build_site(site_src, tmp)
+        site = build_site(site_src, tmp) if site_src else None
         docs = []
-        for base, names, in_site in ((ROOT, REPO_DOCS, False), (site_src, SITE_DOCS, True)):
+        sources = [(ROOT, REPO_DOCS, False)]
+        if site_src:
+            sources.append((site_src, SITE_DOCS, True))
+        for base, names, in_site in sources:
             for d in names:
                 name = "site/" + d if in_site else d
                 if os.path.isfile(os.path.join(base, d)):
                     docs.append(Doc(os.path.join(base, d), name, in_site))
                 else:
                     problem(name, "the doc isn't there")
-        tally = {"repo": 0, "site": 0, "github": 0}
+        tally = {"repo": 0, "site": 0, "github": 0, "site_left": 0}
         left = []
         counts = {"sh": 0, "sh0x": 0, "go": 0, "outputs": 0, "left": 0}
         all_blocks = []
@@ -520,14 +539,21 @@ def main():
         shutil.rmtree(tmp, ignore_errors=True)
 
     in_site = sum(1 for d in docs if d.in_site)
-    print(f"Docs: {len(docs)}, {len(docs) - in_site} in this repository and {in_site} posts in the site.")
+    if site_src:
+        print(f"Docs: {len(docs)}, {len(docs) - in_site} in this repository and {in_site} posts in the site.")
+    else:
+        print(f"Docs: {len(docs)}, all in this repository. The site wasn't given, so its posts weren't read.")
     for name, path in posts:
         print(f"  {name} is at https://hypercrux.com{path or ' (not found)'}")
-    print(f"Links checked: {sum(tally.values())}")
+    print(f"Links checked: {tally['repo'] + tally['site'] + tally['github']}")
     print(f"  {tally['repo']} to files, folders and anchors in this repository")
-    print(f"  {tally['site']} to the site's own pages and images, in the site as Hugo built it")
+    if site_src:
+        print(f"  {tally['site']} to the site's own pages and images, in the site as Hugo built it")
     print(f"  {tally['github']} to GitHub's pages of this repository, by the files they name")
-    print(f"Links left alone, since a check here can't reach other websites: {len(left)}")
+    print(f"Links left alone: {len(left)}")
+    if tally["site_left"]:
+        print(f"  {tally['site_left']} to the site's own pages, which weren't looked up, since the site wasn't given")
+    print(f"  {len(left) - tally['site_left']} to other websites, which a check here can't reach")
     for where, url in left:
         print(f"  {url}  ({where})")
     ran = counts["sh"] + counts["sh0x"] + counts["go"]

@@ -559,7 +559,8 @@ go test -short ./beta/...    # 20 killed writers instead of 200, 300 sequences i
 HYPERCRUX_BIN=/path/to/hypercrux go test ./beta/conformance/cmdtest
 HYPERCRUX_DIFF_SEQUENCES=50000 go test -run TestZeroxAgainstItself ./beta/difftest   # a long run
 sh scripts/check-beta.sh     # the rules for this folder, and the board against BETA.md
-python3 scripts/check-docs.py ../hypercrux.com   # the docs' links and examples, with a clone of the site
+python3 scripts/check-docs.py   # the docs' links and examples
+python3 scripts/check-docs.py ../hypercrux.com   # and the site's posts too, with a clone of the site and Hugo
 sh scripts/fuzz.sh 10m       # every fuzz target, for 10 minutes each
 sh scripts/planted.sh        # switches on each planted bug, which the tests must catch
 HYPERCRUX_CRASH_SEEDS=64 go test ./beta/internal/crash   # every crash point from 64 seeds, or a test's own if it asks for more
@@ -569,10 +570,16 @@ sh scripts/record-beta-bench.sh   # both engines' benchmarks; needs the machine 
 go build -o hypercrux ./beta/cmd/hypercrux   # the Beta's command
 ```
 
-`scripts/check-docs.py` checks every link in the Beta's docs and in the
-site's posts about it, and runs every example they mark to run, against the
-Beta's package and command, built there and then. It needs Go, Hugo and a
-clone of the site, github.com/photozeitgeist/hypercrux.com, and its opening
+`scripts/check-docs.py` checks the links in the Beta's docs and runs every
+example they mark to run, on the Beta's package and command, and on 0.x's
+command for the step that exports from 0.x, all built there and then. It
+needs Go, and a C compiler to build 0.x's command. Given the path of a clone
+of the site, github.com/photozeitgeist/hypercrux.com, it checks the site's
+posts about the Beta too, and the docs' links to the site's pages, which
+needs Hugo as well. Without the site, it lists those links among the ones
+it leaves alone. The site's repository is private, so where the site can't
+be checked out, as in CI, it runs with no argument, and whoever publishes
+the posts runs it with the site's path before they go up. Its opening
 comment says how a doc marks an example and its output.
 
 ### CI
